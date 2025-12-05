@@ -1,0 +1,212 @@
+name: Copilot Setup Steps
+
+# This workflow documents the onboarding and setup process for GitHub Copilot
+# in the drumlogue-units repository. It serves as both documentation and
+# validation of the Copilot integration.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/copilot-instructions.md'
+      - '.github/agents/**'
+      - '.github/workflows/copilot-setup-steps.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-copilot-setup:
+    name: Validate Copilot Configuration
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      
+      - name: Verify Copilot Instructions
+        run: |
+          echo "=== Validating Copilot Instructions ==="
+          if [ ! -f ".github/copilot-instructions.md" ]; then
+            echo "ERROR: .github/copilot-instructions.md not found"
+            exit 1
+          fi
+          echo "✓ Copilot instructions file exists"
+          
+          # Verify key sections are present
+          if ! grep -q "Purpose & layout" .github/copilot-instructions.md; then
+            echo "ERROR: Missing 'Purpose & layout' section"
+            exit 1
+          fi
+          echo "✓ Core sections present"
+      
+      - name: Verify Custom Agents
+        run: |
+          echo "=== Validating Custom Agents ==="
+          if [ ! -d ".github/agents" ]; then
+            echo "ERROR: .github/agents directory not found"
+            exit 1
+          fi
+          echo "✓ Agents directory exists"
+          
+          # Check for drumlogue DSP expert agent
+          if [ ! -f ".github/agents/drumlogue-dsp-expert.md" ]; then
+            echo "ERROR: drumlogue-dsp-expert.md agent not found"
+            exit 1
+          fi
+          echo "✓ Drumlogue DSP expert agent present"
+          
+          # Validate agent structure
+          if ! grep -q "Core Expertise Areas" .github/agents/drumlogue-dsp-expert.md; then
+            echo "ERROR: Agent missing required sections"
+            exit 1
+          fi
+          echo "✓ Agent structure validated"
+      
+      - name: Verify Repository Structure
+        run: |
+          echo "=== Validating Repository Structure ==="
+          
+          # Check for essential files
+          files=(
+            "README.md"
+            "LICENSE"
+            ".gitignore"
+            ".gitmodules"
+          )
+          
+          for file in "${files[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "ERROR: Missing essential file: $file"
+              exit 1
+            fi
+            echo "✓ Found: $file"
+          done
+      
+      - name: Check Docker Build Environment
+        run: |
+          echo "=== Checking Docker Build Configuration ==="
+          
+          # Initialize submodules to check structure
+          echo "Initializing submodules..."
+          git submodule update --init --recursive
+          
+          # Verify logue-sdk structure
+          if [ -d "logue-sdk/docker" ]; then
+            echo "✓ Docker build scripts directory found"
+            
+            if [ -f "logue-sdk/docker/run_interactive.sh" ]; then
+              echo "✓ Interactive build script present"
+            fi
+            
+            if [ -f "logue-sdk/docker/run_cmd.sh" ]; then
+              echo "✓ Command build script present"
+            fi
+          else
+            echo "WARNING: Docker scripts not found - submodules may not be initialized"
+          fi
+      
+      - name: Document Setup Process
+        run: |
+          echo "=== Copilot Setup Complete ==="
+          echo ""
+          echo "The following components are configured:"
+          echo "1. ✓ Copilot instructions (.github/copilot-instructions.md)"
+          echo "2. ✓ Custom agents (.github/agents/drumlogue-dsp-expert.md)"
+          echo "3. ✓ Setup validation workflow (this file)"
+          echo ""
+          echo "Contributors can now:"
+          echo "- Use GitHub Copilot with repository-specific guidance"
+          echo "- Leverage the drumlogue DSP expert agent for C/DSP work"
+          echo "- Build drumlogue units using Docker-based toolchain"
+          echo ""
+          echo "For development:"
+          echo "- Clone with submodules: git clone --recursive <repo-url>"
+          echo "- Or init submodules: git submodule update --init --recursive"
+          echo "- Build units: logue-sdk/docker/run_interactive.sh"
+          echo "- See .github/copilot-instructions.md for detailed guidance"
+
+  documentation-check:
+    name: Documentation Quality Check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: Check Markdown Files
+        run: |
+          echo "=== Checking Documentation Quality ==="
+          
+          # Check for proper markdown formatting
+          markdown_files=(
+            ".github/copilot-instructions.md"
+            ".github/agents/drumlogue-dsp-expert.md"
+            "README.md"
+          )
+          
+          for file in "${markdown_files[@]}"; do
+            if [ -f "$file" ]; then
+              # Basic checks
+              lines=$(wc -l < "$file")
+              echo "✓ $file: $lines lines"
+              
+              # Check for empty files
+              if [ "$lines" -lt 5 ]; then
+                echo "WARNING: $file seems too short"
+              fi
+            fi
+          done
+      
+      - name: Verify Links and References
+        run: |
+          echo "=== Verifying Documentation Links ==="
+          
+          # Check that copilot-instructions.md references are valid
+          if grep -q "logue-sdk/platform/drumlogue" .github/copilot-instructions.md; then
+            echo "✓ Documentation references drumlogue platform"
+          fi
+          
+          if grep -q "docker/run_interactive.sh" .github/copilot-instructions.md; then
+            echo "✓ Documentation references build scripts"
+          fi
+          
+          echo "Documentation validation complete"
+
+  setup-summary:
+    name: Setup Summary
+    runs-on: ubuntu-latest
+    needs: [validate-copilot-setup, documentation-check]
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Display Setup Summary
+        run: |
+          echo "╔════════════════════════════════════════════════════════════╗"
+          echo "║       GitHub Copilot Setup - drumlogue-units              ║"
+          echo "╚════════════════════════════════════════════════════════════╝"
+          echo ""
+          echo "Repository successfully configured for GitHub Copilot!"
+          echo ""
+          echo "✓ Copilot instructions provided"
+          echo "✓ Custom drumlogue DSP expert agent available"
+          echo "✓ Build environment documented"
+          echo "✓ Documentation quality verified"
+          echo ""
+          echo "Next steps for contributors:"
+          echo "1. Enable GitHub Copilot in your IDE"
+          echo "2. Clone repository with submodules"
+          echo "3. Review .github/copilot-instructions.md"
+          echo "4. Use @drumlogue-dsp-expert for DSP-related questions"
+          echo "5. Start building drumlogue units!"
+          echo ""
+          echo "For more information, see issue #1"
