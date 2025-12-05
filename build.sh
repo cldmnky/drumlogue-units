@@ -64,24 +64,26 @@ chmod -R 777 "${BUILD_DIR}"
 
 BUILD_EXIT_CODE=0
 # Create a build script that:
-# 1. Copies SDK platform to a writable /workspace
-# 2. Creates project directory and copies our project files
-# 3. Symlinks build dir from mounted volume and creates subdirs inside container
-# This avoids complex mount overlays that don't work well in Docker
+# 1. Copies SDK platform drumlogue to a temp location
+# 2. Mounts project directory over the specific project path
+# 3. Pre-creates build subdirs inside container
 $ENGINE run --rm --entrypoint "" \
     -e HOME=/tmp \
     -v "${SDK_PLATFORM}:/sdk-platform:ro" \
-    -v "${SCRIPT_DIR}/drumlogue/${PROJECT}:/project-src:ro" \
-    -v "${BUILD_DIR}:/project-build" \
+    -v "${SCRIPT_DIR}/drumlogue/${PROJECT}:/project-mount" \
     -v "${SCRIPT_DIR}/eurorack:/repo/eurorack:ro" \
     "$IMAGE" /bin/bash -c "
-        cp -r /sdk-platform/* /workspace/ && \
+        rm -rf /workspace/drumlogue && \
+        cp -r /sdk-platform/drumlogue /workspace/ && \
+        rm -rf /workspace/drumlogue/${PROJECT} && \
         mkdir -p /workspace/drumlogue/${PROJECT} && \
-        cp -r /project-src/* /workspace/drumlogue/${PROJECT}/ && \
+        cp -r /project-mount/* /workspace/drumlogue/${PROJECT}/ && \
         rm -rf /workspace/drumlogue/${PROJECT}/build && \
-        ln -s /project-build /workspace/drumlogue/${PROJECT}/build && \
-        mkdir -p /project-build/obj /project-build/lst /project-build/.dep && \
-        ${CMD}
+        mkdir -p /workspace/drumlogue/${PROJECT}/build/obj && \
+        mkdir -p /workspace/drumlogue/${PROJECT}/build/lst && \
+        mkdir -p /workspace/drumlogue/${PROJECT}/build/.dep && \
+        ${CMD} && \
+        cp /workspace/drumlogue/${PROJECT}/${ARTIFACT_NAME} /project-mount/
     " || BUILD_EXIT_CODE=$?
 
 if [ $BUILD_EXIT_CODE -ne 0 ]; then
