@@ -1,0 +1,70 @@
+name: DSP Tests
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'drumlogue/clouds-revfx/**'
+      - 'eurorack/**'
+      - 'test/clouds-revfx/**'
+      - '.github/workflows/dsp-test.yml'
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'drumlogue/clouds-revfx/**'
+      - 'eurorack/**'
+      - 'test/clouds-revfx/**'
+      - '.github/workflows/dsp-test.yml'
+  workflow_dispatch:
+
+jobs:
+  test-dsp:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libsndfile1-dev
+      
+      - name: Build test harness
+        working-directory: test/clouds-revfx
+        run: make
+      
+      - name: Run DSP tests
+        working-directory: test/clouds-revfx
+        run: make test
+      
+      - name: Upload test artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-wav-files
+          path: test/clouds-revfx/fixtures/*.wav
+          retention-days: 7
+
+  # Optional: Test on macOS too
+  test-dsp-macos:
+    runs-on: macos-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      
+      - name: Install dependencies
+        run: brew install libsndfile
+      
+      - name: Build test harness
+        working-directory: test/clouds-revfx
+        run: make
+      
+      - name: Run DSP tests
+        working-directory: test/clouds-revfx
+        run: make test
