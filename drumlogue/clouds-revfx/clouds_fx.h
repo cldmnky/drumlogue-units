@@ -7,6 +7,7 @@
 #include "diffuser.h"
 #include "micro_granular.h"
 #include "pitch_shifter.h"
+#include "lfo.h"
 
 #include <array>
 #include <cstdint>
@@ -36,6 +37,16 @@ enum CloudsParams {
   PARAM_SHIFT_PITCH, // Pitch shift semitones
   PARAM_SHIFT_SIZE,  // Pitch shifter window size
   PARAM_SHIFT_BLANK, // Reserved
+  // Page 5 - LFO1
+  PARAM_LFO1_ASSIGN, // LFO1 target parameter
+  PARAM_LFO1_SPEED,  // LFO1 speed
+  PARAM_LFO1_DEPTH,  // LFO1 modulation depth
+  PARAM_LFO1_WAVE,   // LFO1 waveform
+  // Page 6 - LFO2
+  PARAM_LFO2_ASSIGN, // LFO2 target parameter
+  PARAM_LFO2_SPEED,  // LFO2 speed
+  PARAM_LFO2_DEPTH,  // LFO2 modulation depth
+  PARAM_LFO2_WAVE,   // LFO2 waveform
   // ... rest are blank
 };
 
@@ -104,6 +115,8 @@ class CloudsFx {
   void updateReverbParams();
   void updateGranularParams();
   void updatePitchShifterParams();
+  void updateLfoParams();
+  void applyLfoModulation();  // Apply LFO modulation to target parameters
   static int32_t clampToParam(uint8_t id, int32_t value);
 
   std::array<int32_t, UNIT_PARAM_MAX> params_{};
@@ -137,6 +150,16 @@ class CloudsFx {
   bool diffuser_initialized_ = false;
   bool granular_initialized_ = false;
   bool pitch_shifter_initialized_ = false;
+  
+  // LFO instances for parameter modulation
+  clouds_revfx::Lfo lfo1_;
+  clouds_revfx::Lfo lfo2_;
+  bool lfo1_initialized_ = false;
+  bool lfo2_initialized_ = false;
+  
+  // Base parameter values (before LFO modulation)
+  // Used to restore original values when LFO target changes
+  std::array<float, UNIT_PARAM_MAX> base_param_values_{};
 };
 
 #endif  // CLOUDS_FX_H

@@ -16,7 +16,7 @@ const __unit_header unit_header_t unit_header = {
     .version = 0x010000U,                                  // v1.0.0 (1.0.0-pre)
     .name = "Clds Reverb",                                 // displayed name, 7-bit ASCII, max 13 chars
     .num_presets = 8,                                      // 8 presets: INIT + 7 crafted presets
-    .num_params = 16,                                      // number of active parameters
+    .num_params = 24,                                      // number of active parameters (16 + 6 LFO + 2 blank)
     .params = {
         // Format: min, max, center, default, type, fractional, frac. type, <reserved>, name
 
@@ -60,13 +60,22 @@ const __unit_header unit_header_t unit_header = {
         // Reserved blank slot
         {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
 
-        // Pages 5-6 (blank)
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
+        // Page 5 - LFO1
+        // LFO1 ASSIGN: target parameter (0=OFF, 1-15 = params)
+        {0, 15, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"LFO1 ASGN"}},
+        // LFO1 SPEED: rate 0-127 (0 = ~0.05Hz, 127 = ~10Hz)
+        {0, 127, 0, 64, k_unit_param_type_none, 0, 0, 0, {"LFO1 SPD"}},
+        // LFO1 DEPTH: modulation depth 0-127
+        {0, 127, 0, 64, k_unit_param_type_none, 0, 0, 0, {"LFO1 DPTH"}},
+        // LFO1 WAVEFORM: sine/saw/random
+        {0, 2, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"LFO1 WAVE"}},
 
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}}}};
+        // Page 6 - LFO2
+        // LFO2 ASSIGN: target parameter (0=OFF, 1-15 = params)
+        {0, 15, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"LFO2 ASGN"}},
+        // LFO2 SPEED: rate 0-127 (0 = ~0.05Hz, 127 = ~10Hz)
+        {0, 127, 0, 64, k_unit_param_type_none, 0, 0, 0, {"LFO2 SPD"}},
+        // LFO2 DEPTH: modulation depth 0-127
+        {0, 127, 0, 64, k_unit_param_type_none, 0, 0, 0, {"LFO2 DPTH"}},
+        // LFO2 WAVEFORM: sine/saw/random
+        {0, 2, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"LFO2 WAVE"}}}};

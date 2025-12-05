@@ -19,31 +19,33 @@ static const char * const kPresetNames[kNumPresets] = {
 
 // Preset data: {DRY/WET, TIME, DIFFUSION, LP_DAMP, IN_GAIN, TEXTURE, 
 //               GRAIN_AMT, GRAIN_SIZE, GRAIN_DENS, GRAIN_PITCH, GRAIN_POS, FREEZE,
-//               SHIFT_AMT, SHIFT_PITCH, SHIFT_SIZE, reserved}
-static const int32_t kPresets[kNumPresets][16] = {
+//               SHIFT_AMT, SHIFT_PITCH, SHIFT_SIZE, reserved,
+//               LFO1_ASSIGN, LFO1_SPEED, LFO1_DEPTH, LFO1_WAVE,
+//               LFO2_ASSIGN, LFO2_SPEED, LFO2_DEPTH, LFO2_WAVE}
+static const int32_t kPresets[kNumPresets][24] = {
     // 0: INIT - Clean starting point
-    {100, 80, 80, 90, 50, 0, 0, 64, 64, 64, 64, 0, 0, 64, 64, 0},
+    {100, 80, 80, 90, 50, 0, 0, 64, 64, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0},
     
     // 1: HALL - Large concert hall, long decay
-    {120, 110, 100, 100, 40, 30, 0, 64, 64, 64, 64, 0, 0, 64, 64, 0},
+    {120, 110, 100, 100, 40, 30, 0, 64, 64, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0},
     
     // 2: PLATE - Bright plate reverb
-    {100, 70, 127, 127, 60, 0, 0, 64, 64, 64, 64, 0, 0, 64, 64, 0},
+    {100, 70, 127, 127, 60, 0, 0, 64, 64, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0},
     
     // 3: SHIMMER - Pitched reverb with octave up
-    {90, 100, 90, 80, 45, 40, 0, 64, 64, 64, 64, 0, 80, 88, 80, 0},
+    {90, 100, 90, 80, 45, 40, 0, 64, 64, 64, 64, 0, 80, 88, 80, 0, 0, 64, 64, 0, 0, 64, 64, 0},
     
     // 4: CLOUD - Granular texture + reverb
-    {80, 90, 90, 85, 50, 60, 80, 90, 70, 64, 64, 0, 0, 64, 64, 0},
+    {80, 90, 90, 85, 50, 60, 80, 90, 70, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0},
     
     // 5: FREEZE - For frozen/pad sounds
-    {100, 127, 100, 95, 30, 80, 60, 100, 50, 64, 64, 0, 0, 64, 64, 0},
+    {100, 127, 100, 95, 30, 80, 60, 100, 50, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0},
     
     // 6: OCTAVER - Pitch shifted reverb
-    {90, 85, 80, 90, 50, 20, 0, 64, 64, 64, 64, 0, 100, 52, 70, 0},
+    {90, 85, 80, 90, 50, 20, 0, 64, 64, 64, 64, 0, 100, 52, 70, 0, 0, 64, 64, 0, 0, 64, 64, 0},
     
-    // 7: AMBIENT - Lush ambient wash
-    {140, 120, 110, 75, 35, 50, 40, 80, 40, 64, 64, 0, 30, 76, 90, 0},
+    // 7: AMBIENT - Lush ambient wash with subtle LFO modulation on texture
+    {140, 120, 110, 75, 35, 50, 40, 80, 40, 64, 64, 0, 30, 76, 90, 0, 6, 40, 50, 0, 0, 64, 64, 0},
 };
 
 // Static buffer for reverb delay lines (~64KB for 32768 * 2 bytes)
@@ -65,7 +67,7 @@ static constexpr size_t kMaxBlockSize = 64;
 static clouds::FloatFrame s_process_buffer[kMaxBlockSize];
 
 namespace {
-constexpr uint8_t kActiveParams = 16;  // Number of active parameters
+constexpr uint8_t kActiveParams = 24;  // Number of active parameters (16 + 8 LFO)
 }  // namespace
 
 int8_t CloudsFx::Init(const unit_runtime_desc_t * desc) {
@@ -97,6 +99,12 @@ int8_t CloudsFx::Init(const unit_runtime_desc_t * desc) {
   pitch_shifter_.Init(s_pitch_shifter_buffer);
   pitch_shifter_initialized_ = true;
   
+  // Initialize LFOs
+  lfo1_.Init(48000.0f, kMaxBlockSize);
+  lfo1_initialized_ = true;
+  lfo2_.Init(48000.0f, kMaxBlockSize);
+  lfo2_initialized_ = true;
+  
   // Initialize parameter smoothers
   initSmoothers();
   
@@ -112,6 +120,8 @@ void CloudsFx::Teardown() {
   diffuser_initialized_ = false;
   granular_initialized_ = false;
   pitch_shifter_initialized_ = false;
+  lfo1_initialized_ = false;
+  lfo2_initialized_ = false;
 }
 
 void CloudsFx::Reset() {
@@ -128,9 +138,16 @@ void CloudsFx::Reset() {
   if (pitch_shifter_initialized_) {
     pitch_shifter_.Clear();
   }
+  if (lfo1_initialized_) {
+    lfo1_.Reset();
+  }
+  if (lfo2_initialized_) {
+    lfo2_.Reset();
+  }
   updateReverbParams();
   updateGranularParams();
   updatePitchShifterParams();
+  updateLfoParams();
 }
 
 void CloudsFx::Resume() {
@@ -173,6 +190,9 @@ void CloudsFx::Process(const float * in, float * out, uint32_t frames, uint8_t i
   
   // Update smoothed parameters once per block (efficient per-block smoothing)
   updateSmoothedParams();
+  
+  // Apply LFO modulation to target parameters
+  applyLfoModulation();
   
   // Process in blocks
   uint32_t processed = 0;
@@ -236,6 +256,12 @@ void CloudsFx::setParameter(uint8_t id, int32_t value) {
   }
   params_[id] = clampToParam(id, value);
   
+  // Update base parameter value for LFO modulation reference
+  // (Only for parameters that can be modulated by LFOs)
+  if (id < PARAM_LFO1_ASSIGN) {
+    base_param_values_[id] = static_cast<float>(params_[id]);
+  }
+  
   // Update smoother targets based on parameter type
   switch (id) {
     case PARAM_DRY_WET:
@@ -289,6 +315,48 @@ void CloudsFx::setParameter(uint8_t id, int32_t value) {
         pitch_shifter_.set_size(static_cast<float>(params_[id]) / 127.0f);
       }
       break;
+    // LFO1 parameters
+    case PARAM_LFO1_ASSIGN:
+      if (lfo1_initialized_) {
+        lfo1_.set_target_from_param(params_[id]);
+      }
+      break;
+    case PARAM_LFO1_SPEED:
+      if (lfo1_initialized_) {
+        lfo1_.set_speed_from_param(params_[id]);
+      }
+      break;
+    case PARAM_LFO1_DEPTH:
+      if (lfo1_initialized_) {
+        lfo1_.set_depth_from_param(params_[id]);
+      }
+      break;
+    case PARAM_LFO1_WAVE:
+      if (lfo1_initialized_) {
+        lfo1_.set_waveform_from_param(params_[id]);
+      }
+      break;
+    // LFO2 parameters
+    case PARAM_LFO2_ASSIGN:
+      if (lfo2_initialized_) {
+        lfo2_.set_target_from_param(params_[id]);
+      }
+      break;
+    case PARAM_LFO2_SPEED:
+      if (lfo2_initialized_) {
+        lfo2_.set_speed_from_param(params_[id]);
+      }
+      break;
+    case PARAM_LFO2_DEPTH:
+      if (lfo2_initialized_) {
+        lfo2_.set_depth_from_param(params_[id]);
+      }
+      break;
+    case PARAM_LFO2_WAVE:
+      if (lfo2_initialized_) {
+        lfo2_.set_waveform_from_param(params_[id]);
+      }
+      break;
     default:
       break;
   }
@@ -302,9 +370,17 @@ int32_t CloudsFx::getParameterValue(uint8_t id) const {
 }
 
 const char * CloudsFx::getParameterStrValue(uint8_t id, int32_t value) {
-  // No string-type parameters currently
-  (void)id;
-  (void)value;
+  // Return string values for LFO assignment and waveform parameters
+  switch (id) {
+    case PARAM_LFO1_ASSIGN:
+    case PARAM_LFO2_ASSIGN:
+      return clouds_revfx::GetLfoTargetName(value);
+    case PARAM_LFO1_WAVE:
+    case PARAM_LFO2_WAVE:
+      return clouds_revfx::GetLfoWaveformName(value);
+    default:
+      break;
+  }
   return nullptr;
 }
 
@@ -320,9 +396,8 @@ void CloudsFx::LoadPreset(uint8_t idx) {
   }
   preset_index_ = idx;
   
-  // Load preset values using setParameter (like Lilian does)
-  // This ensures proper parameter handling and smoother updates
-  for (uint8_t i = 0; i < 16; ++i) {
+  // Load preset values using setParameter (ensures proper parameter handling)
+  for (uint8_t i = 0; i < 24; ++i) {
     setParameter(i, kPresets[idx][i]);
   }
   
@@ -336,6 +411,8 @@ void CloudsFx::LoadPreset(uint8_t idx) {
   if (pitch_shifter_initialized_) {
     updatePitchShifterParams();
   }
+  // Update LFO parameters
+  updateLfoParams();
 }
 
 uint8_t CloudsFx::getPresetIndex() const {
@@ -487,4 +564,225 @@ int32_t CloudsFx::clampToParam(uint8_t id, int32_t value) {
     return p.max;
   }
   return value;
+}
+
+void CloudsFx::updateLfoParams() {
+  // Initialize LFOs with current parameter values
+  if (lfo1_initialized_) {
+    lfo1_.set_target_from_param(params_[PARAM_LFO1_ASSIGN]);
+    lfo1_.set_speed_from_param(params_[PARAM_LFO1_SPEED]);
+    lfo1_.set_depth_from_param(params_[PARAM_LFO1_DEPTH]);
+    lfo1_.set_waveform_from_param(params_[PARAM_LFO1_WAVE]);
+  }
+  if (lfo2_initialized_) {
+    lfo2_.set_target_from_param(params_[PARAM_LFO2_ASSIGN]);
+    lfo2_.set_speed_from_param(params_[PARAM_LFO2_SPEED]);
+    lfo2_.set_depth_from_param(params_[PARAM_LFO2_DEPTH]);
+    lfo2_.set_waveform_from_param(params_[PARAM_LFO2_WAVE]);
+  }
+  
+  // Store base parameter values for modulation
+  for (uint8_t i = 0; i < UNIT_PARAM_MAX; ++i) {
+    base_param_values_[i] = static_cast<float>(params_[i]);
+  }
+}
+
+void CloudsFx::applyLfoModulation() {
+  // Process LFOs and apply modulation to target parameters
+  // Called once per audio block
+  
+  // Process LFO1
+  float lfo1_val = 0.0f;
+  if (lfo1_initialized_ && lfo1_.target() != clouds_revfx::LFO_TARGET_OFF) {
+    lfo1_val = lfo1_.Process();  // Returns value in range [-depth, +depth]
+  }
+  
+  // Process LFO2 (may be modulated by LFO1)
+  float lfo2_val = 0.0f;
+  if (lfo2_initialized_ && lfo2_.target() != clouds_revfx::LFO_TARGET_OFF) {
+    // Check if LFO1 is modulating LFO2's speed
+    if (lfo1_.target() == clouds_revfx::LFO_TARGET_LFO2_SPEED && lfo1_val != 0.0f) {
+      // Modulate LFO2 speed: base speed +/- modulation
+      float base_speed_param = static_cast<float>(params_[PARAM_LFO2_SPEED]);
+      float mod_amount = lfo1_val * 64.0f;  // Scale to parameter range
+      float modulated_speed = base_speed_param + mod_amount;
+      modulated_speed = std::max(0.0f, std::min(127.0f, modulated_speed));
+      lfo2_.set_speed_from_param(static_cast<int32_t>(modulated_speed));
+    }
+    lfo2_val = lfo2_.Process();
+  }
+  
+  // Helper lambda to apply bipolar modulation to a smoother target
+  // Modulation range is +/- half the parameter range for musical results
+  auto applyModToSmoother = [this](clouds_revfx::LfoTarget target, float lfo_val, 
+                                    ParamSmoother& smoother, uint8_t param_id,
+                                    float scale = 1.0f) {
+    if (target == clouds_revfx::LFO_TARGET_OFF) return;
+    
+    // Get parameter range for scaling
+    const unit_param_t& p = unit_header.params[param_id];
+    float range = static_cast<float>(p.max - p.min);
+    float base = base_param_values_[param_id];
+    
+    // Apply bipolar modulation scaled to parameter range
+    float mod = lfo_val * range * 0.5f * scale;
+    float modulated = base + mod;
+    
+    // Clamp to parameter range
+    modulated = std::max(static_cast<float>(p.min), 
+                         std::min(static_cast<float>(p.max), modulated));
+    
+    // Convert to normalized value and set smoother target based on parameter type
+    switch (param_id) {
+      case PARAM_DRY_WET:
+        smoother.SetTarget(modulated / 200.0f);
+        break;
+      case PARAM_TIME:
+        smoother.SetTarget(std::min(modulated / 128.0f, 0.99f));
+        break;
+      case PARAM_DIFFUSION:
+        smoother.SetTarget(modulated / 127.0f * 0.75f);
+        break;
+      case PARAM_LP:
+        smoother.SetTarget(0.3f + modulated / 127.0f * 0.65f);
+        break;
+      case PARAM_INPUT_GAIN:
+        smoother.SetTarget(modulated / 127.0f * 0.5f);
+        break;
+      case PARAM_TEXTURE:
+      case PARAM_GRAIN_AMT:
+      case PARAM_GRAIN_SIZE:
+      case PARAM_GRAIN_DENS:
+      case PARAM_SHIFT_AMT:
+        smoother.SetTarget(modulated / 127.0f);
+        break;
+      case PARAM_GRAIN_PITCH:
+      case PARAM_SHIFT_PITCH:
+        smoother.SetTarget((modulated - 64.0f) * (24.0f / 64.0f));
+        break;
+      default:
+        break;
+    }
+  };
+  
+  // Apply LFO1 modulation
+  if (lfo1_.target() != clouds_revfx::LFO_TARGET_OFF && 
+      lfo1_.target() != clouds_revfx::LFO_TARGET_LFO2_SPEED) {
+    switch (lfo1_.target()) {
+      case clouds_revfx::LFO_TARGET_DRY_WET:
+        applyModToSmoother(lfo1_.target(), lfo1_val, smooth_dry_wet_, PARAM_DRY_WET);
+        break;
+      case clouds_revfx::LFO_TARGET_TIME:
+        applyModToSmoother(lfo1_.target(), lfo1_val, smooth_time_, PARAM_TIME);
+        break;
+      case clouds_revfx::LFO_TARGET_DIFFUSION:
+        applyModToSmoother(lfo1_.target(), lfo1_val, smooth_diffusion_, PARAM_DIFFUSION);
+        break;
+      case clouds_revfx::LFO_TARGET_LP:
+        applyModToSmoother(lfo1_.target(), lfo1_val, smooth_lp_, PARAM_LP);
+        break;
+      case clouds_revfx::LFO_TARGET_INPUT_GAIN:
+        applyModToSmoother(lfo1_.target(), lfo1_val, smooth_input_gain_, PARAM_INPUT_GAIN);
+        break;
+      case clouds_revfx::LFO_TARGET_TEXTURE:
+        applyModToSmoother(lfo1_.target(), lfo1_val, smooth_texture_, PARAM_TEXTURE);
+        break;
+      case clouds_revfx::LFO_TARGET_GRAIN_AMT:
+        applyModToSmoother(lfo1_.target(), lfo1_val, smooth_grain_amt_, PARAM_GRAIN_AMT);
+        break;
+      case clouds_revfx::LFO_TARGET_GRAIN_SIZE:
+        applyModToSmoother(lfo1_.target(), lfo1_val, smooth_grain_size_, PARAM_GRAIN_SIZE);
+        break;
+      case clouds_revfx::LFO_TARGET_GRAIN_DENS:
+        applyModToSmoother(lfo1_.target(), lfo1_val, smooth_grain_density_, PARAM_GRAIN_DENS);
+        break;
+      case clouds_revfx::LFO_TARGET_GRAIN_PITCH:
+        applyModToSmoother(lfo1_.target(), lfo1_val, smooth_grain_pitch_, PARAM_GRAIN_PITCH);
+        break;
+      case clouds_revfx::LFO_TARGET_GRAIN_POS:
+        if (granular_initialized_) {
+          float base = base_param_values_[PARAM_GRAIN_POS];
+          float mod = lfo1_val * 127.0f * 0.5f;
+          float modulated = std::max(0.0f, std::min(127.0f, base + mod));
+          granular_.set_position(modulated / 127.0f);
+        }
+        break;
+      case clouds_revfx::LFO_TARGET_SHIFT_AMT:
+        applyModToSmoother(lfo1_.target(), lfo1_val, smooth_shift_amt_, PARAM_SHIFT_AMT);
+        break;
+      case clouds_revfx::LFO_TARGET_SHIFT_PITCH:
+        applyModToSmoother(lfo1_.target(), lfo1_val, smooth_shift_pitch_, PARAM_SHIFT_PITCH);
+        break;
+      case clouds_revfx::LFO_TARGET_SHIFT_SIZE:
+        if (pitch_shifter_initialized_) {
+          float base = base_param_values_[PARAM_SHIFT_SIZE];
+          float mod = lfo1_val * 127.0f * 0.5f;
+          float modulated = std::max(0.0f, std::min(127.0f, base + mod));
+          pitch_shifter_.set_size(modulated / 127.0f);
+        }
+        break;
+      default:
+        break;
+    }
+  }
+  
+  // Apply LFO2 modulation (same logic as LFO1)
+  if (lfo2_.target() != clouds_revfx::LFO_TARGET_OFF) {
+    switch (lfo2_.target()) {
+      case clouds_revfx::LFO_TARGET_DRY_WET:
+        applyModToSmoother(lfo2_.target(), lfo2_val, smooth_dry_wet_, PARAM_DRY_WET);
+        break;
+      case clouds_revfx::LFO_TARGET_TIME:
+        applyModToSmoother(lfo2_.target(), lfo2_val, smooth_time_, PARAM_TIME);
+        break;
+      case clouds_revfx::LFO_TARGET_DIFFUSION:
+        applyModToSmoother(lfo2_.target(), lfo2_val, smooth_diffusion_, PARAM_DIFFUSION);
+        break;
+      case clouds_revfx::LFO_TARGET_LP:
+        applyModToSmoother(lfo2_.target(), lfo2_val, smooth_lp_, PARAM_LP);
+        break;
+      case clouds_revfx::LFO_TARGET_INPUT_GAIN:
+        applyModToSmoother(lfo2_.target(), lfo2_val, smooth_input_gain_, PARAM_INPUT_GAIN);
+        break;
+      case clouds_revfx::LFO_TARGET_TEXTURE:
+        applyModToSmoother(lfo2_.target(), lfo2_val, smooth_texture_, PARAM_TEXTURE);
+        break;
+      case clouds_revfx::LFO_TARGET_GRAIN_AMT:
+        applyModToSmoother(lfo2_.target(), lfo2_val, smooth_grain_amt_, PARAM_GRAIN_AMT);
+        break;
+      case clouds_revfx::LFO_TARGET_GRAIN_SIZE:
+        applyModToSmoother(lfo2_.target(), lfo2_val, smooth_grain_size_, PARAM_GRAIN_SIZE);
+        break;
+      case clouds_revfx::LFO_TARGET_GRAIN_DENS:
+        applyModToSmoother(lfo2_.target(), lfo2_val, smooth_grain_density_, PARAM_GRAIN_DENS);
+        break;
+      case clouds_revfx::LFO_TARGET_GRAIN_PITCH:
+        applyModToSmoother(lfo2_.target(), lfo2_val, smooth_grain_pitch_, PARAM_GRAIN_PITCH);
+        break;
+      case clouds_revfx::LFO_TARGET_GRAIN_POS:
+        if (granular_initialized_) {
+          float base = base_param_values_[PARAM_GRAIN_POS];
+          float mod = lfo2_val * 127.0f * 0.5f;
+          float modulated = std::max(0.0f, std::min(127.0f, base + mod));
+          granular_.set_position(modulated / 127.0f);
+        }
+        break;
+      case clouds_revfx::LFO_TARGET_SHIFT_AMT:
+        applyModToSmoother(lfo2_.target(), lfo2_val, smooth_shift_amt_, PARAM_SHIFT_AMT);
+        break;
+      case clouds_revfx::LFO_TARGET_SHIFT_PITCH:
+        applyModToSmoother(lfo2_.target(), lfo2_val, smooth_shift_pitch_, PARAM_SHIFT_PITCH);
+        break;
+      case clouds_revfx::LFO_TARGET_SHIFT_SIZE:
+        if (pitch_shifter_initialized_) {
+          float base = base_param_values_[PARAM_SHIFT_SIZE];
+          float mod = lfo2_val * 127.0f * 0.5f;
+          float modulated = std::max(0.0f, std::min(127.0f, base + mod));
+          pitch_shifter_.set_size(modulated / 127.0f);
+        }
+        break;
+      default:
+        break;
+    }
+  }
 }

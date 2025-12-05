@@ -8,6 +8,7 @@ A lush, atmospheric reverb effect for the Korg drumlogue, inspired by Mutable In
 - **Texture processing** with post-reverb diffusion for additional smearing and depth
 - **Micro-granular processing** for ambient textures and freeze effects
 - **Pitch shifting** for shimmer and octave effects
+- **Dual assignable LFOs** with 16 modulation targets and 3 waveforms
 - **8 built-in presets** covering a range of reverb styles
 - **Smooth parameter changes** with zipper-noise-free transitions
 
@@ -21,7 +22,7 @@ A lush, atmospheric reverb effect for the Korg drumlogue, inspired by Mutable In
 
 ## Parameters
 
-The unit has 16 parameters organized across 4 pages:
+The unit has 24 parameters organized across 6 pages:
 
 ### Page 1 - Main Reverb Controls
 
@@ -57,6 +58,54 @@ The unit has 16 parameters organized across 4 pages:
 | **SHIFT AMT** | 0-127 | Pitch shifter mix amount. Set to 0 to disable pitch shifting |
 | **SHFT PTCH** | 0-127 | Pitch shift amount. Center (64) = no shift, ±24 semitones range |
 | **SHFT SIZE** | 0-127 | Pitch shifter window size. Affects quality and character of shifting |
+| *(reserved)* | - | Reserved for future use |
+
+### Page 5 - LFO 1
+
+| Parameter | Range | Description |
+|-----------|-------|-------------|
+| **LFO1 ASSIGN** | 0-15 | Modulation target (see LFO Targets table below) |
+| **LFO1 SPD** | 0-127 | LFO speed (~0.05Hz to ~10Hz, exponential curve) |
+| **LFO1 DPTH** | 0-127 | Modulation depth (0 = no modulation) |
+| **LFO1 WAVE** | 0-2 | Waveform: SINE, SAW, or RANDOM |
+
+### Page 6 - LFO 2
+
+| Parameter | Range | Description |
+|-----------|-------|-------------|
+| **LFO2 ASSIGN** | 0-15 | Modulation target (see LFO Targets table below) |
+| **LFO2 SPD** | 0-127 | LFO speed (~0.05Hz to ~10Hz, exponential curve) |
+| **LFO2 DPTH** | 0-127 | Modulation depth (0 = no modulation) |
+| **LFO2 WAVE** | 0-2 | Waveform: SINE, SAW, or RANDOM |
+
+### LFO Targets
+
+| Value | Target | Description |
+|-------|--------|-------------|
+| 0 | OFF | LFO disabled |
+| 1 | DRY/WET | Modulate wet/dry mix |
+| 2 | TIME | Modulate reverb decay time |
+| 3 | DIFFUSN | Modulate diffusion amount |
+| 4 | LP DAMP | Modulate lowpass damping |
+| 5 | IN GAIN | Modulate input gain |
+| 6 | TEXTURE | Modulate texture amount |
+| 7 | GRN AMT | Modulate granular mix |
+| 8 | GRN SZ | Modulate grain size |
+| 9 | GRN DNS | Modulate grain density |
+| 10 | GRN PTCH | Modulate grain pitch |
+| 11 | GRN POS | Modulate grain position |
+| 12 | SFT AMT | Modulate pitch shifter mix |
+| 13 | SFT PTCH | Modulate pitch shift amount |
+| 14 | SFT SZ | Modulate shifter window size |
+| 15 | LFO2 SPD | Cross-modulation: LFO1 modulates LFO2 speed |
+
+### LFO Waveforms
+
+| Value | Waveform | Description |
+|-------|----------|-------------|
+| 0 | SINE | Smooth sinusoidal oscillation |
+| 1 | SAW | Ramp down from +1 to -1 |
+| 2 | RANDOM | Smoothly interpolated random values (sample & hold with glide) |
 
 ## Presets
 
@@ -71,9 +120,26 @@ The unit includes 8 carefully crafted presets:
 | 4 | **CLOUD** | Granular texture combined with reverb for ambient clouds |
 | 5 | **FREEZE** | Long reverb optimized for frozen/pad sounds with heavy texture |
 | 6 | **OCTAVER** | Pitch-shifted reverb with subtle octave-down effect |
-| 7 | **AMBIENT** | Lush ambient wash combining reverb, texture, granular, and subtle shimmer |
+| 7 | **AMBIENT** | Lush ambient wash combining reverb, texture, granular, and subtle shimmer. Includes LFO modulation on texture. |
 
 ## Usage Tips
+
+### Using the LFOs
+
+The dual LFOs add dynamic movement to your reverb sounds:
+
+1. **Basic Modulation**: Set **LFO1 ASSIGN** to your target parameter (e.g., TEXTURE), adjust **LFO1 SPD** for rate and **LFO1 DPTH** for intensity
+2. **Slow Evolution**: Use low **SPD** values (0-30) with SINE waveform for subtle, evolving textures
+3. **Rhythmic Effects**: Higher **SPD** values with SAW waveform create rhythmic pumping effects
+4. **Random Variation**: RANDOM waveform adds organic, unpredictable movement
+5. **Cross-Modulation**: Set LFO1's target to "LFO2 SPD" to have LFO1 modulate LFO2's speed for complex, evolving modulation
+
+### LFO Modulation Tips
+
+- **Subtle Movement**: Start with **DPTH** around 30-50 for gentle modulation
+- **Dramatic Effects**: Higher **DPTH** values (80+) create more obvious sweeping effects
+- **Grain Animation**: Modulating GRN POS or GRN PITCH creates constantly shifting granular textures
+- **Shimmer Variation**: Modulating SFT PTCH creates warbling, chorus-like shimmer effects
 
 ### Creating Ambient Pads
 
@@ -116,6 +182,14 @@ The unit includes 8 carefully crafted presets:
 - **drumlogue Port**: Adapted for Korg logue SDK
 
 ## Version History
+
+- **v1.1.0** - LFO Update
+  - Added dual assignable LFOs (LFO1 and LFO2)
+  - 16 modulation targets including cross-modulation
+  - 3 waveforms: Sine, Saw, Random
+  - Exponential speed mapping for musical control
+  - 24 parameters across 6 pages
+  - Updated AMBIENT preset with LFO example
 
 - **v1.0.0-pre** - Initial pre-release
   - 16 parameters across 4 pages
