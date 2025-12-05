@@ -1,0 +1,236 @@
+name: Release Unit
+
+on:
+  push:
+    tags:
+      - '*/v*'  # Matches tags like clouds-revfx/v1.0.0, clouds-revfx/v1.0.0-pre
+  workflow_dispatch:
+    inputs:
+      unit:
+        description: 'Unit to release (e.g., clouds-revfx)'
+        required: true
+        type: string
+      version:
+        description: 'Version to release (e.g., 1.0.0, 1.0.0-pre)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  REGISTRY: ghcr.io
+  SDK_IMAGE: logue-sdk-dev-env
+
+jobs:
+  extract-info:
+    runs-on: ubuntu-latest
+    outputs:
+      unit: ${{ steps.info.outputs.unit }}
+      version: ${{ steps.info.outputs.version }}
+      is_prerelease: ${{ steps.info.outputs.is_prerelease }}
+      tag_name: ${{ steps.info.outputs.tag_name }}
+    steps:
+      - name: Extract release info
+        id: info
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            UNIT="${{ github.event.inputs.unit }}"
+            VERSION="${{ github.event.inputs.version }}"
+            IS_PRERELEASE="${{ github.event.inputs.prerelease }}"
+          else
+            # Extract from tag: unit/vX.Y.Z or unit/vX.Y.Z-suffix
+            TAG="${{ github.ref_name }}"
+            UNIT=$(echo "$TAG" | sed 's|/v.*||')
+            VERSION=$(echo "$TAG" | sed 's|.*/v||')
+            # Check if version contains a suffix like -pre, -beta, -rc
+            if echo "$VERSION" | grep -qE '-[a-zA-Z]+'; then
+              IS_PRERELEASE="true"
+            else
+              IS_PRERELEASE="false"
+            fi
+          fi
+          
+          TAG_NAME="${UNIT}/v${VERSION}"
+          
+          echo "unit=${UNIT}" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "is_prerelease=${IS_PRERELEASE}" >> $GITHUB_OUTPUT
+          echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
+          
+          echo "📦 Unit: ${UNIT}"
+          echo "🏷️ Version: ${VERSION}"
+          echo "🚀 Pre-release: ${IS_PRERELEASE}"
+          echo "🔖 Tag: ${TAG_NAME}"
+
+  build:
+    needs: extract-info
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Verify unit exists
+        run: |
+          UNIT="${{ needs.extract-info.outputs.unit }}"
+          if [ ! -d "drumlogue/${UNIT}" ]; then
+            echo "❌ Error: Unit directory drumlogue/${UNIT} does not exist"
+            exit 1
+          fi
+          if [ ! -f "drumlogue/${UNIT}/header.c" ]; then
+            echo "❌ Error: header.c not found in drumlogue/${UNIT}"
+            exit 1
+          fi
+          echo "✅ Unit ${UNIT} found"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build SDK container image
+        working-directory: logue-sdk/docker/docker-app
+        run: |
+          BUILD_ID=$(git rev-parse --short HEAD)
+          VERSION=$(cat VERSION)
+          docker build \
+            --build-arg build="$BUILD_ID" \
+            --build-arg version="$VERSION" \
+            -t logue-sdk-dev-env:latest \
+            .
+
+      - name: Build unit
+        env:
+          ENGINE: docker
+          IMAGE: logue-sdk-dev-env:latest
+        run: |
+          UNIT="${{ needs.extract-info.outputs.unit }}"
+          echo "🔨 Building ${UNIT}..."
+          ./build.sh "${UNIT}"
+
+      - name: Find and verify build artifact
+        id: artifact
+        run: |
+          UNIT="${{ needs.extract-info.outputs.unit }}"
+          # The artifact name uses underscores instead of hyphens
+          ARTIFACT_NAME=$(echo "${UNIT}" | tr '-' '_')
+          ARTIFACT_PATH=$(find drumlogue/${UNIT} logue-sdk/platform/drumlogue/${UNIT} -name "*.drmlgunit" 2>/dev/null | head -1)
+          
+          if [ -z "$ARTIFACT_PATH" ]; then
+            echo "❌ Error: No .drmlgunit artifact found"
+            exit 1
+          fi
+          
+          # Copy to consistent location
+          FINAL_NAME="${UNIT}-v${{ needs.extract-info.outputs.version }}.drmlgunit"
+          cp "$ARTIFACT_PATH" "${FINAL_NAME}"
+          
+          echo "artifact_path=${FINAL_NAME}" >> $GITHUB_OUTPUT
+          echo "artifact_name=${FINAL_NAME}" >> $GITHUB_OUTPUT
+          echo "✅ Build artifact: ${FINAL_NAME}"
+          ls -la "${FINAL_NAME}"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.extract-info.outputs.unit }}-v${{ needs.extract-info.outputs.version }}
+          path: ${{ steps.artifact.outputs.artifact_path }}
+          retention-days: 30
+
+  release:
+    needs: [extract-info, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.extract-info.outputs.unit }}-v${{ needs.extract-info.outputs.version }}
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          UNIT="${{ needs.extract-info.outputs.unit }}"
+          VERSION="${{ needs.extract-info.outputs.version }}"
+          
+          # Check for unit-specific release notes
+          NOTES_FILE="drumlogue/${UNIT}/RELEASE_NOTES.md"
+          README_FILE="README.${UNIT}.md"
+          
+          {
+            echo "# ${UNIT} v${VERSION}"
+            echo ""
+            
+            if [ -f "$NOTES_FILE" ]; then
+              echo "## Release Notes"
+              echo ""
+              cat "$NOTES_FILE"
+              echo ""
+            fi
+            
+            echo "## Installation"
+            echo ""
+            echo "1. Download the \`.drmlgunit\` file from the assets below"
+            echo "2. Connect your drumlogue to your computer via USB"
+            echo "3. Copy the file to the appropriate \`Units/\` folder:"
+            
+            # Determine unit type from header.c
+            UNIT_TYPE=$(grep -oE 'k_unit_module_(synth|delfx|revfx|masterfx)' "drumlogue/${UNIT}/header.c" | head -1 | sed 's/k_unit_module_//')
+            case "$UNIT_TYPE" in
+              synth) echo "   - \`Units/Synth/\`" ;;
+              delfx) echo "   - \`Units/DelFX/\`" ;;
+              revfx) echo "   - \`Units/RevFX/\`" ;;
+              masterfx) echo "   - \`Units/MasterFX/\`" ;;
+              *) echo "   - \`Units/\` (appropriate subfolder)" ;;
+            esac
+            
+            echo "4. Safely eject the drumlogue and restart it"
+            echo ""
+            
+            if [ -f "$README_FILE" ]; then
+              echo "## Documentation"
+              echo ""
+              echo "See [${README_FILE}](${README_FILE}) for full documentation."
+              echo ""
+            fi
+            
+            echo "---"
+            echo ""
+            echo "Built from commit: ${{ github.sha }}"
+          } > release_body.md
+          
+          echo "Generated release notes:"
+          cat release_body.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.extract-info.outputs.tag_name }}
+          name: "${{ needs.extract-info.outputs.unit }} v${{ needs.extract-info.outputs.version }}"
+          body_path: release_body.md
+          prerelease: ${{ needs.extract-info.outputs.is_prerelease == 'true' }}
+          files: |
+            ${{ needs.extract-info.outputs.unit }}-v${{ needs.extract-info.outputs.version }}.drmlgunit
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Release summary
+        run: |
+          echo "## 🎉 Release Complete!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit | ${{ needs.extract-info.outputs.unit }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | ${{ needs.extract-info.outputs.version }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Pre-release | ${{ needs.extract-info.outputs.is_prerelease }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tag | ${{ needs.extract-info.outputs.tag_name }} |" >> $GITHUB_STEP_SUMMARY
