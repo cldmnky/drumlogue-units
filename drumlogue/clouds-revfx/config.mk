@@ -31,7 +31,12 @@ ASMXSRC =
 COMMON_INC_PATH = /workspace/drumlogue/common
 COMMON_SRC_PATH = /workspace/drumlogue/common
 
-UINCDIR  = 
+# Eurorack/Mutable Instruments paths (mounted from /repo in container)
+EURORACKDIR = /repo/eurorack
+STMLIBDIR   = $(EURORACKDIR)/stmlib
+CLOUDSDIR   = $(EURORACKDIR)/clouds
+
+UINCDIR  = $(EURORACKDIR) $(STMLIBDIR) $(CLOUDSDIR)
 
 ##############################################################################
 # Library Paths

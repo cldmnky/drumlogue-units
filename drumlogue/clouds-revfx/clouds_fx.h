@@ -2,6 +2,11 @@
 #define CLOUDS_FX_H
 
 #include "unit.h"
+#include "clouds/dsp/frame.h"
+#include "reverb.h"
+#include "diffuser.h"
+#include "micro_granular.h"
+#include "pitch_shifter.h"
 
 #include <array>
 #include <cstdint>
@@ -9,6 +14,70 @@
 #ifndef UNIT_PARAM_MAX
 #define UNIT_PARAM_MAX 24
 #endif
+
+// Parameter indices matching header.c
+enum CloudsParams {
+  PARAM_DRY_WET = 0,
+  PARAM_TIME,
+  PARAM_DIFFUSION,
+  PARAM_LP,
+  // Page 2
+  PARAM_INPUT_GAIN,
+  PARAM_TEXTURE,     // Diffuser amount
+  PARAM_GRAIN_AMT,   // Granular mix amount
+  PARAM_GRAIN_SIZE,  // Grain size
+  // Page 3 - Granular controls
+  PARAM_GRAIN_DENS,  // Grain density
+  PARAM_GRAIN_PITCH, // Grain pitch shift
+  PARAM_GRAIN_POS,   // Grain buffer position
+  PARAM_FREEZE,      // Freeze toggle
+  // Page 4 - Pitch shifter
+  PARAM_SHIFT_AMT,   // Pitch shifter amount
+  PARAM_SHIFT_PITCH, // Pitch shift semitones
+  PARAM_SHIFT_SIZE,  // Pitch shifter window size
+  PARAM_SHIFT_BLANK, // Reserved
+  // ... rest are blank
+};
+
+// One-pole lowpass filter for parameter smoothing
+// Prevents zipper noise when parameters change
+class ParamSmoother {
+ public:
+  ParamSmoother() : value_(0.0f), target_(0.0f) {}
+  
+  void Init(float initial_value, float coefficient = 0.01f) {
+    value_ = initial_value;
+    target_ = initial_value;
+    coeff_ = coefficient;
+  }
+  
+  void SetTarget(float target) {
+    target_ = target;
+  }
+  
+  // Update and return smoothed value (call once per sample or per block)
+  float Process() {
+    value_ += coeff_ * (target_ - value_);
+    return value_;
+  }
+  
+  // Get current smoothed value without updating
+  float value() const { return value_; }
+  
+  // Get target value
+  float target() const { return target_; }
+  
+  // Check if smoothing is essentially complete
+  bool IsSettled() const {
+    float diff = target_ - value_;
+    return (diff > -0.0001f && diff < 0.0001f);
+  }
+  
+ private:
+  float value_;
+  float target_;
+  float coeff_;  // Smoothing coefficient (0.01 = ~100 samples to settle)
+};
 
 class CloudsFx {
  public:
@@ -30,10 +99,44 @@ class CloudsFx {
 
  private:
   void applyDefaults();
+  void initSmoothers();
+  void updateSmoothedParams();  // Call per-block to update smoothed parameters
+  void updateReverbParams();
+  void updateGranularParams();
+  void updatePitchShifterParams();
   static int32_t clampToParam(uint8_t id, int32_t value);
 
   std::array<int32_t, UNIT_PARAM_MAX> params_{};
   uint8_t preset_index_ = 0;
+  
+  // Parameter smoothers to prevent zipper noise
+  ParamSmoother smooth_dry_wet_;
+  ParamSmoother smooth_time_;
+  ParamSmoother smooth_diffusion_;
+  ParamSmoother smooth_lp_;
+  ParamSmoother smooth_input_gain_;
+  ParamSmoother smooth_texture_;
+  ParamSmoother smooth_grain_amt_;
+  ParamSmoother smooth_grain_size_;
+  ParamSmoother smooth_grain_density_;
+  ParamSmoother smooth_grain_pitch_;
+  ParamSmoother smooth_shift_amt_;
+  ParamSmoother smooth_shift_pitch_;
+  
+  // Cached bypass flags for CPU optimization
+  // These skip processing when effects are disabled
+  bool diffuser_active_ = false;
+  bool granular_active_ = false;
+  bool pitch_shifter_active_ = false;
+  
+  clouds_revfx::Reverb reverb_;
+  clouds_revfx::Diffuser48k diffuser_;
+  clouds_revfx::MicroGranular granular_;
+  clouds_revfx::PitchShifter pitch_shifter_;
+  bool reverb_initialized_ = false;
+  bool diffuser_initialized_ = false;
+  bool granular_initialized_ = false;
+  bool pitch_shifter_initialized_ = false;
 };
 
 #endif  // CLOUDS_FX_H
