@@ -14,10 +14,15 @@ on:
       - '.github/agents/**'
       - '.github/workflows/copilot-setup-steps.yml'
 
+permissions:
+  contents: read
+
 jobs:
   validate-copilot-setup:
     name: Validate Copilot Configuration
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     
     steps:
       - name: Checkout Repository
@@ -130,6 +135,8 @@ jobs:
   documentation-check:
     name: Documentation Quality Check
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     
     steps:
       - name: Checkout Repository
@@ -178,6 +185,8 @@ jobs:
     name: Setup Summary
     runs-on: ubuntu-latest
     needs: [validate-copilot-setup, documentation-check]
+    permissions:
+      contents: read
     
     steps:
       - name: Display Setup Summary
