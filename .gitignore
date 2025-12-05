@@ -64,3 +64,6 @@ build/
 *.drmlgunit
 
 .mcp-debug-tools/
+
+.DS_Store
+Thumbs.db
