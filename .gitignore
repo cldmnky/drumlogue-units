@@ -54,4 +54,13 @@ dkms.conf
 # debug information files
 *.dwo
 
+# Drumlogue build artifacts
+build/
+.dep/
+*.bin
+*.dmp
+*.list
+*.lst
+*.drmlgunit
+
 .mcp-debug-tools/
