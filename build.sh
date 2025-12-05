@@ -47,12 +47,25 @@ case "$ACTION" in
 esac
 
 echo ">> Building ${PROJECT}..."
+
+# Artifact name uses underscores instead of hyphens
+ARTIFACT_NAME="${PROJECT//-/_}.drmlgunit"
+OUTPUT_DIR="${SCRIPT_DIR}/drumlogue/${PROJECT}"
+
+# Mount the project directory directly into the workspace to avoid symlink permission issues
+# Also mount eurorack directory for Mutable Instruments DSP code
 $ENGINE run --rm --entrypoint "" \
     -v "${SDK_PLATFORM}:/workspace" \
-    -v "${SCRIPT_DIR}:/repo" \
-    "$IMAGE" /bin/bash -c "ln -sfn /repo/drumlogue/${PROJECT} /workspace/drumlogue/${PROJECT} && ${CMD} ; rm -f /workspace/drumlogue/${PROJECT}"
+    -v "${SCRIPT_DIR}/drumlogue/${PROJECT}:/workspace/drumlogue/${PROJECT}" \
+    -v "${SCRIPT_DIR}/eurorack:/repo/eurorack:ro" \
+    "$IMAGE" /bin/bash -c "${CMD}"
 
-# Copy output to project dir if build succeeded
-if [ "$ACTION" != "clean" ] && [ -f "${SDK_PLATFORM}/drumlogue/${PROJECT}/build/${PROJECT//-/_}.drmlgunit" ]; then
-    echo ">> Output available in logue-sdk/platform/drumlogue/${PROJECT}/build/"
+# The SDK deploys the artifact directly to the project directory
+if [ "$ACTION" != "clean" ]; then
+    if [ -f "${OUTPUT_DIR}/${ARTIFACT_NAME}" ]; then
+        echo ">> Build artifact: ${OUTPUT_DIR}/${ARTIFACT_NAME}"
+        ls -la "${OUTPUT_DIR}/${ARTIFACT_NAME}"
+    else
+        echo ">> Warning: Build artifact not found at ${OUTPUT_DIR}/${ARTIFACT_NAME}"
+    fi
 fi
