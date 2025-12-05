@@ -64,26 +64,32 @@ chmod -R 777 "${BUILD_DIR}"
 
 BUILD_EXIT_CODE=0
 # Create a build script that:
-# 1. Copies SDK platform drumlogue to a temp location
-# 2. Mounts project directory over the specific project path
-# 3. Pre-creates build subdirs inside container
+# 1. Copies SDK platform drumlogue to a writable /workspace
+# 2. Copies project files from mounted read-only source
+# 3. Builds the project
+# 4. Copies artifact to a separately mounted output directory
+OUTPUT_MOUNT="${SCRIPT_DIR}/drumlogue/${PROJECT}"
+mkdir -p "${OUTPUT_MOUNT}"
+chmod 777 "${OUTPUT_MOUNT}"
+
 $ENGINE run --rm --entrypoint "" \
     -e HOME=/tmp \
     -v "${SDK_PLATFORM}:/sdk-platform:ro" \
-    -v "${SCRIPT_DIR}/drumlogue/${PROJECT}:/project-mount" \
+    -v "${SCRIPT_DIR}/drumlogue/${PROJECT}:/project-src:ro" \
+    -v "${OUTPUT_MOUNT}:/output" \
     -v "${SCRIPT_DIR}/eurorack:/repo/eurorack:ro" \
     "$IMAGE" /bin/bash -c "
         rm -rf /workspace/drumlogue && \
         cp -r /sdk-platform/drumlogue /workspace/ && \
         rm -rf /workspace/drumlogue/${PROJECT} && \
         mkdir -p /workspace/drumlogue/${PROJECT} && \
-        cp -r /project-mount/* /workspace/drumlogue/${PROJECT}/ && \
+        cp -r /project-src/* /workspace/drumlogue/${PROJECT}/ && \
         rm -rf /workspace/drumlogue/${PROJECT}/build && \
         mkdir -p /workspace/drumlogue/${PROJECT}/build/obj && \
         mkdir -p /workspace/drumlogue/${PROJECT}/build/lst && \
         mkdir -p /workspace/drumlogue/${PROJECT}/build/.dep && \
         ${CMD} && \
-        cp /workspace/drumlogue/${PROJECT}/${ARTIFACT_NAME} /project-mount/
+        cp /workspace/drumlogue/${PROJECT}/${ARTIFACT_NAME} /output/
     " || BUILD_EXIT_CODE=$?
 
 if [ $BUILD_EXIT_CODE -ne 0 ]; then
