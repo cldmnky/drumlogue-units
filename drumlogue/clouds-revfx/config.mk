@@ -14,7 +14,8 @@ CSRC = header.c
 
 # C++ sources
 CXXSRC = unit.cc \
-         clouds_fx.cc
+         clouds_fx.cc \
+         $(STMLIBDIR)/utils/random.cc
 
 # List ASM source files here
 ASMSRC = 
