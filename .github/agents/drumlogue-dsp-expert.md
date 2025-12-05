@@ -75,7 +75,7 @@ Required implementations:
 ### Parameter Design
 - Maximum 24 parameter descriptors
 - Types: integer, percentage, strings, bitmaps, db, none
-- Blank slots use `{0,0,0,0,k_unit_param_type_none,...}` for paging control
+- Blank slots use full parameter descriptor with type set to `k_unit_param_type_none` to control parameter paging (e.g., `{0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, 0, 0, {""}}`)
 - String/bitmap parameters must return 7-bit ASCII or 16x16 1bpp bitmaps
 
 ### Audio Processing Requirements

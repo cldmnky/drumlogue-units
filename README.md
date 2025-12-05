@@ -71,10 +71,10 @@ The build produces a `.drmlgunit` file that can be loaded onto the drumlogue via
 ## Creating New Units
 
 1. Copy a template from `logue-sdk/platform/drumlogue/`:
-   - `dummy-synth` - Synthesizer unit
-   - `dummy-delfx` - Delay effect
-   - `dummy-revfx` - Reverb effect
-   - `dummy-masterfx` - Master effect
+   - `dummy-synth` - Synthesizer unit template for creating drum synth voices
+   - `dummy-delfx` - Delay effects template for time-based effects processing
+   - `dummy-revfx` - Reverb effects template for spatial/ambience effects
+   - `dummy-masterfx` - Master effects template for final output stage processing
 
 2. Configure your unit:
    - Edit `config.mk` - Project name, type, source files
