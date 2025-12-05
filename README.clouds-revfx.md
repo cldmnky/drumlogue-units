@@ -117,7 +117,7 @@ The unit includes 8 carefully crafted presets:
 
 ## Version History
 
-- **v1.3.0** - Current version
+- **v1.0.0-pre** - Initial pre-release
   - 16 parameters across 4 pages
   - 8 built-in presets
   - Parameter smoothing to prevent zipper noise
