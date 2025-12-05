@@ -88,7 +88,13 @@ jobs:
             echo "❌ Error: header.c not found in drumlogue/${UNIT}"
             exit 1
           fi
+          # Verify eurorack submodule is present
+          if [ ! -d "eurorack/clouds" ]; then
+            echo "❌ Error: eurorack submodule not found"
+            exit 1
+          fi
           echo "✅ Unit ${UNIT} found"
+          echo "✅ eurorack submodule found"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -109,24 +115,40 @@ jobs:
           ENGINE: docker
           IMAGE: logue-sdk-dev-env:latest
         run: |
+          set -e
           UNIT="${{ needs.extract-info.outputs.unit }}"
           echo "🔨 Building ${UNIT}..."
           ./build.sh "${UNIT}"
+          
+          # Verify the build succeeded by checking for artifact
+          ARTIFACT_NAME=$(echo "${UNIT}" | tr '-' '_').drmlgunit
+          if [ ! -f "drumlogue/${UNIT}/${ARTIFACT_NAME}" ]; then
+            echo "❌ Build failed - artifact not created"
+            exit 1
+          fi
+          echo "✅ Build succeeded"
 
       - name: Find and verify build artifact
         id: artifact
         run: |
           UNIT="${{ needs.extract-info.outputs.unit }}"
           # The artifact name uses underscores instead of hyphens
-          ARTIFACT_NAME=$(echo "${UNIT}" | tr '-' '_')
-          ARTIFACT_PATH=$(find drumlogue/${UNIT} logue-sdk/platform/drumlogue/${UNIT} -name "*.drmlgunit" 2>/dev/null | head -1)
+          ARTIFACT_NAME=$(echo "${UNIT}" | tr '-' '_').drmlgunit
           
-          if [ -z "$ARTIFACT_PATH" ]; then
-            echo "❌ Error: No .drmlgunit artifact found"
+          # The build script now copies the artifact to drumlogue/${UNIT}/
+          ARTIFACT_PATH="drumlogue/${UNIT}/${ARTIFACT_NAME}"
+          
+          echo "Looking for artifact at: ${ARTIFACT_PATH}"
+          ls -la "drumlogue/${UNIT}/" || true
+          
+          if [ ! -f "$ARTIFACT_PATH" ]; then
+            echo "❌ Error: No .drmlgunit artifact found at ${ARTIFACT_PATH}"
+            echo "Searching for any .drmlgunit files..."
+            find . -name "*.drmlgunit" 2>/dev/null || echo "No .drmlgunit files found anywhere"
             exit 1
           fi
           
-          # Copy to consistent location
+          # Copy to consistent location with version in name
           FINAL_NAME="${UNIT}-v${{ needs.extract-info.outputs.version }}.drmlgunit"
           cp "$ARTIFACT_PATH" "${FINAL_NAME}"
           

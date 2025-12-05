@@ -54,11 +54,17 @@ OUTPUT_DIR="${SCRIPT_DIR}/drumlogue/${PROJECT}"
 
 # Mount the project directory directly into the workspace to avoid symlink permission issues
 # Also mount eurorack directory for Mutable Instruments DSP code
+BUILD_EXIT_CODE=0
 $ENGINE run --rm --entrypoint "" \
     -v "${SDK_PLATFORM}:/workspace" \
     -v "${SCRIPT_DIR}/drumlogue/${PROJECT}:/workspace/drumlogue/${PROJECT}" \
     -v "${SCRIPT_DIR}/eurorack:/repo/eurorack:ro" \
-    "$IMAGE" /bin/bash -c "${CMD}"
+    "$IMAGE" /bin/bash -c "${CMD}" || BUILD_EXIT_CODE=$?
+
+if [ $BUILD_EXIT_CODE -ne 0 ]; then
+    echo ">> Error: Build failed with exit code ${BUILD_EXIT_CODE}"
+    exit $BUILD_EXIT_CODE
+fi
 
 # The SDK deploys the artifact directly to the project directory
 if [ "$ACTION" != "clean" ]; then
@@ -66,6 +72,7 @@ if [ "$ACTION" != "clean" ]; then
         echo ">> Build artifact: ${OUTPUT_DIR}/${ARTIFACT_NAME}"
         ls -la "${OUTPUT_DIR}/${ARTIFACT_NAME}"
     else
-        echo ">> Warning: Build artifact not found at ${OUTPUT_DIR}/${ARTIFACT_NAME}"
+        echo ">> Error: Build artifact not found at ${OUTPUT_DIR}/${ARTIFACT_NAME}"
+        exit 1
     fi
 fi
