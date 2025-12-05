@@ -4,6 +4,50 @@
 #include <cstdio>
 #include <cstring>
 
+// Preset names - must be at file scope for stable memory addresses
+constexpr size_t kNumPresets = 8;
+static const char * const kPresetNames[kNumPresets] = {
+    "INIT",      // 0: Clean starting point
+    "HALL",      // 1: Large concert hall
+    "PLATE",     // 2: Bright plate reverb
+    "SHIMMER",   // 3: Pitched reverb with shimmer
+    "CLOUD",     // 4: Granular texture cloud
+    "FREEZE",    // 5: For frozen/pad sounds
+    "OCTAVER",   // 6: Pitch shifted reverb
+    "AMBIENT",   // 7: Lush ambient wash
+};
+
+// Preset data: {DRY/WET, TIME, DIFFUSION, LP_DAMP, IN_GAIN, TEXTURE, 
+//               GRAIN_AMT, GRAIN_SIZE, GRAIN_DENS, GRAIN_PITCH, GRAIN_POS, FREEZE,
+//               SHIFT_AMT, SHIFT_PITCH, SHIFT_SIZE, reserved,
+//               LFO1_ASSIGN, LFO1_SPEED, LFO1_DEPTH, LFO1_WAVE,
+//               LFO2_ASSIGN, LFO2_SPEED, LFO2_DEPTH, LFO2_WAVE}
+static const int32_t kPresets[kNumPresets][24] = {
+    // 0: INIT - Clean starting point
+    {100, 80, 80, 90, 50, 0, 0, 64, 64, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0},
+    
+    // 1: HALL - Large concert hall, long decay
+    {120, 110, 100, 100, 40, 30, 0, 64, 64, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0},
+    
+    // 2: PLATE - Bright plate reverb
+    {100, 70, 127, 127, 60, 0, 0, 64, 64, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0},
+    
+    // 3: SHIMMER - Pitched reverb with octave up
+    {90, 100, 90, 80, 45, 40, 0, 64, 64, 64, 64, 0, 80, 88, 80, 0, 0, 64, 64, 0, 0, 64, 64, 0},
+    
+    // 4: CLOUD - Granular texture + reverb
+    {80, 90, 90, 85, 50, 60, 80, 90, 70, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0},
+    
+    // 5: FREEZE - For frozen/pad sounds
+    {100, 127, 100, 95, 30, 80, 60, 100, 50, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0},
+    
+    // 6: OCTAVER - Pitch shifted reverb
+    {90, 85, 80, 90, 50, 20, 0, 64, 64, 64, 64, 0, 100, 52, 70, 0, 0, 64, 64, 0, 0, 64, 64, 0},
+    
+    // 7: AMBIENT - Lush ambient wash with subtle LFO modulation on texture
+    {140, 120, 110, 75, 35, 50, 40, 80, 40, 64, 64, 0, 30, 76, 90, 0, 6, 40, 50, 0, 0, 64, 64, 0},
+};
+
 // Static buffer for reverb delay lines (~64KB for 32768 * 2 bytes)
 static uint16_t s_reverb_buffer[32768];
 
@@ -347,50 +391,15 @@ const uint8_t * CloudsFx::getParameterBmpValue(uint8_t id, int32_t value) {
 }
 
 void CloudsFx::LoadPreset(uint8_t idx) {
-  // Preset data: {DRY/WET, TIME, DIFFUSION, LP_DAMP, IN_GAIN, TEXTURE, 
-  //               GRAIN_AMT, GRAIN_SIZE, GRAIN_DENS, GRAIN_PITCH, GRAIN_POS, FREEZE,
-  //               SHIFT_AMT, SHIFT_PITCH, SHIFT_SIZE, reserved,
-  //               LFO1_ASSIGN, LFO1_SPEED, LFO1_DEPTH, LFO1_WAVE,
-  //               LFO2_ASSIGN, LFO2_SPEED, LFO2_DEPTH, LFO2_WAVE}
-  static const int32_t kPresets[][24] = {
-    // 0: INIT - Clean starting point
-    {100, 80, 80, 90, 50, 0, 0, 64, 64, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0},
-    
-    // 1: HALL - Large concert hall, long decay
-    {120, 110, 100, 100, 40, 30, 0, 64, 64, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0},
-    
-    // 2: PLATE - Bright plate reverb
-    {100, 70, 127, 127, 60, 0, 0, 64, 64, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0},
-    
-    // 3: SHIMMER - Pitched reverb with octave up
-    {90, 100, 90, 80, 45, 40, 0, 64, 64, 64, 64, 0, 80, 88, 80, 0, 0, 64, 64, 0, 0, 64, 64, 0},
-    
-    // 4: CLOUD - Granular texture + reverb
-    {80, 90, 90, 85, 50, 60, 80, 90, 70, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0},
-    
-    // 5: FREEZE - For frozen/pad sounds
-    {100, 127, 100, 95, 30, 80, 60, 100, 50, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0},
-    
-    // 6: OCTAVER - Pitch shifted reverb
-    {90, 85, 80, 90, 50, 20, 0, 64, 64, 64, 64, 0, 100, 52, 70, 0, 0, 64, 64, 0, 0, 64, 64, 0},
-    
-    // 7: AMBIENT - Lush ambient wash with subtle LFO modulation on texture
-    {140, 120, 110, 75, 35, 50, 40, 80, 40, 64, 64, 0, 30, 76, 90, 0, 6, 40, 50, 0, 0, 64, 64, 0},
-  };
-  
-  constexpr uint8_t kNumPresets = sizeof(kPresets) / sizeof(kPresets[0]);
   if (idx >= kNumPresets) {
     idx = 0;
   }
   preset_index_ = idx;
   
-  // Load preset values into params
+  // Load preset values using setParameter (ensures proper parameter handling)
   for (uint8_t i = 0; i < 24; ++i) {
-    params_[i] = kPresets[idx][i];
+    setParameter(i, kPresets[idx][i]);
   }
-  
-  // Re-initialize smoothers with new values
-  initSmoothers();
   
   // Update DSP modules
   if (reverb_initialized_) {
@@ -411,17 +420,6 @@ uint8_t CloudsFx::getPresetIndex() const {
 }
 
 const char * CloudsFx::getPresetName(uint8_t idx) {
-  static const char * kPresetNames[] = {
-    "INIT",      // 0: Clean starting point
-    "HALL",      // 1: Large concert hall
-    "PLATE",     // 2: Bright plate reverb
-    "SHIMMER",   // 3: Pitched reverb with shimmer
-    "CLOUD",     // 4: Granular texture cloud
-    "FREEZE",    // 5: For frozen/pad sounds
-    "OCTAVER",   // 6: Pitch shifted reverb
-    "AMBIENT",   // 7: Lush ambient wash
-  };
-  constexpr uint8_t kNumPresets = sizeof(kPresetNames) / sizeof(kPresetNames[0]);
   if (idx >= kNumPresets) {
     idx = 0;
   }
