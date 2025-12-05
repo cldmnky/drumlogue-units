@@ -59,8 +59,11 @@ mkdir -p "${SCRIPT_DIR}/drumlogue/${PROJECT}/build"
 mkdir -p "${SCRIPT_DIR}/drumlogue/${PROJECT}/.dep"
 
 BUILD_EXIT_CODE=0
+# Set HOME to /tmp inside container so SDK can create .drumlogue.env_backup directory
+# The SDK platform is mounted read-only, but project dir is writable
 $ENGINE run --rm --entrypoint "" \
-    -v "${SDK_PLATFORM}:/workspace" \
+    -e HOME=/tmp \
+    -v "${SDK_PLATFORM}:/workspace:ro" \
     -v "${SCRIPT_DIR}/drumlogue/${PROJECT}:/workspace/drumlogue/${PROJECT}" \
     -v "${SCRIPT_DIR}/eurorack:/repo/eurorack:ro" \
     "$IMAGE" /bin/bash -c "${CMD}" || BUILD_EXIT_CODE=$?
