@@ -59,6 +59,8 @@ BUILD_DIR="${SCRIPT_DIR}/drumlogue/${PROJECT}/build"
 mkdir -p "${BUILD_DIR}/obj"
 mkdir -p "${BUILD_DIR}/lst"
 mkdir -p "${BUILD_DIR}/.dep"
+# Make build dirs world-writable for container user compatibility
+chmod -R 777 "${BUILD_DIR}"
 
 BUILD_EXIT_CODE=0
 # Create a build script that:
