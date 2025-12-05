@@ -56,6 +56,8 @@ OUTPUT_DIR="${SCRIPT_DIR}/drumlogue/${PROJECT}"
 # Also mount eurorack directory for Mutable Instruments DSP code
 # Pre-create build directories to avoid permission issues in container
 mkdir -p "${SCRIPT_DIR}/drumlogue/${PROJECT}/build"
+mkdir -p "${SCRIPT_DIR}/drumlogue/${PROJECT}/build/obj"
+mkdir -p "${SCRIPT_DIR}/drumlogue/${PROJECT}/build/lst"
 mkdir -p "${SCRIPT_DIR}/drumlogue/${PROJECT}/.dep"
 
 BUILD_EXIT_CODE=0
