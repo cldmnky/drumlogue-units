@@ -59,14 +59,25 @@ mkdir -p "${SCRIPT_DIR}/drumlogue/${PROJECT}/build"
 mkdir -p "${SCRIPT_DIR}/drumlogue/${PROJECT}/.dep"
 
 BUILD_EXIT_CODE=0
-# Set HOME to /tmp inside container so SDK can create .drumlogue.env_backup directory
-# The SDK platform is mounted read-only, but project dir is writable
+# Create a build script that:
+# 1. Copies SDK platform to a writable /workspace
+# 2. Creates project directory and copies our project files
+# 3. Runs the build
+# This avoids complex mount overlays that don't work well in Docker
 $ENGINE run --rm --entrypoint "" \
     -e HOME=/tmp \
-    -v "${SDK_PLATFORM}:/workspace:ro" \
-    -v "${SCRIPT_DIR}/drumlogue/${PROJECT}:/workspace/drumlogue/${PROJECT}" \
+    -v "${SDK_PLATFORM}:/sdk-platform:ro" \
+    -v "${SCRIPT_DIR}/drumlogue/${PROJECT}:/project-src:ro" \
+    -v "${SCRIPT_DIR}/drumlogue/${PROJECT}/build:/project-build" \
     -v "${SCRIPT_DIR}/eurorack:/repo/eurorack:ro" \
-    "$IMAGE" /bin/bash -c "${CMD}" || BUILD_EXIT_CODE=$?
+    "$IMAGE" /bin/bash -c "
+        cp -r /sdk-platform/* /workspace/ && \
+        mkdir -p /workspace/drumlogue/${PROJECT} && \
+        cp -r /project-src/* /workspace/drumlogue/${PROJECT}/ && \
+        rm -rf /workspace/drumlogue/${PROJECT}/build && \
+        ln -s /project-build /workspace/drumlogue/${PROJECT}/build && \
+        ${CMD}
+    " || BUILD_EXIT_CODE=$?
 
 if [ $BUILD_EXIT_CODE -ne 0 ]; then
     echo ">> Error: Build failed with exit code ${BUILD_EXIT_CODE}"
