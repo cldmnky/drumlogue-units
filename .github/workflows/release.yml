@@ -46,7 +46,7 @@ jobs:
             UNIT=$(echo "$TAG" | sed 's|/v.*||')
             VERSION=$(echo "$TAG" | sed 's|.*/v||')
             # Check if version contains a suffix like -pre, -beta, -rc
-            if echo "$VERSION" | grep -qE '-[a-zA-Z]+'; then
+            if echo "$VERSION" | grep -qE -- '-[a-zA-Z]+'; then
               IS_PRERELEASE="true"
             else
               IS_PRERELEASE="false"
