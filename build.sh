@@ -55,22 +55,22 @@ OUTPUT_DIR="${SCRIPT_DIR}/drumlogue/${PROJECT}"
 # Mount the project directory directly into the workspace to avoid symlink permission issues
 # Also mount eurorack directory for Mutable Instruments DSP code
 # Pre-create build directories to avoid permission issues in container
-mkdir -p "${SCRIPT_DIR}/drumlogue/${PROJECT}/build"
-mkdir -p "${SCRIPT_DIR}/drumlogue/${PROJECT}/build/obj"
-mkdir -p "${SCRIPT_DIR}/drumlogue/${PROJECT}/build/lst"
-mkdir -p "${SCRIPT_DIR}/drumlogue/${PROJECT}/.dep"
+BUILD_DIR="${SCRIPT_DIR}/drumlogue/${PROJECT}/build"
+mkdir -p "${BUILD_DIR}/obj"
+mkdir -p "${BUILD_DIR}/lst"
+mkdir -p "${BUILD_DIR}/.dep"
 
 BUILD_EXIT_CODE=0
 # Create a build script that:
 # 1. Copies SDK platform to a writable /workspace
 # 2. Creates project directory and copies our project files
-# 3. Runs the build
+# 3. Symlinks build dir from mounted volume and creates subdirs inside container
 # This avoids complex mount overlays that don't work well in Docker
 $ENGINE run --rm --entrypoint "" \
     -e HOME=/tmp \
     -v "${SDK_PLATFORM}:/sdk-platform:ro" \
     -v "${SCRIPT_DIR}/drumlogue/${PROJECT}:/project-src:ro" \
-    -v "${SCRIPT_DIR}/drumlogue/${PROJECT}/build:/project-build" \
+    -v "${BUILD_DIR}:/project-build" \
     -v "${SCRIPT_DIR}/eurorack:/repo/eurorack:ro" \
     "$IMAGE" /bin/bash -c "
         cp -r /sdk-platform/* /workspace/ && \
@@ -78,6 +78,7 @@ $ENGINE run --rm --entrypoint "" \
         cp -r /project-src/* /workspace/drumlogue/${PROJECT}/ && \
         rm -rf /workspace/drumlogue/${PROJECT}/build && \
         ln -s /project-build /workspace/drumlogue/${PROJECT}/build && \
+        mkdir -p /project-build/obj /project-build/lst /project-build/.dep && \
         ${CMD}
     " || BUILD_EXIT_CODE=$?
 
