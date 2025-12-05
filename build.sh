@@ -54,8 +54,10 @@ OUTPUT_DIR="${SCRIPT_DIR}/drumlogue/${PROJECT}"
 
 # Mount the project directory directly into the workspace to avoid symlink permission issues
 # Also mount eurorack directory for Mutable Instruments DSP code
+# Use --user to match host UID/GID for proper file permissions
 BUILD_EXIT_CODE=0
 $ENGINE run --rm --entrypoint "" \
+    --user "$(id -u):$(id -g)" \
     -v "${SDK_PLATFORM}:/workspace" \
     -v "${SCRIPT_DIR}/drumlogue/${PROJECT}:/workspace/drumlogue/${PROJECT}" \
     -v "${SCRIPT_DIR}/eurorack:/repo/eurorack:ro" \
