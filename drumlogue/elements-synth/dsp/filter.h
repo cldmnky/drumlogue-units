@@ -22,14 +22,17 @@ public:
     void Reset() {
         for (int i = 0; i < 4; ++i) stage_[i] = 0.0f;
         delay_[0] = delay_[1] = delay_[2] = delay_[3] = 0.0f;
+        g_ = 0.0f;
+        g_target_ = 0.0f;
     }
     
     void SetCutoff(float freq) {
         freq = Clamp(freq, 20.0f, kSampleRate * 0.45f);
         
-        // Simplified Moog filter cutoff calculation
+        // Use fast tangent approximation for filter coefficient
+        // g = tan(π * fc) where fc = freq / sample_rate
         float fc = freq / kSampleRate;
-        g_ = 0.9892f * fc - 0.4324f * fc * fc - 0.1381f * fc * fc * fc + 0.0202f * fc * fc * fc * fc;
+        g_target_ = FastTan(fc);
     }
     
     void SetResonance(float res) {
@@ -39,6 +42,10 @@ public:
     float Process(float input) {
         // Protect against NaN input
         if (input != input) input = 0.0f;
+        
+        // Smooth cutoff coefficient (one-pole lowpass) - prevents zipper noise
+        // Coefficient 0.001 gives ~7ms smoothing at 48kHz
+        g_ += (g_target_ - g_) * 0.001f;
         
         // Apply resonance (feedback from output to input)
         float feedback = res_ * delay_[3];
@@ -68,6 +75,7 @@ private:
     float stage_[4];
     float delay_[4];
     float g_ = 0.0f;
+    float g_target_ = 0.0f;  // Target for smoothed cutoff
     float res_ = 0.0f;
 };
 

@@ -27,7 +27,7 @@ namespace modal {
 
 class ModalSynth {
 public:
-    enum Model { kModal, kString };
+    enum Model { kModal, kString, kMultiString };
     
     ModalSynth() : model_(kModal), pitch_(60.0f), output_level_(0.8f) {}
     
@@ -36,6 +36,7 @@ public:
         resonator_.SetFrequency(MidiToFrequency(60.0f));
         resonator_.Update();
         string_.SetFrequency(MidiToFrequency(60.0f));
+        multi_string_.SetFrequency(MidiToFrequency(60.0f));
         filter_.Reset();
         
         env_.SetADSR(0.001f, 0.2f, 0.0f, 0.3f);
@@ -52,6 +53,9 @@ public:
     void SetBlowTimbre(float v) { exciter_.SetBlowTimbre(v); }
     void SetStrikeTimbre(float v) { exciter_.SetStrikeTimbre(v); }
     
+    // Strike sample: 0=mallet_soft, 1=mallet_med, 2=mallet_hard, 3=plectrum, 4=stick, 5=bow_attack
+    void SetStrikeSample(int idx) { exciter_.SetStrikeSample(idx); }
+    
     // Strike mode: 0=Sample, 1=Granular, 2=Noise
     void SetStrikeMode(int mode) { exciter_.SetStrikeMode(mode); }
     
@@ -62,25 +66,39 @@ public:
     // Resonator controls
     void SetStructure(float v) { 
         structure_base_ = v;
-        resonator_.SetStructure(v); 
+        resonator_.SetStructure(v);
+        resonator_.Update();  // Apply immediately for live parameter changes
     }
     void SetBrightness(float v) { 
         brightness_base_ = v;
         resonator_.SetBrightness(v);
+        resonator_.Update();  // Apply immediately for live parameter changes
         string_.SetBrightness(v);
+        multi_string_.SetBrightness(v);
     }
     void SetDamping(float v) { 
         resonator_.SetDamping(v);
+        resonator_.Update();  // Apply immediately for live parameter changes
         string_.SetDamping(v);
+        multi_string_.SetDamping(v);
     }
+    
+    // Dispersion control (piano-like inharmonicity, String/MultiString only)
+    void SetDispersion(float v) {
+        string_.SetDispersion(v);
+        multi_string_.SetDispersion(v);
+    }
+    
     void SetPosition(float v) { 
         position_base_ = v;
-        resonator_.SetPosition(v); 
+        resonator_.SetPosition(v);
+        resonator_.Update();  // Apply immediately for live parameter changes
     }
     
     // Filter controls
     void SetFilterCutoff(float v) {
         filter_cutoff_base_ = 20.0f * std::pow(900.0f, v);
+        filter_.SetCutoff(filter_cutoff_base_);  // Apply immediately
     }
     void SetFilterResonance(float v) { filter_.SetResonance(v); }
     void SetFilterEnvAmount(float v) { filter_env_amount_ = v; }
@@ -109,8 +127,17 @@ public:
         updateEnvelope();
     }
     
-    // Model selection
-    void SetModel(int m) { model_ = (m == 0) ? kModal : kString; }
+    // Model selection: 0=Modal, 1=String, 2=MultiString
+    void SetModel(int m) { 
+        if (m == 0) model_ = kModal;
+        else if (m == 1) model_ = kString;
+        else model_ = kMultiString;
+    }
+    
+    // Multi-string detuning amount (0=unison, 1=full chorus)
+    void SetMultiStringDetune(float v) {
+        multi_string_.SetDetuneAmount(Clamp(v, 0.0f, 1.0f));
+    }
     
     // Stereo space control (Elements-style)
     void SetSpace(float v) { 
@@ -165,6 +192,10 @@ public:
                 lfo_shape_ = 3; // SAW
                 lfo_dest_ = 1;  // CUTOFF
                 break;
+            case 7: // RND>SPC (random/S&H -> Space)
+                lfo_shape_ = 4; // RND (sample & hold)
+                lfo_dest_ = 5;  // SPACE
+                break;
             default:
                 lfo_dest_ = 0;
                 break;
@@ -180,12 +211,17 @@ public:
         resonator_.SetFrequency(freq);
         resonator_.Update();
         string_.SetFrequency(freq);
+        multi_string_.SetFrequency(freq);
+        
+        // Set blow frequency for tube resonance (tracks pitch)
+        exciter_.SetBlowFrequency(freq);
         
         exciter_.Trigger();
         env_.Trigger();
         filter_env_.Trigger();
         
-        velocity_ = (float)velocity / 127.0f;
+        // Use exponential velocity curve for more musical dynamics
+        velocity_ = GetVelocityGain(velocity);
     }
     
     void NoteOff() {
@@ -194,65 +230,97 @@ public:
     }
     
     void Process(float* out_l, float* out_r, uint32_t frames) {
+        // LFO control rate divisor - update every 32 samples (~1.5kHz control rate)
+        static constexpr int kLfoUpdateRate = 32;
+        
         for (uint32_t i = 0; i < frames; ++i) {
-            // Update LFO phase
-            lfo_phase_ += lfo_rate_ / kSampleRate;
-            if (lfo_phase_ >= 1.0f) lfo_phase_ -= 1.0f;
-            
-            // Generate LFO waveform based on shape
-            float lfo;
-            switch (lfo_shape_) {
-                case 0: // TRI (triangle)
-                    lfo = (lfo_phase_ < 0.5f) ? (lfo_phase_ * 4.0f - 1.0f) : (3.0f - lfo_phase_ * 4.0f);
-                    break;
-                case 1: // SIN (sine)
-                    lfo = std::sin(lfo_phase_ * kTwoPi);
-                    break;
-                case 2: // SQR (square)
-                    lfo = (lfo_phase_ < 0.5f) ? 1.0f : -1.0f;
-                    break;
-                case 3: // SAW (sawtooth)
-                    lfo = 2.0f * lfo_phase_ - 1.0f;
-                    break;
-                default:
-                    lfo = 0.0f;
-                    break;
+            // Update LFO at control rate (not audio rate) to save CPU
+            if (lfo_counter_ == 0 && lfo_dest_ != 0) {
+                // Update LFO phase
+                lfo_phase_ += lfo_rate_ * kLfoUpdateRate / kSampleRate;
+                if (lfo_phase_ >= 1.0f) lfo_phase_ -= 1.0f;
+                
+                // Generate LFO waveform based on shape
+                float lfo;
+                switch (lfo_shape_) {
+                    case 0: // TRI (triangle)
+                        lfo = (lfo_phase_ < 0.5f) ? (lfo_phase_ * 4.0f - 1.0f) : (3.0f - lfo_phase_ * 4.0f);
+                        break;
+                    case 1: // SIN (sine) - use fast approximation
+                        {
+                            float x = lfo_phase_ * 2.0f - 1.0f;  // -1 to 1
+                            lfo = x * (2.0f - (x < 0 ? -x : x));  // Parabolic sine approx
+                        }
+                        break;
+                    case 2: // SQR (square)
+                        lfo = (lfo_phase_ < 0.5f) ? 1.0f : -1.0f;
+                        break;
+                    case 3: // SAW (sawtooth)
+                        lfo = 2.0f * lfo_phase_ - 1.0f;
+                        break;
+                    case 4: // RND (sample & hold random)
+                        {
+                            // Trigger new random value when phase wraps
+                            static float last_phase = 0.0f;
+                            if (lfo_phase_ < last_phase) {
+                                // Phase wrapped, generate new random value
+                                lfo_random_value_ = (float)((lfo_random_state_ = lfo_random_state_ * 1103515245 + 12345) & 0x7FFFFFFF) / (float)0x7FFFFFFF * 2.0f - 1.0f;
+                            }
+                            last_phase = lfo_phase_;
+                            lfo = lfo_random_value_;
+                        }
+                        break;
+                    default:
+                        lfo = 0.0f;
+                        break;
+                }
+                
+                // Apply LFO depth and to destination
+                float lfo_mod = lfo * lfo_depth_ * 0.5f;
+                switch (lfo_dest_) {
+                    case 1: // CUTOFF
+                        filter_.SetCutoff(filter_cutoff_base_ * (1.0f + lfo_mod));
+                        break;
+                    case 2: // GEOMETRY
+                        resonator_.SetStructure(Clamp(structure_base_ + lfo_mod * 0.5f, 0.0f, 1.0f));
+                        resonator_.Update();
+                        break;
+                    case 3: // POSITION
+                        resonator_.SetPosition(Clamp(position_base_ + lfo_mod * 0.5f, 0.0f, 1.0f));
+                        resonator_.Update();
+                        break;
+                    case 4: // BRIGHTNESS
+                        resonator_.SetBrightness(Clamp(brightness_base_ + lfo_mod * 0.5f, 0.0f, 1.0f));
+                        resonator_.Update();
+                        break;
+                    case 5: // SPACE
+                        resonator_.SetSpace(Clamp(space_ + lfo_mod * 0.5f, 0.0f, 1.0f));
+                        break;
+                    default:
+                        break;
+                }
             }
-            
-            // Apply LFO depth and to destination
-            float lfo_mod = lfo * lfo_depth_ * 0.5f;  // Up to 50% modulation at full depth
-            switch (lfo_dest_) {
-                case 1: // CUTOFF
-                    filter_.SetCutoff(filter_cutoff_base_ * (1.0f + lfo_mod));
-                    break;
-                case 2: // GEOMETRY
-                    resonator_.SetStructure(Clamp(structure_base_ + lfo_mod * 0.5f, 0.0f, 1.0f));
-                    resonator_.Update();
-                    break;
-                case 3: // POSITION
-                    resonator_.SetPosition(Clamp(position_base_ + lfo_mod * 0.5f, 0.0f, 1.0f));
-                    break;
-                case 4: // BRIGHTNESS
-                    resonator_.SetBrightness(Clamp(brightness_base_ + lfo_mod * 0.5f, 0.0f, 1.0f));
-                    break;
-                case 5: // SPACE
-                    resonator_.SetSpace(Clamp(space_ + lfo_mod * 0.5f, 0.0f, 1.0f));
-                    break;
-                default:
-                    break;
-            }
+            lfo_counter_ = (lfo_counter_ + 1) & (kLfoUpdateRate - 1);
             
             // Generate excitation
             float exc = exciter_.Process() * velocity_;
+            
+            // Get bow strength for resonator bowing
+            float bow_strength = exciter_.GetBowStrength() * velocity_;
             
             // Resonate with stereo output
             float center, side;
             if (model_ == kModal) {
                 // Modal resonator outputs stereo directly (Elements-style)
-                resonator_.Process(exc, center, side);
-            } else {
-                // String model is mono, create simple stereo spread
+                // Pass bow strength for banded waveguide bowing
+                resonator_.Process(exc, bow_strength, center, side);
+            } else if (model_ == kString) {
+                // Single string model is mono
                 center = string_.Process(exc);
+                side = 0.0f;
+            } else {
+                // Multi-string model (5 sympathetic strings)
+                center = multi_string_.Process(exc);
                 side = 0.0f;
             }
             
@@ -290,6 +358,7 @@ public:
     void Reset() {
         resonator_.Reset();
         string_.Reset();
+        multi_string_.Reset();
         filter_.Reset();
     }
     
@@ -321,6 +390,7 @@ private:
     Exciter exciter_;
     Resonator resonator_;
     String string_;
+    MultiString multi_string_;
     MoogLadder filter_;
     MultistageEnvelope env_;
     MultistageEnvelope filter_env_;
@@ -331,7 +401,7 @@ private:
     float output_level_;
     float space_ = 0.5f;
     float filter_cutoff_base_ = 8000.0f;
-    float filter_env_amount_ = 0.0f;
+    float filter_env_amount_ = 0.5f;  // Default filter envelope amount (gives character to plucks)
     
     // Envelope parameters
     int env_mode_ = 0;
@@ -344,8 +414,11 @@ private:
     float lfo_rate_ = 1.0f;
     float lfo_phase_ = 0.0f;
     float lfo_depth_ = 0.0f;
-    int lfo_shape_ = 0;  // 0=TRI, 1=SIN, 2=SQR, 3=SAW
+    int lfo_shape_ = 0;  // 0=TRI, 1=SIN, 2=SQR, 3=SAW, 4=RND
     int lfo_dest_ = 0;
+    int lfo_counter_ = 0;  // For control-rate LFO updates
+    float lfo_random_value_ = 0.0f;  // For RND (sample & hold) waveform
+    uint32_t lfo_random_state_ = 12345;  // Random state for S&H
     
     // Base values for LFO modulation targets
     float structure_base_ = 0.5f;

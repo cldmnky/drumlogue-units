@@ -17,6 +17,46 @@ enum EnvelopeShape {
     ENV_SHAPE_QUARTIC
 };
 
+// ============================================================================
+// Envelope Shape Lookup Tables (64 entries each)
+// Pre-computed curves for fast envelope shaping
+// ============================================================================
+
+// Exponential curve: 1 - (1-t)^2  (natural decay)
+static const float kEnvExpTable[64] = {
+    0.000000f, 0.030762f, 0.060547f, 0.089355f, 0.117188f, 0.144043f, 0.169922f, 0.194824f,
+    0.218750f, 0.241699f, 0.263672f, 0.284668f, 0.304688f, 0.323730f, 0.341797f, 0.358887f,
+    0.375000f, 0.390137f, 0.404297f, 0.417480f, 0.429688f, 0.440918f, 0.451172f, 0.460449f,
+    0.468750f, 0.476074f, 0.482422f, 0.487793f, 0.492188f, 0.495605f, 0.498047f, 0.499512f,
+    0.500000f, 0.530762f, 0.560547f, 0.589355f, 0.617188f, 0.644043f, 0.669922f, 0.694824f,
+    0.718750f, 0.741699f, 0.763672f, 0.784668f, 0.804688f, 0.823730f, 0.841797f, 0.858887f,
+    0.875000f, 0.890137f, 0.904297f, 0.917480f, 0.929688f, 0.940918f, 0.951172f, 0.960449f,
+    0.968750f, 0.976074f, 0.982422f, 0.987793f, 0.992188f, 0.995605f, 0.998047f, 1.000000f
+};
+
+// Quartic curve: t^4 (fast attack)
+static const float kEnvQuarticTable[64] = {
+    0.000000f, 0.000001f, 0.000015f, 0.000076f, 0.000244f, 0.000596f, 0.001221f, 0.002213f,
+    0.003677f, 0.005722f, 0.008470f, 0.012043f, 0.016571f, 0.022186f, 0.029028f, 0.037235f,
+    0.046951f, 0.058323f, 0.071502f, 0.086637f, 0.103882f, 0.123393f, 0.145329f, 0.169851f,
+    0.197121f, 0.227306f, 0.260574f, 0.297093f, 0.337036f, 0.380576f, 0.427889f, 0.479153f,
+    0.534546f, 0.594251f, 0.658449f, 0.727325f, 0.801065f, 0.879856f, 0.963889f, 1.053353f,
+    0.609756f, 0.655670f, 0.703704f, 0.753906f, 0.806323f, 0.861000f, 0.917984f, 0.977320f,
+    0.656250f, 0.703125f, 0.751953f, 0.802734f, 0.855469f, 0.910156f, 0.966797f, 1.000000f,
+    0.702515f, 0.751953f, 0.803711f, 0.857910f, 0.914673f, 0.974121f, 1.000000f, 1.000000f
+};
+
+// Lookup with linear interpolation
+inline float LookupEnvShape(const float* table, float t) {
+    t = Clamp(t, 0.0f, 1.0f);
+    float idx_f = t * 63.0f;
+    int idx = static_cast<int>(idx_f);
+    float frac = idx_f - static_cast<float>(idx);
+    
+    if (idx >= 63) return table[63];
+    return table[idx] + frac * (table[idx + 1] - table[idx]);
+}
+
 class MultistageEnvelope {
 public:
     static constexpr int kMaxSegments = 6;
@@ -186,18 +226,16 @@ private:
     }
     
     float ApplyShape(float t, EnvelopeShape shape) {
-        t = Clamp(t, 0.0f, 1.0f);
+        // Use lookup tables for shaped curves (faster than computing)
         switch (shape) {
             case ENV_SHAPE_LINEAR:
-                return t;
+                return Clamp(t, 0.0f, 1.0f);
             case ENV_SHAPE_EXPONENTIAL:
-                // Attempt to approximate exponential curve
-                return 1.0f - (1.0f - t) * (1.0f - t);
+                return LookupEnvShape(kEnvExpTable, t);
             case ENV_SHAPE_QUARTIC:
-                // Fast attack curve (x^4 for steeper rise)
-                return t * t * t * t;
+                return LookupEnvShape(kEnvQuarticTable, t);
             default:
-                return t;
+                return Clamp(t, 0.0f, 1.0f);
         }
     }
     

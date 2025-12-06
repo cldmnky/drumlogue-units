@@ -31,8 +31,8 @@ const __unit_header unit_header_t unit_header = {
         {0, 127, 0, 0, k_unit_param_type_none, 0, 0, 0, {"BLOW"}},
         // STRIKE: Strike exciter level
         {0, 127, 0, 100, k_unit_param_type_none, 0, 0, 0, {"STRIKE"}},
-        // MALLET: Strike character (soft mallet to hard plectrum)
-        {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"MALLET"}},
+        // MALLET: Strike sample/mallet type + timbre selection (12 variants)
+        {0, 11, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"MALLET"}},
 
         // ==================== Page 2: Exciter Timbre ====================
         // BOW TIMBRE: Bow friction/texture

@@ -19,84 +19,84 @@ This port adds:
 - **Three excitation types:**
   - BOW: Continuous friction/bowing
   - BLOW: Granular noise/breath
-  - STRIKE: Percussive impacts
-- **Physical resonator** with 24 modes (optimized for drumlogue)
-- **Three resonator models:** Modal, String, Strings
+  - STRIKE: Percussive impacts (sample, granular, or noise modes)
+- **Physical resonator** with 8 modes
+- **Two resonator models:** Modal, String (Karplus-Strong)
 - **Stereo width control** (use drumlogue's chain reverb for spatial effects)
 
 ### Moog Ladder Filter
-- **24dB/octave lowpass** (Huovilainen model)
-- **Self-oscillation** at high resonance
-- **Envelope modulation** (positive/negative)
-- **Key tracking** for pitch-following filter
+- **24dB/octave lowpass**
+- **Resonance control** (self-oscillation at high values)
+- **Envelope modulation** (fixed amount, adds character to attacks)
 - **Non-linear saturation** for analog character
 
 ### Modulation
-- **LFO** for filter cutoff and pitch vibrato
+- **LFO** with 8 presets (various shapes targeting cutoff, geometry, position, brightness, or space)
 - **Velocity-sensitive** envelope triggering
-- **Legato mode** for smooth pitch transitions
+- **Pitch bend** support (+/- 2 semitones)
 
 ## Parameters (6 Pages)
 
-### Page 1: Exciter Controls
+### Page 1: Exciter Mix
 | Parameter | Description |
 |-----------|-------------|
-| CONTOUR | Envelope shape (AD→ADSR→AR) |
 | BOW | Bow exciter level |
 | BLOW | Blow/breath exciter level |
 | STRIKE | Strike/percussion level |
+| MALLET | Strike sample/timbre (12 variants: SOFT/MED/HARD/PLEC/STIK/BOW × DK/BR) |
 
-### Page 2: Exciter Timbres
+### Page 2: Exciter Timbre
 | Parameter | Description |
 |-----------|-------------|
-| BOW TIMB | Bow smoothness/granularity |
-| FLOW | Air flow wavetable position |
-| MALLET | Strike type (samples→mallets→particles) |
-| BLW TIMB | Blow pitch/granulation rate |
+| BOW TIM | Bow friction/texture (bipolar) |
+| BLW TIM | Blow turbulence/noise color (bipolar) |
+| STK MOD | Strike mode (SAMPLE/GRANULAR/NOISE) |
+| DENSITY | Granular density (bipolar, active in GRANULAR mode) |
 
 ### Page 3: Resonator
 | Parameter | Description |
 |-----------|-------------|
-| GEOMETRY | Structure type (plate→string→tube→bell) |
-| BRIGHT | Brightness/mode damping |
-| DAMPING | Decay time |
-| POSITION | Excitation position on surface |
+| GEOMETRY | Structure type (string→beam→plate→bell, bipolar) |
+| BRIGHT | Brightness/mode damping (bipolar) |
+| DAMPING | Decay time (bipolar) |
+| POSITION | Excitation position on surface (bipolar) |
 
-### Page 4: Space & Pitch
+### Page 4: Filter & Space
 | Parameter | Description |
 |-----------|-------------|
+| CUTOFF | Filter cutoff frequency |
+| RESO | Filter resonance |
 | SPACE | Stereo width |
-| COARSE | Coarse pitch (-24 to +24 semitones) |
-| FINE | Fine pitch (-50 to +50 cents) |
-| STK TIMB | Strike brightness/speed |
+| MODEL | Resonator model (MODAL/STRING) |
 
-### Page 5: Ladder Filter
+### Page 5: Envelope (ADR)
 | Parameter | Description |
 |-----------|-------------|
-| FLT FREQ | Filter cutoff frequency |
-| FLT RES | Filter resonance (0-4, self-oscillation at ~3.8) |
-| FLT ENV | Filter envelope amount (bipolar) |
-| FLT KEY | Key tracking amount |
+| ATTACK | Envelope attack time |
+| DECAY | Envelope decay time |
+| RELEASE | Envelope release time |
+| ENV MOD | Envelope mode (ADR/AD/AR/LOOP) |
 
-### Page 6: Modulation & Mode
+### Page 6: LFO & Pitch
 | Parameter | Description |
 |-----------|-------------|
-| MOD FREQ | LFO rate |
-| MOD DPTH | LFO depth to filter and pitch |
-| MODEL | Resonator model (MODAL/STRING/STRINGS) |
+| LFO RT | LFO rate |
+| LFO DEP | LFO modulation depth |
+| LFO PRE | LFO preset (OFF/TRI>CUT/SIN>GEO/SQR>POS/TRI>BRI/SIN>SPC/SAW>CUT/RND>SPC) |
+| COARSE | Pitch coarse tune (-24 to +24 semitones, bipolar) |
 
 ## Presets
 
 | # | Name | Description |
 |---|------|-------------|
-| 0 | INIT | Clean starting point |
-| 1 | PLUCK | Plucked string/harp |
-| 2 | BELL | Metallic bell percussion |
-| 3 | BOW | Bowed string with vibrato |
-| 4 | BREATH | Wind/breath instrument |
-| 5 | DRUM | Percussion with filter envelope |
-| 6 | PAD | Ambient pad with stereo spread |
-| 7 | FILTER | Filter sweep showcase |
+| 0 | Init | Clean starting point |
+| 1 | Bowed Str | Bowed string |
+| 2 | Bell | Metallic bell percussion |
+| 3 | Wobble | Wobble bass with LFO on cutoff |
+| 4 | Blown Tube | Wind/breath instrument |
+| 5 | Shimmer | Ambient shimmer with LFO on brightness |
+| 6 | Pluck Str | Plucked string |
+| 7 | Drone | Evolving drone pad with LFO on space |
 
 ## Technical Details
 
@@ -115,8 +115,8 @@ This port adds:
 > Note: Reverb was removed to reduce memory footprint. Use the drumlogue's built-in chain reverb for spatial effects.
 
 ### CPU Considerations
-Elements is CPU-intensive due to the 24-mode resonator. If CPU issues occur on hardware:
-- Use STRING or STRINGS model instead of MODAL
+Elements is CPU-intensive due to the 8-mode resonator. If CPU issues occur on hardware:
+- Use STRING model instead of MODAL
 - Avoid extreme GEOMETRY values
 - Reduce polyphony by playing monophonically
 

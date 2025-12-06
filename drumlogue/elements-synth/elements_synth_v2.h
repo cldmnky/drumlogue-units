@@ -159,6 +159,26 @@ public:
     }
 
     const char* getParameterStrValue(uint8_t id, int32_t value) {
+        // MALLET parameter (id 3) - 12 variants: sample + timbre
+        if (id == 3) {
+            static const char* mallet_names[] = {
+                "SOFT DK",   // 0: mallet_soft dark
+                "SOFT BR",   // 1: mallet_soft bright
+                "MED DK",    // 2: mallet_med dark
+                "MED BR",    // 3: mallet_med bright
+                "HARD DK",   // 4: mallet_hard dark
+                "HARD BR",   // 5: mallet_hard bright
+                "PLEC DK",   // 6: plectrum dark
+                "PLEC BR",   // 7: plectrum bright
+                "STIK DK",   // 8: stick dark
+                "STIK BR",   // 9: stick bright
+                "BOW DK",    // 10: bow_attack dark
+                "BOW BR"     // 11: bow_attack bright
+            };
+            if (value >= 0 && value <= 11) {
+                return mallet_names[value];
+            }
+        }
         // STK MODE parameter (id 6)
         if (id == 6) {
             static const char* mode_names[] = {"SAMPLE", "GRANULAR", "NOISE"};
@@ -186,11 +206,11 @@ public:
                 "OFF",      // 0: LFO off
                 "TRI>CUT",  // 1: Triangle -> Cutoff (classic filter sweep)
                 "SIN>GEO",  // 2: Sine -> Geometry (smooth morph)
-                "TRI>POS",  // 3: Triangle -> Position (tremolo-like)
-                "SIN>BRI",  // 4: Sine -> Brightness (shimmer)
-                "SQR>CUT",  // 5: Square -> Cutoff (rhythmic)
-                "SAW>GEO",  // 6: Saw -> Geometry (evolving)
-                "RND>SPC"   // 7: Random -> Space (chaos)
+                "SQR>POS",  // 3: Square -> Position (rhythmic position)
+                "TRI>BRI",  // 4: Triangle -> Brightness (shimmer)
+                "SIN>SPC",  // 5: Sine -> Space (stereo movement)
+                "SAW>CUT",  // 6: Saw -> Cutoff (evolving filter)
+                "RND>SPC"   // 7: Random S&H -> Space (chaos)
             };
             if (value >= 0 && value <= 7) {
                 return lfo_names[value];
@@ -215,8 +235,8 @@ public:
             return;
         }
         
-        // Apply coarse and fine tuning
-        float tuned_note = (float)note + coarse_tune_ + fine_tune_;
+        // Apply coarse tuning and pitch bend
+        float tuned_note = (float)note + coarse_tune_ + pitch_bend_;
         current_note_ = note;
         
         synth_.NoteOn((uint8_t)tuned_note, velocity);
@@ -229,7 +249,7 @@ public:
     }
 
     void GateOn(uint8_t velocity) {
-        float tuned_note = (float)current_note_ + coarse_tune_ + fine_tune_;
+        float tuned_note = (float)current_note_ + coarse_tune_;
         synth_.NoteOn((uint8_t)tuned_note, velocity);
     }
 
@@ -374,7 +394,7 @@ private:
         params_[20] = lfoRt;
         params_[21] = lfoDepth;
         params_[22] = lfoPre;
-        params_[23] = 64;  // COARSE at center
+        params_[23] = 0;  // COARSE at center (0 semitones, bipolar range -64 to +63)
         
         for (int i = 0; i < kNumParams; ++i) {
             applyParameter(i);
@@ -398,8 +418,8 @@ private:
             case 2: // STRIKE (unipolar)
                 synth_.SetStrike(norm);
                 break;
-            case 3: // MALLET (bipolar)
-                synth_.SetStrikeTimbre(bipolar_norm);
+            case 3: // MALLET (enum 0-5, selects strike sample)
+                synth_.SetStrikeSample(params_[id]);
                 break;
                 
             // Page 2: Exciter Timbre
@@ -477,7 +497,7 @@ private:
         }
     }
 
-    const unit_runtime_desc_t* runtime_desc_;
+    const unit_runtime_desc_t* runtime_desc_;  // Cached for potential future use
     modal::ModalSynth synth_;
     int32_t params_[kNumParams];
     
@@ -486,9 +506,8 @@ private:
     uint32_t tempo_ = 120 << 16;
     
     float coarse_tune_ = 0.0f;
-    float fine_tune_ = 0.0f;
     float pitch_bend_ = 0.0f;
-    float stereo_width_ = 0.25f;
+    float stereo_width_ = 0.25f;  // Used for SetSpace parameter
     
     bool initialized_;
 };

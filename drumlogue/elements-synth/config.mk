@@ -51,6 +51,11 @@ ULIBS += -lc
 ##############################################################################
 # Macros
 #
+# NUM_MODES: Number of resonator modes (4-32, default: 8)
+#   - 8 modes:  Good balance of richness and CPU (~default)
+#   - 16 modes: Richer harmonics, higher CPU load
+#   - 32 modes: Maximum richness, heaviest CPU load
+# Example: UDEFS = -DNUM_MODES=16
 
 UDEFS = 
 
