@@ -59,4 +59,10 @@ ULIBS += -lc
 
 UDEFS = 
 
+##############################################################################
+# Linker Options
+#
+# Enable link-time garbage collection to remove unused code
+USE_LINK_GC = yes
+
 

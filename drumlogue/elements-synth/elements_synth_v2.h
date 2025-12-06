@@ -44,10 +44,10 @@ public:
         params_[10] = 0;   // DAMPING (bipolar)
         params_[11] = 0;   // POSITION (bipolar)
         
-        // Page 4: Filter & Space
+        // Page 4: Filter & Model
         params_[12] = 127; // CUTOFF
         params_[13] = 0;   // RESONANCE
-        params_[14] = 40;  // SPACE
+        params_[14] = 64;  // FLT ENV (filter envelope amount)
         params_[15] = 0;   // MODEL
         
         // Page 5: Envelope (ADR)
@@ -181,15 +181,15 @@ public:
         }
         // STK MODE parameter (id 6)
         if (id == 6) {
-            static const char* mode_names[] = {"SAMPLE", "GRANULAR", "NOISE"};
-            if (value >= 0 && value <= 2) {
+            static const char* mode_names[] = {"SAMPLE", "GRANULAR", "NOISE", "PLECTRUM", "PARTICLE"};
+            if (value >= 0 && value <= 4) {
                 return mode_names[value];
             }
         }
         // MODEL parameter (id 15)
         if (id == 15) {
-            static const char* model_names[] = {"MODAL", "STRING"};
-            if (value >= 0 && value <= 1) {
+            static const char* model_names[] = {"MODAL", "STRING", "MSTRING"};
+            if (value >= 0 && value <= 2) {
                 return model_names[value];
             }
         }
@@ -280,54 +280,51 @@ public:
     void LoadPreset(uint8_t idx) {
         preset_index_ = idx;
         
-        // New ADR + LFO layout:
+        // Preset format:
         // bow, blow, strike, mallet, bowT, blwT, stkMode, granD,
         // geo, bright, damp, pos, cutoff, reso, fltEnv, model,
-        // Updated preset format with bipolar values (-64 to +63):
-        // bow, blow, strike, mallet(bi), bowT(bi), blwT(bi), stkMode, granD(bi),
-        // geo(bi), bright(bi), damp(bi), pos(bi), cutoff, reso, space, model,
         // atk, dec, rel, envMode, lfoRt, lfoDepth, lfoPre
-        // Bipolar conversion: old 64 → 0, old 0 → -64, old 127 → 63
+        // Bipolar values: -64 to +63
         switch (idx) {
             case 0: // Init - Basic mallet hit
                 setPresetParams(0, 0, 100, 0,  0, 0, 0, 0,
-                               0, 0, 0, 0,  127, 0, 40, 0,
+                               0, 0, 0, 0,  127, 0, 64, 0,
                                5, 40, 40, 0,  40, 0, 0);
                 break;
             case 1: // Bowed String
                 setPresetParams(100, 0, 0, 0,  -24, 0, 0, 0,
-                               -64, -14, -34, -14,  90, 20, 50, 0,
+                               -64, -14, -34, -14,  90, 20, 40, 0,
                                30, 60, 60, 2,  40, 0, 0);
                 break;
             case 2: // Bell
                 setPresetParams(0, 0, 100, 26,  0, 0, 0, 0,
-                               63, 26, -49, 0,  127, 0, 60, 0,
+                               63, 26, -49, 0,  127, 0, 80, 0,
                                2, 80, 80, 1,  40, 0, 0);
                 break;
             case 3: // Wobble Bass (LFO on cutoff: TRI>CUT preset)
                 setPresetParams(0, 0, 100, 0,  0, 0, 0, 0,
-                               -34, 6, -24, 0,  80, 50, 30, 0,
+                               -34, 6, -24, 0,  80, 50, 90, 0,
                                5, 50, 50, 0,  60, 90, 1);
                 break;
             case 4: // Blown Tube
                 setPresetParams(0, 100, 0, 0,  0, -14, 0, 0,
-                               -44, -4, -14, 0,  70, 30, 30, 0,
+                               -44, -4, -14, 0,  70, 30, 50, 0,
                                40, 30, 40, 2,  40, 0, 0);
                 break;
             case 5: // Shimmer (LFO on brightness: TRI>BRI preset)
                 setPresetParams(0, 0, 100, -34,  0, 0, 0, 0,
-                               16, 6, -39, -24,  100, 10, 70, 0,
+                               16, 6, -39, -24,  100, 10, 60, 0,
                                5, 60, 70, 0,  50, 80, 4);
                 break;
             case 6: // Pluck String
                 setPresetParams(0, 0, 90, 36,  0, 0, 0, 0,
-                               -64, 16, -4, -14,  100, 0, 20, 1,
+                               -64, 16, -4, -14,  100, 0, 100, 1,
                                2, 20, 30, 1,  40, 0, 0);
                 break;
-            case 7: // Drone (LFO on space: SIN>SPC preset)
+            case 7: // Drone (looping envelope, LFO on geometry)
                 setPresetParams(30, 30, 40, -14,  -14, 6, 2, 36,
-                               -14, -24, -44, 0,  60, 50, 90, 0,
-                               60, 60, 60, 3,  30, 100, 5);
+                               -14, -24, -44, 0,  60, 50, 30, 0,
+                               60, 60, 60, 3,  30, 100, 2);
                 break;
         }
     }
@@ -353,11 +350,11 @@ public:
 private:
     static constexpr int kNumParams = 24;
     
-    // Preset function matching new parameter layout (SPACE on p4, LFO presets on p6)
+    // Preset function matching new parameter layout (FLT ENV on p4, LFO presets on p6)
     void setPresetParams(int bow, int blow, int strike, int mallet,
                          int bowT, int blwT, int stkMode, int granD,
                          int geo, int bright, int damp, int pos,
-                         int cutoff, int reso, int space, int model,
+                         int cutoff, int reso, int fltEnv, int model,
                          int atk, int dec, int rel, int envMode,
                          int lfoRt, int lfoDepth, int lfoPre) {
         // Page 1: Exciter Mix
@@ -378,10 +375,10 @@ private:
         params_[10] = damp;
         params_[11] = pos;
         
-        // Page 4: Filter & Space
+        // Page 4: Filter & Model
         params_[12] = cutoff;
         params_[13] = reso;
-        params_[14] = space;
+        params_[14] = fltEnv;
         params_[15] = model;
         
         // Page 5: Envelope (ADR)
@@ -450,16 +447,15 @@ private:
                 synth_.SetPosition(bipolar_norm);
                 break;
                 
-            // Page 4: Filter & Space
+            // Page 4: Filter & Model
             case 12: // CUTOFF
                 synth_.SetFilterCutoff(norm);
                 break;
             case 13: // RESONANCE
                 synth_.SetFilterResonance(norm);
                 break;
-            case 14: // SPACE
-                stereo_width_ = norm;
-                synth_.SetSpace(norm);
+            case 14: // FLT ENV (filter envelope amount)
+                synth_.SetFilterEnvAmount(norm);
                 break;
             case 15: // MODEL
                 synth_.SetModel(params_[id]);
@@ -507,7 +503,6 @@ private:
     
     float coarse_tune_ = 0.0f;
     float pitch_bend_ = 0.0f;
-    float stereo_width_ = 0.25f;  // Used for SetSpace parameter
     
     bool initialized_;
 };

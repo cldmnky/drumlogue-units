@@ -399,7 +399,7 @@ private:
     float pitch_;
     float velocity_ = 1.0f;
     float output_level_;
-    float space_ = 0.5f;
+    float space_ = 0.7f;  // Default stereo width 70%
     float filter_cutoff_base_ = 8000.0f;
     float filter_env_amount_ = 0.5f;  // Default filter envelope amount (gives character to plucks)
     

@@ -267,11 +267,11 @@ The `elements-synth` unit is a well-implemented modal synthesis synth inspired b
 
 ### High Priority
 
-- [ ] **Delete `resources_mini.h`** - Completely unused, duplicates dsp_core.h
-- [ ] **Enable USE_LINK_GC=yes** in config.mk to remove dead code
-- [ ] **Expose PLECTRUM and PARTICLES strike modes** - Already implemented
-- [ ] **Expose MultiString model** - Already implemented
-- [ ] **Add filter envelope amount parameter** - Functionality exists
+- [x] **Delete `resources_mini.h`** - Completely unused, duplicates dsp_core.h ✅ DONE
+- [x] **Enable USE_LINK_GC=yes** in config.mk to remove dead code ✅ DONE
+- [x] **Expose PLECTRUM and PARTICLES strike modes** - Already implemented ✅ DONE
+- [x] **Expose MultiString model** - Already implemented ✅ DONE
+- [x] **Add filter envelope amount parameter** - Functionality exists ✅ DONE (replaced SPACE)
 
 ### Medium Priority
 
@@ -299,9 +299,55 @@ The `elements-synth` unit is a well-implemented modal synthesis synth inspired b
 
 ---
 
+## ✅ Changes Applied (December 6, 2025)
+
+### Files Deleted
+
+- `resources_mini.h` - Was completely unused, duplicated functionality in dsp_core.h
+
+### Files Modified
+
+**config.mk:**
+
+- Added `USE_LINK_GC = yes` for link-time garbage collection
+
+**header.c:**
+
+- Changed STK MOD parameter max from 2 to 4 (exposes PLECTRUM, PARTICLES)
+- Changed MODEL parameter max from 1 to 2 (exposes MSTRING)
+- Renamed parameter 14 from "SPACE" to "FLT ENV" (filter envelope amount)
+- Updated default value for FLT ENV to 64 (50%)
+
+**elements_synth_v2.h:**
+
+- Added "PLECTRUM", "PARTICLE" to strike mode names array
+- Added "MSTRING" to model names array
+- Changed parameter 14 handler from `SetSpace()` to `SetFilterEnvAmount()`
+- Updated `Init()` default for param[14] to 64
+- Updated `setPresetParams()` to use filter envelope instead of space
+- Updated all 8 presets with appropriate FLT ENV values
+- Fixed preset 7 LFO target (was SPACE→5, now GEOMETRY→2)
+- Removed unused `stereo_width_` member variable
+
+**modal_synth.h:**
+
+- Changed default stereo width from 50% to 70%
+
+**Makefile:**
+
+- Fixed linker flag bug: LDOPT now includes leading comma (`,--gc-sections`)
+  for proper `-Wl` concatenation
+
+### Build Verification
+
+- Unit compiles successfully with all changes
+- Final artifact: `elements_synth.drmlgunit` (128,940 bytes)
+
+---
+
 ## 🔍 Files Reviewed
 
-```
+```text
 drumlogue/elements-synth/
 ├── config.mk           - Build configuration
 ├── header.c            - Unit metadata & parameters
@@ -309,7 +355,6 @@ drumlogue/elements-synth/
 ├── elements_synth_v2.h - Main synth wrapper
 ├── modal_synth.h       - DSP engine
 ├── samples.h           - Sample data (~4325 lines)
-├── resources_mini.h    - UNUSED - candidate for deletion
 └── dsp/
     ├── dsp_core.h      - Math utilities & LUTs
     ├── envelope.h      - MultistageEnvelope

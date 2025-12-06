@@ -39,8 +39,8 @@ const __unit_header unit_header_t unit_header = {
         {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"BOW TIM"}},
         // BLOW TIMBRE: Blow turbulence/noise color
         {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"BLW TIM"}},
-        // STK MODE: Strike mode (SAMPLE/GRANULAR/NOISE)
-        {0, 2, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"STK MOD"}},
+        // STK MODE: Strike mode (SAMPLE/GRANULAR/NOISE/PLECTRUM/PARTICLES)
+        {0, 4, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"STK MOD"}},
         // GRAN DENS: Granular density (active in GRANULAR mode)
         {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"DENSITY"}},
 
@@ -54,15 +54,15 @@ const __unit_header unit_header_t unit_header = {
         // POSITION: Excitation point on resonator
         {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"POSITION"}},
 
-        // ==================== Page 4: Filter & Space ====================
+        // ==================== Page 4: Filter & Model ====================
         // CUTOFF: Filter cutoff frequency
         {0, 127, 0, 127, k_unit_param_type_none, 0, 0, 0, {"CUTOFF"}},
         // RESONANCE: Filter resonance/Q
         {0, 127, 0, 0, k_unit_param_type_none, 0, 0, 0, {"RESO"}},
-        // SPACE: Stereo spread
-        {0, 127, 0, 40, k_unit_param_type_none, 0, 0, 0, {"SPACE"}},
-        // MODEL: Resonator model
-        {0, 1, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"MODEL"}},
+        // FLT ENV: Filter envelope modulation amount
+        {0, 127, 0, 64, k_unit_param_type_none, 0, 0, 0, {"FLT ENV"}},
+        // MODEL: Resonator model (MODAL/STRING/MSTRING)
+        {0, 2, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"MODEL"}},
 
         // ==================== Page 5: Envelope (ADR) ====================
         // ATTACK: Envelope attack time
