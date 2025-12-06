@@ -338,17 +338,21 @@ public:
             // Apply amplitude envelope
             float amp = env_.Process() * output_level_;
             
-            // Convert mid-side to left-right
+            // Convert mid-side to left-right with soft limiting
             // L = center + side, R = center - side
-            float mid = FastTanh(filtered_center * 2.0f) * amp;
-            float side_scaled = side * amp * 2.0f;  // Boost side signal
+            float mid = FastTanh(filtered_center) * amp;
+            float side_scaled = side * amp;
             
             float out_left = mid + side_scaled;
             float out_right = mid - side_scaled;
             
+            // Soft limit final output to prevent clipping
+            out_left = FastTanh(out_left);
+            out_right = FastTanh(out_right);
+            
             // Robust NaN/Inf protection (NaN != NaN trick)
-            if (out_left != out_left || out_left > 1e6f || out_left < -1e6f) out_left = 0.0f;
-            if (out_right != out_right || out_right > 1e6f || out_right < -1e6f) out_right = 0.0f;
+            if (out_left != out_left) out_left = 0.0f;
+            if (out_right != out_right) out_right = 0.0f;
             
             out_l[i] = out_left;
             out_r[i] = out_right;

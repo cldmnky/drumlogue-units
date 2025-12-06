@@ -30,7 +30,7 @@ constexpr size_t kMaxDelayLineSize = 1024;  // Max delay line size for bowed mod
 
 class Mode {
 public:
-    Mode() : state_1_(0.0f), state_2_(0.0f), g_(0.0f), r_(0.01f), h_(1.0f) {}
+    Mode() : state_1_(0.0f), state_2_(0.0f), g_(0.0f), k_(2.0f), a1_(0.0f), a2_(0.0f), a3_(0.0f) {}
     
     // Set frequency (normalized 0-0.5) and Q directly
     void SetFrequencyAndQ(float freq, float q) {
@@ -40,71 +40,75 @@ public:
         // Normalized frequency for coefficient calculation
         float f = freq / kSampleRate;
         
-        // Use fast tan approximation for g coefficient
-        g_ = FastTan(f);
+        // g = tan(π * f) - use lookup table
+        g_ = LookupSvfG(f);
         
-        // r = 1/Q for resonance
-        r_ = 1.0f / q;
+        // k = 1/Q for damping (k=2 is critically damped, k<2 is underdamped)
+        k_ = 1.0f / q;
         
-        // h = 1 / (1 + r*g + g*g) - normalization factor
-        h_ = 1.0f / (1.0f + r_ * g_ + g_ * g_);
+        // Pre-compute coefficients for efficiency
+        // a1 = 1 / (1 + g*(g + k))
+        // a2 = g * a1
+        // a3 = g * a2
+        a1_ = 1.0f / (1.0f + g_ * (g_ + k_));
+        a2_ = g_ * a1_;
+        a3_ = g_ * a2_;
     }
     
     // Set coefficients directly (for clock-divider optimization)
     void SetCoefficients(float g, float r) {
         g_ = g;
-        r_ = r;
-        h_ = 1.0f / (1.0f + r_ * g_ + g_ * g_);
+        k_ = r;  // r = 1/Q
+        a1_ = 1.0f / (1.0f + g_ * (g_ + k_));
+        a2_ = g_ * a1_;
+        a3_ = g_ * a2_;
     }
     
     // Get g coefficient (for bowed mode sharing)
     float g() const { return g_; }
     
     // Process one sample - returns bandpass output
+    // Using the SVF topology from "The Art of VA Filter Design" by Vadim Zavalishin
     float Process(float in) {
         // Protect against NaN input
         if (in != in) in = 0.0f;
         
-        // Zero-delay feedback SVF
-        float hp = (in - r_ * state_1_ - g_ * state_1_ - state_2_) * h_;
-        float bp = g_ * hp + state_1_;
-        state_1_ = g_ * hp + bp;
-        float lp = g_ * bp + state_2_;
-        state_2_ = g_ * bp + lp;
+        // v3 = in - ic2eq (input minus lowpass state)
+        float v3 = in - state_2_;
+        
+        // v1 = a1*ic1eq + a2*v3 (bandpass calculation)
+        float v1 = a1_ * state_1_ + a2_ * v3;
+        
+        // v2 = ic2eq + a2*ic1eq + a3*v3 (lowpass calculation)
+        float v2 = state_2_ + a2_ * state_1_ + a3_ * v3;
+        
+        // Update states (trapezoidal integration)
+        state_1_ = 2.0f * v1 - state_1_;
+        state_2_ = 2.0f * v2 - state_2_;
         
         // Stability check - reset if state becomes unstable
-        if (state_1_ != state_1_ || state_1_ > 1e4f || state_1_ < -1e4f) {
+        if (state_1_ != state_1_ || state_1_ > 1e6f || state_1_ < -1e6f ||
+            state_2_ != state_2_ || state_2_ > 1e6f || state_2_ < -1e6f) {
             Reset();
             return 0.0f;
         }
         
-        return bp;  // Bandpass for modal resonance
+        return v1;  // Bandpass for modal resonance
     }
     
     // Process with normalized bandpass output (for bowing)
     float ProcessNormalized(float in) {
-        if (in != in) in = 0.0f;
-        
-        float hp = (in - r_ * state_1_ - g_ * state_1_ - state_2_) * h_;
-        float bp = g_ * hp + state_1_;
-        state_1_ = g_ * hp + bp;
-        float lp = g_ * bp + state_2_;
-        state_2_ = g_ * bp + lp;
-        
-        if (state_1_ != state_1_ || state_1_ > 1e4f || state_1_ < -1e4f) {
-            Reset();
-            return 0.0f;
-        }
-        
-        // Normalize by r to maintain consistent amplitude across Q values
-        return bp * r_;
+        float bp = Process(in);
+        // Normalize by k to maintain consistent amplitude across Q values
+        return bp * k_;
     }
     
     void Reset() { state_1_ = state_2_ = 0.0f; }
     
 private:
-    float state_1_, state_2_;  // Filter state
-    float g_, r_, h_;          // Coefficients
+    float state_1_, state_2_;  // Filter state (ic1eq, ic2eq)
+    float g_, k_;              // g = tan(pi*f), k = 1/Q
+    float a1_, a2_, a3_;       // Pre-computed coefficients
 };
 
 // ============================================================================
@@ -115,7 +119,8 @@ private:
 
 class BowedMode {
 public:
-    BowedMode() : g_(0.1f), r_(0.01f), h_(1.0f), state_1_(0.0f), state_2_(0.0f) {
+    BowedMode() : g_(0.1f), k_(0.01f), a1_(0.5f), a2_(0.05f), a3_(0.005f),
+                  state_1_(0.0f), state_2_(0.0f) {
         delay_.Init();
     }
     
@@ -123,15 +128,19 @@ public:
         delay_.Init();
         state_1_ = state_2_ = 0.0f;
         g_ = 0.1f;
-        r_ = 0.01f;
-        h_ = 1.0f;
+        k_ = 0.01f;
+        a1_ = 1.0f / (1.0f + g_ * (g_ + k_));
+        a2_ = g_ * a1_;
+        a3_ = g_ * a2_;
     }
     
     // Set g coefficient from main mode and higher Q for bowing
     void SetGAndQ(float g, float q) {
         g_ = g;
-        r_ = 1.0f / Clamp(q, 0.5f, 2000.0f);
-        h_ = 1.0f / (1.0f + r_ * g_ + g_ * g_);
+        k_ = 1.0f / Clamp(q, 0.5f, 2000.0f);
+        a1_ = 1.0f / (1.0f + g_ * (g_ + k_));
+        a2_ = g_ * a1_;
+        a3_ = g_ * a2_;
     }
     
     void SetDelay(size_t period) {
@@ -145,21 +154,24 @@ public:
     
     // Process and write to delay line
     void Write(float in) {
-        // Bandpass filter (normalized output for consistent level)
-        float hp = (in - r_ * state_1_ - g_ * state_1_ - state_2_) * h_;
-        float bp = g_ * hp + state_1_;
-        state_1_ = g_ * hp + bp;
-        float lp = g_ * bp + state_2_;
-        state_2_ = g_ * bp + lp;
+        // SVF Bandpass filter using Zavalishin TPT structure
+        float v3 = in - state_2_;
+        float v1 = a1_ * state_1_ + a2_ * v3;  // Bandpass
+        float v2 = state_2_ + a2_ * state_1_ + a3_ * v3;  // Lowpass
+        
+        // Update states
+        state_1_ = 2.0f * v1 - state_1_;
+        state_2_ = 2.0f * v2 - state_2_;
         
         // Stability check
-        if (state_1_ != state_1_ || state_1_ > 1e4f || state_1_ < -1e4f) {
+        if (state_1_ != state_1_ || state_1_ > 1e6f || state_1_ < -1e6f ||
+            state_2_ != state_2_ || state_2_ > 1e6f || state_2_ < -1e6f) {
             state_1_ = state_2_ = 0.0f;
-            bp = 0.0f;
+            v1 = 0.0f;
         }
         
         // Write normalized bandpass to delay
-        delay_.Write(bp * r_);
+        delay_.Write(v1 * k_);
     }
     
     void Reset() {
@@ -169,7 +181,8 @@ public:
     
 private:
     DelayLine<kMaxDelayLineSize> delay_;
-    float g_, r_, h_;
+    float g_, k_;
+    float a1_, a2_, a3_;
     float state_1_, state_2_;
 };
 
@@ -333,12 +346,13 @@ public:
         }
         
         // Output with stereo spread
-        out_center = sum_center * 8.0f;  // Gain compensation
-        out_side = (sum_side - sum_center) * 8.0f * space_;
+        // Use moderate gain to leave headroom for filter and envelope
+        out_center = sum_center * 4.0f;
+        out_side = (sum_side - sum_center) * 4.0f * space_;
         
-        // Safety clamp
-        out_center = Clamp(out_center, -5.0f, 5.0f);
-        out_side = Clamp(out_side, -5.0f, 5.0f);
+        // Soft clamp to avoid harsh clipping
+        out_center = FastTanh(out_center * 0.5f) * 2.0f;
+        out_side = FastTanh(out_side * 0.5f) * 2.0f;
     }
     
     // Process with stereo output (Elements-style, no bowing)

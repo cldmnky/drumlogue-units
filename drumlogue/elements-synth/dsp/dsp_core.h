@@ -202,8 +202,14 @@ inline void FastSinCos(float w0, float& sin_out, float& cos_out) {
     cos_out = FastCosRad(w0);
 }
 
-// Fast tanh approximation
+// Fast tanh approximation with proper clamping
+// Uses rational approximation for small values, hard clamps for large
 inline float FastTanh(float x) {
+    // Clamp extreme values to avoid NaN and ensure bounded output
+    if (x > 4.0f) return 1.0f;
+    if (x < -4.0f) return -1.0f;
+    
+    // Rational approximation, accurate for |x| < 4
     float x2 = x * x;
     return x * (27.0f + x2) / (27.0f + 9.0f * x2);
 }
