@@ -824,4 +824,8 @@ private:
     float detune_amount_;
 };
 
+// Out-of-class definitions for static constexpr arrays (required pre-C++17)
+constexpr float MultiString::kDetuning[MultiString::kNumStrings];
+constexpr float MultiString::kAmplitude[MultiString::kNumStrings];
+
 } // namespace modal
