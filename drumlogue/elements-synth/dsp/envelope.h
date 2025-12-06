@@ -74,7 +74,7 @@ public:
         sustain_point_ = 2;
         loop_start_ = 0;
         loop_end_ = 0;
-        hard_reset_ = true;
+        hard_reset_ = false;  // Don't hard reset - retrigger from current value
         gate_ = false;
         
         // Default ADSR

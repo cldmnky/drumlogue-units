@@ -170,6 +170,14 @@ public:
         // Pole filter
         pole_state_ += lpf_coefficient * (out - pole_state_);
         
+        // Stability check - flush denormals/NaN
+        if (zero_state_ != zero_state_ || zero_state_ > 1e4f || zero_state_ < -1e4f) {
+            zero_state_ = 0.0f;
+        }
+        if (pole_state_ != pole_state_ || pole_state_ > 1e4f || pole_state_ < -1e4f) {
+            pole_state_ = 0.0f;
+        }
+        
         return envelope * pole_state_;
     }
     

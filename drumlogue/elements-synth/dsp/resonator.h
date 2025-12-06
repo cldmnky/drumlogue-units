@@ -556,6 +556,11 @@ public:
         x_ = x;
         brightness_ += brightness_increment_;
         damping_ += damping_increment_;
+        
+        // Flush denormals/NaN in filter states
+        if (x_ != x_ || x_ > 1e4f || x_ < -1e4f) x_ = 0.0f;
+        if (x__ != x__ || x__ > 1e4f || x__ < -1e4f) x__ = 0.0f;
+        
         return y;
     }
     
@@ -608,13 +613,18 @@ public:
         
         // Cascade of first-order allpass filters
         // Each stage adds phase shift that increases with frequency
+        // First-order allpass: y[n] = -a*x[n] + x[n-1] + a*y[n-1]
         float y = x;
         for (int i = 0; i < kNumStages; ++i) {
-            // First-order allpass: y[n] = a*x[n] + x[n-1] - a*y[n-1]
-            // Simplified as: y[n] = state + a*(x[n] - y[n-1])
-            float new_state = coefficient_ * (y - state_[i]) + state_[i];
-            state_[i] = y;  // Store input as state for next iteration
-            y = new_state;
+            float x_in = y;
+            float y_out = -coefficient_ * x_in + state_[i];
+            state_[i] = x_in + coefficient_ * y_out;
+            y = y_out;
+            
+            // Stability check - flush denormals/NaN
+            if (state_[i] != state_[i] || state_[i] > 1e4f || state_[i] < -1e4f) {
+                state_[i] = 0.0f;
+            }
         }
         
         return y;
