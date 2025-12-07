@@ -360,11 +360,58 @@ public:
     void LoadPreset(uint8_t idx) {
         preset_index_ = idx;
         
-        // Preset format:
+#ifdef ELEMENTS_LIGHTWEIGHT
+        // Lightweight preset format:
+        // bow, blow, strike, mallet, bowT, blwT, stkMode, granD,
+        // geo, bright, damp, pos, model, space, volume,
+        // atk, dec, rel, envMode, coarse, fine
+        switch (idx) {
+            case 0: // Init - Basic mallet hit
+                setPresetParams(0, 0, 100, 0,  0, 0, 0, 0,
+                               0, 0, 0, 0,  0, 70, 100,
+                               5, 40, 40, 0,  0, 0);
+                break;
+            case 1: // Bowed String
+                setPresetParams(100, 0, 0, 0,  -24, 0, 0, 0,
+                               -64, -14, -34, -14,  0, 50, 100,
+                               30, 60, 60, 2,  0, 0);
+                break;
+            case 2: // Bell
+                setPresetParams(0, 0, 100, 4,  0, 0, 0, 0,
+                               63, 26, -49, 0,  0, 80, 100,
+                               2, 80, 80, 1,  0, 0);
+                break;
+            case 3: // Pluck
+                setPresetParams(0, 0, 100, 6,  0, 0, 0, 0,
+                               -34, 6, -24, 0,  0, 60, 100,
+                               5, 50, 50, 0,  0, 0);
+                break;
+            case 4: // Blown Tube
+                setPresetParams(0, 100, 0, 0,  0, -14, 0, 0,
+                               -44, -4, -14, 0,  0, 50, 100,
+                               40, 30, 40, 2,  0, 0);
+                break;
+            case 5: // Marimba
+                setPresetParams(0, 0, 100, 0,  0, 0, 0, 0,
+                               16, 6, -39, -24,  0, 70, 100,
+                               5, 60, 70, 0,  0, 0);
+                break;
+            case 6: // String (Karplus-Strong)
+                setPresetParams(0, 0, 90, 6,  0, 0, 0, 0,
+                               -64, 16, -4, -14,  1, 60, 100,
+                               2, 20, 30, 1,  0, 0);
+                break;
+            case 7: // Multi-String (12-string style)
+                setPresetParams(0, 0, 100, 6,  0, 0, 0, 0,
+                               -14, -24, -44, 0,  2, 80, 100,
+                               5, 40, 50, 0,  0, 0);
+                break;
+        }
+#else
+        // Full preset format (with filter & LFO):
         // bow, blow, strike, mallet, bowT, blwT, stkMode, granD,
         // geo, bright, damp, pos, cutoff, reso, fltEnv, model,
-        // atk, dec, rel, envMode, lfoRt, lfoDepth, lfoPre
-        // Bipolar values: -64 to +63
+        // atk, dec, rel, envMode, lfoRt, lfoDepth, lfoPre, coarse
         switch (idx) {
             case 0: // Init - Basic mallet hit
                 setPresetParams(0, 0, 100, 0,  0, 0, 0, 0,
@@ -377,7 +424,7 @@ public:
                                30, 60, 60, 2,  40, 0, 0);
                 break;
             case 2: // Bell
-                setPresetParams(0, 0, 100, 26,  0, 0, 0, 0,
+                setPresetParams(0, 0, 100, 4,  0, 0, 0, 0,
                                63, 26, -49, 0,  127, 0, 80, 0,
                                2, 80, 80, 1,  40, 0, 0);
                 break;
@@ -392,21 +439,22 @@ public:
                                40, 30, 40, 2,  40, 0, 0);
                 break;
             case 5: // Shimmer (LFO on brightness: TRI>BRI preset)
-                setPresetParams(0, 0, 100, -34,  0, 0, 0, 0,
+                setPresetParams(0, 0, 100, 0,  0, 0, 0, 0,
                                16, 6, -39, -24,  100, 10, 60, 0,
                                5, 60, 70, 0,  50, 80, 4);
                 break;
             case 6: // Pluck String
-                setPresetParams(0, 0, 90, 36,  0, 0, 0, 0,
+                setPresetParams(0, 0, 90, 6,  0, 0, 0, 0,
                                -64, 16, -4, -14,  100, 0, 100, 1,
                                2, 20, 30, 1,  40, 0, 0);
                 break;
             case 7: // Drone (looping envelope, LFO on geometry)
-                setPresetParams(30, 30, 40, -14,  -14, 6, 2, 36,
+                setPresetParams(30, 30, 40, 0,  -14, 6, 2, 36,
                                -14, -24, -44, 0,  60, 50, 30, 0,
                                60, 60, 60, 3,  30, 100, 2);
                 break;
         }
+#endif
     }
 
     uint8_t getPresetIndex() const {
@@ -430,13 +478,65 @@ public:
 private:
     static constexpr int kNumParams = 24;
     
-    // Preset function matching new parameter layout (FLT ENV on p4, LFO presets on p6)
+#ifdef ELEMENTS_LIGHTWEIGHT
+    // Preset function for ELEMENTS_LIGHTWEIGHT mode
+    // Page 4: MODEL, SPACE, VOLUME, (blank)
+    // Page 5: ATK, DEC, REL, ENV_MODE
+    // Page 6: COARSE, FINE, (blank), (blank)
+    void setPresetParams(int bow, int blow, int strike, int mallet,
+                         int bowT, int blwT, int stkMode, int granD,
+                         int geo, int bright, int damp, int pos,
+                         int model, int space, int volume,
+                         int atk, int dec, int rel, int envMode,
+                         int coarse = 0, int fine = 0) {
+        // Page 1: Exciter Mix
+        params_[0] = bow;
+        params_[1] = blow;
+        params_[2] = strike;
+        params_[3] = mallet;
+        
+        // Page 2: Exciter Timbre
+        params_[4] = bowT;
+        params_[5] = blwT;
+        params_[6] = stkMode;
+        params_[7] = granD;
+        
+        // Page 3: Resonator
+        params_[8] = geo;
+        params_[9] = bright;
+        params_[10] = damp;
+        params_[11] = pos;
+        
+        // Page 4: Model & Space (Lightweight)
+        params_[12] = model;
+        params_[13] = space;
+        params_[14] = volume;
+        params_[15] = 0;  // blank
+        
+        // Page 5: Envelope (ADR)
+        params_[16] = atk;
+        params_[17] = dec;
+        params_[18] = rel;
+        params_[19] = envMode;
+        
+        // Page 6: Tuning (Lightweight)
+        params_[20] = coarse;
+        params_[21] = fine;
+        params_[22] = 0;  // blank
+        params_[23] = 0;  // blank
+        
+        for (int i = 0; i < kNumParams; ++i) {
+            applyParameter(i);
+        }
+    }
+#else
+    // Preset function for full mode (with filter & LFO)
     void setPresetParams(int bow, int blow, int strike, int mallet,
                          int bowT, int blwT, int stkMode, int granD,
                          int geo, int bright, int damp, int pos,
                          int cutoff, int reso, int fltEnv, int model,
                          int atk, int dec, int rel, int envMode,
-                         int lfoRt, int lfoDepth, int lfoPre) {
+                         int lfoRt, int lfoDepth, int lfoPre, int coarse = 0) {
         // Page 1: Exciter Mix
         params_[0] = bow;
         params_[1] = blow;
@@ -471,12 +571,13 @@ private:
         params_[20] = lfoRt;
         params_[21] = lfoDepth;
         params_[22] = lfoPre;
-        params_[23] = 0;  // COARSE at center (0 semitones, bipolar range -64 to +63)
+        params_[23] = coarse;
         
         for (int i = 0; i < kNumParams; ++i) {
             applyParameter(i);
         }
     }
+#endif
     
     void applyParameter(uint8_t id) {
         // For unipolar params (0-127): norm = value / 127

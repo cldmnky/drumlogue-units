@@ -207,6 +207,13 @@ public:
         clock_divider_ = 0;
         bow_signal_ = 0.0f;
         
+        // Coefficient caching state (Priority 1 optimization)
+        params_dirty_ = true;
+        cached_frequency_ = -1.0f;
+        cached_geometry_ = -1.0f;
+        cached_brightness_ = -1.0f;
+        cached_damping_ = -1.0f;
+        
         // Initialize all modes
         for (int i = 0; i < kNumModes; ++i) {
             modes_[i].Reset();
@@ -223,22 +230,38 @@ public:
     }
     
     void SetFrequency(float freq) {
-        frequency_ = Clamp(freq, 20.0f, 8000.0f) / kSampleRate;
+        float new_freq = Clamp(freq, 20.0f, 8000.0f) / kSampleRate;
+        if (new_freq != frequency_) {
+            frequency_ = new_freq;
+            params_dirty_ = true;
+        }
     }
     
     void SetGeometry(float geometry) {
-        geometry_ = Clamp(geometry, 0.0f, 1.0f);
+        float new_geom = Clamp(geometry, 0.0f, 1.0f);
+        if (new_geom != geometry_) {
+            geometry_ = new_geom;
+            params_dirty_ = true;
+        }
     }
     
     // Alias for compatibility
     void SetStructure(float s) { SetGeometry(s); }
     
     void SetBrightness(float brightness) {
-        brightness_ = Clamp(brightness, 0.0f, 1.0f);
+        float new_bright = Clamp(brightness, 0.0f, 1.0f);
+        if (new_bright != brightness_) {
+            brightness_ = new_bright;
+            params_dirty_ = true;
+        }
     }
     
     void SetDamping(float damping) {
-        damping_ = Clamp(damping, 0.0f, 1.0f);
+        float new_damp = Clamp(damping, 0.0f, 1.0f);
+        if (new_damp != damping_) {
+            damping_ = new_damp;
+            params_dirty_ = true;
+        }
     }
     
     void SetPosition(float position) {
@@ -440,10 +463,31 @@ private:
         modes_[i].SetCoefficients(cached_g_[i], cached_r_[i]);
     }
     
-    // Compute filters with clock divider optimization
+    // Compute filters with coefficient caching and aggressive clock divider
     // Returns number of active modes
+    // Priority 1 optimizations:
+    //   A. Skip full recalc if params unchanged (coefficient caching)
+    //   B. Aggressive clock divider for higher modes
     size_t ComputeFilters() {
         ++clock_divider_;
+        
+        // Priority 1A: Coefficient caching - skip entirely if params unchanged
+        // and we've done at least one full update cycle
+        if (!params_dirty_ && clock_divider_ > static_cast<size_t>(kNumModes)) {
+            // Still need to return cached_num_modes_
+            return cached_num_modes_ > 0 ? cached_num_modes_ : 1;
+        }
+        
+        // Check if we need full recalculation
+        bool full_update = params_dirty_;
+        if (params_dirty_) {
+            // Cache current params for dirty tracking
+            cached_frequency_ = frequency_;
+            cached_geometry_ = geometry_;
+            cached_brightness_ = brightness_;
+            cached_damping_ = damping_;
+            params_dirty_ = false;
+        }
         
         size_t num_modes = 0;
         float stiffness = GetStiffness(geometry_);
@@ -464,9 +508,23 @@ private:
         float q_loss_damping_rate = geometry_ * (2.0f - geometry_) * 0.1f;
         
         for (size_t i = 0; i < static_cast<size_t>(kNumModes); ++i) {
-            // Clock divider: update first 24 modes every time (2kHz @ 48kHz/24 samples)
-            // Higher modes updated at half rate
-            bool update = i <= 24 || ((i & 1) == (clock_divider_ & 1));
+            // Priority 1B: Aggressive clock divider for higher modes
+            // Critical modes (0-3): Always update - carry most perceptual weight
+            // Primary modes (4-7): Every 2 samples - important harmonics
+            // Secondary modes (8-15): Every 4 samples - less critical
+            // Tertiary modes (16+): Every 8 samples - least audible
+            bool update;
+            if (full_update) {
+                update = true;  // Force update all when params changed
+            } else if (i <= 3) {
+                update = true;  // Critical modes: every sample
+            } else if (i <= 7) {
+                update = (clock_divider_ & 1) == 0;  // Every 2 samples
+            } else if (i <= 15) {
+                update = (clock_divider_ & 3) == 0;  // Every 4 samples
+            } else {
+                update = (clock_divider_ & 7) == 0;  // Every 8 samples
+            }
             
             float partial_frequency = harmonic * stretch_factor;
             
@@ -510,7 +568,8 @@ private:
             base_q *= q_loss;
         }
         
-        return num_modes > 0 ? num_modes : 1;
+        cached_num_modes_ = num_modes > 0 ? num_modes : 1;
+        return cached_num_modes_;
     }
     
     Mode modes_[kNumModes];
@@ -532,6 +591,14 @@ private:
     
     float bow_signal_;          // Accumulated bow friction signal
     size_t clock_divider_;      // For staggered mode updates
+    
+    // Priority 1A: Coefficient caching state
+    bool params_dirty_;         // True when params changed, need recalc
+    float cached_frequency_;    // Last computed frequency
+    float cached_geometry_;     // Last computed geometry
+    float cached_brightness_;   // Last computed brightness
+    float cached_damping_;      // Last computed damping
+    size_t cached_num_modes_;   // Cached number of active modes
 };
 
 // ============================================================================
