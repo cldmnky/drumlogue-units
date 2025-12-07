@@ -1,0 +1,10 @@
+# Ignore Jekyll build output
+_site/
+.sass-cache/
+.jekyll-cache/
+.jekyll-metadata
+
+# Ignore Ruby/Bundler files
+Gemfile.lock
+vendor/
+.bundle/
