@@ -1,4 +1,4 @@
-# Elements Synth for Korg Drumlogue
+# Elementish Synth for Korg Drumlogue
 
 A port of **Mutable Instruments Elements** modal synthesis voice to the Korg Drumlogue, optimized for real-time performance.
 
@@ -151,7 +151,7 @@ All models run well within real-time budget.
 2. Drumlogue appears as mass storage device
 3. Copy `elements_synth.drmlgunit` to `Units/Synth/` folder
 4. Eject drumlogue and disconnect
-5. Select "Elements" in synth slot
+5. Select "Elementish" in synth slot
 
 ## Building from Source
 
