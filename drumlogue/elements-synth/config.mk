@@ -56,8 +56,21 @@ ULIBS += -lc
 #   - 16 modes: Richer harmonics, higher CPU load
 #   - 32 modes: Maximum richness, heaviest CPU load
 # Example: UDEFS = -DNUM_MODES=16
+#
+# ELEMENTS_LIGHTWEIGHT: Remove LFO and filter for maximum performance
+#   Removes Page 4 (Filter) and Page 6 (LFO) from the UI
+#   Audio passes through without filtering or modulation
+#   Significantly reduces CPU usage
+#
+# USE_NEON: Enable ARM NEON SIMD optimizations
+#   Targets simple parallel operations: buffer clear, gain, stereo interleave
+#   Uses 128-bit NEON registers (4 floats per operation)
+#   NOTE: Feedback loops (filters, delays) remain scalar - NEON doesn't help there
+#   Based on drumlogue developer findings, over-vectorization can hurt performance
+#   Enable with caution and test on hardware
 
-UDEFS = 
+UDEFS = -DELEMENTS_LIGHTWEIGHT
+UDEFS += -DUSE_NEON
 
 ##############################################################################
 # Linker Options

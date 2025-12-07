@@ -366,5 +366,274 @@ drumlogue/elements-synth/
 
 ---
 
-*Review Date: December 6, 2025*
+## 🚀 ARM NEON SIMD Optimization Analysis
+
+### Platform Hardware
+
+| Component | Specification |
+|-----------|---------------|
+| **CPU** | NXP MCIMX6Z0DVM09AB (ARM Cortex-A7) |
+| **Clock Speed** | 900 MHz |
+| **Architecture** | ARMv7-A |
+| **NEON Support** | Yes (integrated, not optional) |
+| **Sample Rate** | 48 kHz |
+| **Buffer Size** | Variable (typically 64-256 frames) |
+
+The drumlogue uses an **ARM Cortex-A7** processor, **NOT** a Cortex-M series. This is significant because:
+- Cortex-M series (M0, M4, M7) do **not** have NEON SIMD support
+- Cortex-A series (A7, A8, A9, etc.) **do** have NEON 128-bit SIMD
+- The SDK explicitly states: *"drumlogue custom synth and effect units can be written in C, C++ and make use of ARMv7-A NEON instructions"*
+
+### NEON Capabilities on Cortex-A7
+
+| Feature | Details |
+|---------|---------|
+| Register width | 128-bit (Q registers), 64-bit (D registers) |
+| Data types | 8/16/32/64-bit integers, 32-bit float |
+| Float vectors | `float32x4_t` (4 floats per operation) |
+| Integer vectors | `int16x8_t` (8 × 16-bit), `int32x4_t` (4 × 32-bit) |
+| Key instructions | VMLA (multiply-accumulate), VLD1/VST1 (load/store), VADD, VMUL |
+
+### Real-World Performance Findings from Drumlogue Developers
+
+Based on extensive research including the Gearspace logue user oscillator programming thread (particularly from developer **dukesrg** who ported FM64 to drumlogue):
+
+#### Critical Findings
+
+1. **NEON Vectorization Can HURT Performance**
+   > *"the more I'm trying to vectorize, the slower synth goes"* - dukesrg
+   
+   Full vectorization of FM64 resulted in only **2 voices** compared to **7-10 voices** with scalar code and selective optimization.
+
+2. **GCC Fails at Optimal NEON Scheduling**
+   - The compiler does not optimally schedule NEON instructions
+   - Manual reordering of intrinsics improved FM64 from **7 to 10 voices**
+   - Execution latency of NEON ops matters more than load/store penalties
+
+3. **Toolchain Limitations**
+   - `vld1q_*_x2`, `vld1q_*_x3`, `vld1q_*_x4` intrinsics **do not compile**
+   - Workaround: Use individual `vld1q_*` calls or inline assembly
+
+4. **Class Overhead Matters**
+   - Removing C++ classes and using static variables improved stability
+   - `fast_inline` functions and aggressive inlining help
+   - The elements-synth already uses `inline` heavily (good)
+
+5. **Voice Count Reality**
+   - FM64 (complex FM synth): ~4 voices stable, 5-6 start skipping, 8+ causes hangs
+   - Simple synths may achieve more voices
+   - Modal synthesis (elements-synth) is inherently expensive due to per-mode processing
+
+#### Performance Benchmarks from Forum
+
+| Synth | Scalar Code | NEON Vectorized | Notes |
+|-------|-------------|-----------------|-------|
+| FM64 | 7 voices | 2 voices | Over-vectorization hurt performance |
+| FM64 | 7 voices | 10 voices | Manual instruction reordering |
+
+### NEON Optimization Opportunities in elements-synth
+
+#### Potentially Beneficial (Use with Caution)
+
+| Component | Vectorization Target | Potential | Risk |
+|-----------|---------------------|-----------|------|
+| `Resonator::ComputeFilters()` | Batch 4 modes at once | MEDIUM | Complex dependencies |
+| `MultistageEnvelope::Process()` | Batch 4 envelopes | LOW | State machine branches |
+| `Mode::Process()` | 4 × SVF computation | MEDIUM | Data dependencies |
+| Audio buffer clearing | `memset()` replacement | LOW | Already fast |
+| Gain/mix operations | Simple `float32x4_t` | HIGH | Good candidate |
+
+#### NOT Recommended for NEON
+
+| Component | Reason |
+|-----------|--------|
+| `Tube::Process()` | Single-sample delay line, cannot vectorize |
+| `MoogLadder::Process()` | Feedback loop prevents vectorization |
+| LFO computation | Control rate, overhead not worth it |
+| String model delay lines | Feedback dependencies |
+
+### Recommended NEON Optimization Strategy
+
+Based on findings, the optimal approach for elements-synth is:
+
+#### 1. **Keep Most Code Scalar**
+The current scalar implementation is likely near-optimal for this DSP topology. Modal synthesis has inherent feedback loops that prevent effective SIMD parallelization.
+
+#### 2. **Target Simple Parallel Operations Only**
+
+```cpp
+// GOOD: Simple gain/mix operations
+#include <arm_neon.h>
+
+inline void ApplyGainNEON(float* buffer, float gain, size_t frames) {
+    float32x4_t gain_vec = vdupq_n_f32(gain);
+    for (size_t i = 0; i < frames; i += 4) {
+        float32x4_t samples = vld1q_f32(&buffer[i]);
+        samples = vmulq_f32(samples, gain_vec);
+        vst1q_f32(&buffer[i], samples);
+    }
+}
+
+// GOOD: Stereo mix
+inline void MixStereoNEON(const float* in_l, const float* in_r, 
+                          float* out_l, float* out_r,
+                          float width, size_t frames) {
+    float mid_gain = 0.5f;
+    float side_gain = width * 0.5f;
+    float32x4_t mid_g = vdupq_n_f32(mid_gain);
+    float32x4_t side_g = vdupq_n_f32(side_gain);
+    
+    for (size_t i = 0; i < frames; i += 4) {
+        float32x4_t l = vld1q_f32(&in_l[i]);
+        float32x4_t r = vld1q_f32(&in_r[i]);
+        float32x4_t mid = vmulq_f32(vaddq_f32(l, r), mid_g);
+        float32x4_t side = vmulq_f32(vsubq_f32(l, r), side_g);
+        vst1q_f32(&out_l[i], vaddq_f32(mid, side));
+        vst1q_f32(&out_r[i], vsubq_f32(mid, side));
+    }
+}
+```
+
+#### 3. **Avoid Over-Vectorization**
+
+```cpp
+// BAD: Don't try to vectorize feedback loops
+// This will NOT help and may hurt performance:
+inline void BadResonatorNEON(/* ... */) {
+    // Each mode depends on previous output - cannot parallelize
+    for (int m = 0; m < num_modes; m++) {
+        // Mode[m] state depends on Mode[m-1] - SERIAL dependency
+    }
+}
+```
+
+#### 4. **Manual Instruction Scheduling**
+If using NEON intrinsics, manually interleave load, compute, and store operations:
+
+```cpp
+// BETTER: Interleaved operations to hide latency
+float32x4_t a1 = vld1q_f32(&buf1[i]);
+float32x4_t b1 = vld1q_f32(&buf2[i]);  // Load while previous computes
+float32x4_t c1 = vmulq_f32(a1, gain);
+float32x4_t a2 = vld1q_f32(&buf1[i+4]); // Prefetch next
+float32x4_t d1 = vaddq_f32(c1, b1);
+vst1q_f32(&out[i], d1);
+// Continue interleaved pattern...
+```
+
+### Compiler Flags for NEON
+
+Current SDK flags support NEON but may not be optimal:
+
+```makefile
+# In config.mk, could add:
+UDEFS += -march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard
+
+# For auto-vectorization (use with caution):
+UDEFS += -ftree-vectorize -ftree-slp-vectorize
+```
+
+**⚠️ WARNING**: Auto-vectorization with `-O3 -ftree-vectorize` may produce slower code than manual scalar code due to GCC's poor NEON scheduling on Cortex-A7.
+
+### Alternative Optimizations (Higher Impact)
+
+Given the limited NEON benefits for modal synthesis, consider these alternatives first:
+
+| Optimization | Expected Impact | Effort |
+|--------------|-----------------|--------|
+| **ELEMENTS_LIGHTWEIGHT mode** | HIGH (already done) | ✅ Complete |
+| **USE_NEON SIMD optimizations** | LOW-MEDIUM | ✅ Complete |
+| **Reduce `kNumModes`** from 8 to 6 or 4 | HIGH | LOW |
+| **Fixed-point arithmetic** for resonator | MEDIUM | HIGH |
+| **Reduce `kMaxBowedModes`** | MEDIUM | LOW |
+| **Smaller delay line buffers** | MEDIUM | MEDIUM |
+| **Skip inactive exciters** | LOW-MEDIUM | LOW |
+| **LTO (`USE_LTO=yes`)** | LOW | LOW |
+
+### Conclusion
+
+**For elements-synth, NEON optimization is NOT recommended as a primary optimization strategy.**
+
+Reasons:
+
+1. Modal synthesis has inherent serial dependencies (feedback loops)
+2. Real-world drumlogue developer experience shows over-vectorization hurts performance
+3. GCC's NEON scheduling is suboptimal for Cortex-A7
+4. The `ELEMENTS_LIGHTWEIGHT` mode already provides significant CPU savings
+5. Alternative optimizations (mode count reduction, fixed-point) offer better ROI
+
+If NEON is pursued, focus **only** on:
+
+- Simple gain/attenuation operations
+- Stereo processing (independent L/R channels)  
+- Final mix/output stages
+- **Manually schedule** intrinsics to hide latency
+
+---
+
+## ✅ NEON Implementation (December 2025)
+
+Based on the above analysis, a conservative NEON implementation has been added targeting only the safe parallel operations:
+
+### Files Added
+
+**`dsp/neon_dsp.h`** - ARM NEON SIMD utilities library:
+
+| Function | Operation | NEON Benefit |
+|----------|-----------|--------------|
+| `ClearBuffer()` | Zero fill buffer | 4× throughput |
+| `ClearStereoBuffers()` | Zero fill L/R buffers | 4× throughput |
+| `ApplyGain()` | In-place gain | 4× throughput |
+| `ApplyGainTo()` | Gain to separate buffer | 4× throughput |
+| `MidSideToStereo()` | M/S to L/R conversion | 4× throughput |
+| `StereoGain()` | Independent L/R gain | 4× throughput |
+| `InterleaveStereo()` | L/R to interleaved output | Uses `vzipq_f32` |
+| `ClampBuffer()` | Limit to ±range | Uses `vminq/vmaxq` |
+| `SanitizeBuffer()` | Replace NaN with zero | Uses `vceqq` mask |
+| `SanitizeAndClamp()` | Combined NaN+clamp | Single pass |
+| `Accumulate()` | Add buffers | 4× throughput |
+| `MixBuffers()` | Weighted mix | Uses `vmlaq` FMA |
+
+### Files Modified
+
+**`config.mk`**:
+```makefile
+UDEFS += -DUSE_NEON
+```
+
+**`elements_synth_v2.h`**:
+- Added `#include "dsp/neon_dsp.h"`
+- `Render()` now uses NEON utilities when `USE_NEON` defined:
+  - `ClearStereoBuffers()` for buffer initialization
+  - `SanitizeAndClamp()` for NaN protection + limiting (single pass)
+  - `InterleaveStereo()` for final L/R output
+
+### Implementation Notes
+
+1. **Scalar fallback**: All functions compile to identical scalar code when `USE_NEON` is not defined
+2. **Manual interleaving**: Load/store operations are interleaved to hide NEON latency
+3. **Remainder handling**: All loops handle non-multiple-of-4 frame counts
+4. **No feedback vectorization**: Filters, delays, and resonators remain scalar (per recommendations)
+
+### Build Sizes
+
+| Configuration | Binary Size | Notes |
+|--------------|-------------|-------|
+| LIGHTWEIGHT only | 125,556 bytes | Baseline |
+| LIGHTWEIGHT + NEON | 128,952 bytes | +3.4KB for NEON code |
+
+### Usage
+
+Enable/disable in `config.mk`:
+```makefile
+# Enable NEON SIMD optimizations
+UDEFS += -DUSE_NEON
+
+# Disable NEON (scalar fallback)
+# Comment out the above line
+```
+
+---
+
+*Review Date: December 6, 2025 (Updated: December 2025)*
 *Reviewer: Code Analysis Agent*

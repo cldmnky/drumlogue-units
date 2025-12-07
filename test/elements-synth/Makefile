@@ -12,6 +12,11 @@ ifdef DEBUG
 CXXFLAGS := -std=c++17 -g -O0 -Wall -Wextra -Wno-unused-parameter -DTEST -DDEBUG
 endif
 
+# Lightweight build (no LFO or filter)
+ifdef LIGHTWEIGHT
+CXXFLAGS += -DELEMENTS_LIGHTWEIGHT
+endif
+
 # Detect platform and set library paths
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
@@ -123,4 +128,5 @@ help:
 	@echo "  install-deps-linux  - Install libsndfile on Linux"
 	@echo ""
 	@echo "Build options:"
-	@echo "  make DEBUG=1    - Build with debug symbols"
+	@echo "  make DEBUG=1       - Build with debug symbols"
+	@echo "  make LIGHTWEIGHT=1 - Build without LFO and filter (matches drumlogue)"

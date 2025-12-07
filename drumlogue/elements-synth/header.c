@@ -5,6 +5,14 @@
  *  Based on Mutable Instruments Elements
  *  Original code: Copyright 2014 Emilie Gillet (MIT License)
  *  Drumlogue port: 2024
+ *
+ *  ELEMENTS_LIGHTWEIGHT: When defined, removes Filter (Page 4) and LFO (Page 6)
+ *  for improved performance on the drumlogue hardware.
+ *
+ *  Parameter layout follows the original Elements philosophy:
+ *  - Exciter section: BOW, BLOW, STRIKE generators with their timbres
+ *  - Resonator section: GEOMETRY, BRIGHTNESS, DAMPING, POSITION
+ *  - The interplay between exciter spectrum and resonator modes creates the sound
  */
 
 #include "unit.h"  // Common definitions for all units
@@ -24,36 +32,37 @@ const __unit_header unit_header_t unit_header = {
     .params = {
         // Format: min, max, center, default, type, fractional, frac. type, <reserved>, name
 
-        // ==================== Page 1: Exciter (BOW/BLOW/STRIKE mix) ====================
-        // BOW: Bowing exciter level
+        // ==================== Page 1: Exciter Mix ====================
+        // BOW: Bowing exciter level (also increases "pressure" = brighter/noisier)
         {0, 127, 0, 0, k_unit_param_type_none, 0, 0, 0, {"BOW"}},
-        // BLOW: Blowing exciter level  
+        // BLOW: Granular blowing noise level
         {0, 127, 0, 0, k_unit_param_type_none, 0, 0, 0, {"BLOW"}},
-        // STRIKE: Strike exciter level
+        // STRIKE: Percussive noise level
         {0, 127, 0, 100, k_unit_param_type_none, 0, 0, 0, {"STRIKE"}},
-        // MALLET: Strike sample/mallet type + timbre selection (12 variants)
+        // MALLET: Strike sample/mallet type (samples→mallets→plectrums→particles)
         {0, 11, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"MALLET"}},
 
         // ==================== Page 2: Exciter Timbre ====================
-        // BOW TIMBRE: Bow friction/texture
+        // BOW TIMBRE: Bow friction/smoothness (granularity of bow material)
         {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"BOW TIM"}},
-        // BLOW TIMBRE: Blow turbulence/noise color
-        {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"BLW TIM"}},
-        // STK MODE: Strike mode (SAMPLE/GRANULAR/NOISE/PLECTRUM/PARTICLES)
+        // FLOW: Air turbulence/texture for blow (like scanning wavetable of noise)
+        {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"FLOW"}},
+        // STK MODE: Strike synthesis mode
         {0, 4, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"STK MOD"}},
-        // GRAN DENS: Granular density (active in GRANULAR mode)
+        // DENSITY: Granular density (for GRANULAR/PARTICLE modes)
         {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"DENSITY"}},
 
         // ==================== Page 3: Resonator ====================
-        // GEOMETRY: Structure (string->bar->membrane->bell)
+        // GEOMETRY: Structure shape (string→bar→membrane→plate→bell)
         {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"GEOMETRY"}},
-        // BRIGHTNESS: High-freq damping (dark wood to bright metal)
+        // BRIGHTNESS: High-freq mode damping (wood/nylon→glass/steel)
         {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"BRIGHT"}},
-        // DAMPING: Overall decay time
+        // DAMPING: Energy dissipation rate (muting effect)
         {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"DAMPING"}},
-        // POSITION: Excitation point on resonator
+        // POSITION: Excitation point on surface (affects harmonics like PWM)
         {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"POSITION"}},
 
+#ifndef ELEMENTS_LIGHTWEIGHT
         // ==================== Page 4: Filter & Model ====================
         // CUTOFF: Filter cutoff frequency
         {0, 127, 0, 127, k_unit_param_type_none, 0, 0, 0, {"CUTOFF"}},
@@ -63,17 +72,29 @@ const __unit_header unit_header_t unit_header = {
         {0, 127, 0, 64, k_unit_param_type_none, 0, 0, 0, {"FLT ENV"}},
         // MODEL: Resonator model (MODAL/STRING/MSTRING)
         {0, 2, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"MODEL"}},
+#else
+        // ==================== Page 4: Model & Space (Lightweight) ====================
+        // MODEL: Resonator model (MODAL/STRING/MSTRING)
+        {0, 2, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"MODEL"}},
+        // SPACE: Stereo width (Elements signature parameter)
+        {0, 127, 0, 70, k_unit_param_type_none, 0, 0, 0, {"SPACE"}},
+        // VOLUME: Unit output level
+        {0, 127, 0, 100, k_unit_param_type_none, 0, 0, 0, {"VOLUME"}},
+        // Blank placeholder
+        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
+#endif
 
-        // ==================== Page 5: Envelope (ADR) ====================
+        // ==================== Page 5: Envelope ====================
         // ATTACK: Envelope attack time
         {0, 127, 0, 5, k_unit_param_type_none, 0, 0, 0, {"ATTACK"}},
         // DECAY: Envelope decay time
         {0, 127, 0, 40, k_unit_param_type_none, 0, 0, 0, {"DECAY"}},
         // RELEASE: Envelope release time
         {0, 127, 0, 40, k_unit_param_type_none, 0, 0, 0, {"RELEASE"}},
-        // ENV MODE: Envelope shape (ADR/AD/AR/LOOP)
-        {0, 3, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"ENV MOD"}},
+        // CONTOUR: Envelope shape (ADR/AD/AR/LOOP - like Elements' morphing contour)
+        {0, 3, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"CONTOUR"}},
 
+#ifndef ELEMENTS_LIGHTWEIGHT
         // ==================== Page 6: LFO ====================
         // LFO RATE: LFO speed
         {0, 127, 0, 40, k_unit_param_type_none, 0, 0, 0, {"LFO RT"}},
@@ -83,5 +104,15 @@ const __unit_header unit_header_t unit_header = {
         {0, 7, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"LFO PRE"}},
         // COARSE: Pitch coarse tune (-24 to +24 semi)
         {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"COARSE"}}}};
+#else
+        // ==================== Page 6: Tuning (Lightweight) ====================
+        // COARSE: Pitch coarse tune (-24 to +24 semitones)
+        {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"COARSE"}},
+        // FINE: Pitch fine tune (-100 to +100 cents)
+        {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"FINE"}},
+        // Blank placeholders
+        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
+        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}}}};
+#endif
 
 

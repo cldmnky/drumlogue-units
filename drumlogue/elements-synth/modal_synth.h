@@ -17,7 +17,9 @@
 #include "dsp/envelope.h"
 #include "dsp/exciter.h"
 #include "dsp/resonator.h"
+#ifndef ELEMENTS_LIGHTWEIGHT
 #include "dsp/filter.h"
+#endif
 
 namespace modal {
 
@@ -37,12 +39,16 @@ public:
         resonator_.Update();
         string_.SetFrequency(MidiToFrequency(60.0f));
         multi_string_.SetFrequency(MidiToFrequency(60.0f));
+#ifndef ELEMENTS_LIGHTWEIGHT
         filter_.Reset();
+#endif
         
         env_.SetADSR(0.001f, 0.2f, 0.0f, 0.3f);
+#ifndef ELEMENTS_LIGHTWEIGHT
         filter_env_.SetADSR(0.001f, 0.3f, 0.3f, 0.2f);
         
         filter_.SetCutoff(8000.0f);
+#endif
     }
     
     // Exciter controls
@@ -96,12 +102,19 @@ public:
     }
     
     // Filter controls
+#ifndef ELEMENTS_LIGHTWEIGHT
     void SetFilterCutoff(float v) {
         filter_cutoff_base_ = 20.0f * std::pow(900.0f, v);
         filter_.SetCutoff(filter_cutoff_base_);  // Apply immediately
     }
     void SetFilterResonance(float v) { filter_.SetResonance(v); }
     void SetFilterEnvAmount(float v) { filter_env_amount_ = v; }
+#else
+    // Stubs when filter is disabled
+    void SetFilterCutoff(float v) { (void)v; }
+    void SetFilterResonance(float v) { (void)v; }
+    void SetFilterEnvAmount(float v) { (void)v; }
+#endif
     
     // Envelope controls (using MultistageEnvelope)
     void SetAttack(float v) { 
@@ -149,6 +162,7 @@ public:
     void ForceResonatorUpdate() {
         resonator_.ForceUpdate();
     }
+#ifndef ELEMENTS_LIGHTWEIGHT
     // LFO controls
     void SetLfoRate(float v) {
         // 0.1 Hz to 20 Hz, exponential scaling
@@ -201,6 +215,12 @@ public:
                 break;
         }
     }
+#else
+    // Stubs when LFO is disabled
+    void SetLfoRate(float v) { (void)v; }
+    void SetLfoDepth(float v) { (void)v; }
+    void SetLfoPreset(int preset) { (void)preset; }
+#endif
     
     void SetOutputLevel(float v) { output_level_ = v; }
     
@@ -218,7 +238,9 @@ public:
         
         exciter_.Trigger();
         env_.Trigger();
+#ifndef ELEMENTS_LIGHTWEIGHT
         filter_env_.Trigger();
+#endif
         
         // Use exponential velocity curve for more musical dynamics
         velocity_ = GetVelocityGain(velocity);
@@ -226,14 +248,19 @@ public:
     
     void NoteOff() {
         env_.Release();
+#ifndef ELEMENTS_LIGHTWEIGHT
         filter_env_.Release();
+#endif
     }
     
     void Process(float* out_l, float* out_r, uint32_t frames) {
+#ifndef ELEMENTS_LIGHTWEIGHT
         // LFO control rate divisor - update every 32 samples (~1.5kHz control rate)
         static constexpr int kLfoUpdateRate = 32;
+#endif
         
         for (uint32_t i = 0; i < frames; ++i) {
+#ifndef ELEMENTS_LIGHTWEIGHT
             // Update LFO at control rate (not audio rate) to save CPU
             if (lfo_counter_ == 0 && lfo_dest_ != 0) {
                 // Update LFO phase
@@ -301,6 +328,7 @@ public:
                 }
             }
             lfo_counter_ = (lfo_counter_ + 1) & (kLfoUpdateRate - 1);
+#endif  // ELEMENTS_LIGHTWEIGHT
             
             // Generate excitation
             float exc = exciter_.Process() * velocity_;
@@ -324,6 +352,7 @@ public:
                 side = 0.0f;
             }
             
+#ifndef ELEMENTS_LIGHTWEIGHT
             // Apply filter with envelope modulation (only if LFO not targeting cutoff)
             float env_val = filter_env_.Process();
             if (lfo_dest_ != 1) {
@@ -334,6 +363,10 @@ public:
             
             // Filter center channel (side is already difference signal)
             float filtered_center = filter_.Process(center);
+#else
+            // No filter in lightweight mode - pass through directly
+            float filtered_center = center;
+#endif
             
             // Apply amplitude envelope
             float amp = env_.Process() * output_level_;
@@ -363,7 +396,9 @@ public:
         resonator_.Reset();
         string_.Reset();
         multi_string_.Reset();
+#ifndef ELEMENTS_LIGHTWEIGHT
         filter_.Reset();
+#endif
     }
     
 private:
@@ -377,20 +412,28 @@ private:
                 // The decay time controls how long until sustain level
                 // The release time controls fadeout after note-off
                 env_.SetADSR(attack_time_, decay_time_, 0.7f, release_time_);
+#ifndef ELEMENTS_LIGHTWEIGHT
                 filter_env_.SetADSR(attack_time_ * 0.25f, decay_time_ * 0.33f, 
                                     0.5f, release_time_ * 0.4f);
+#endif
                 break;
             case 1: // AD (no sustain, immediate decay to zero)
                 env_.SetAD(attack_time_, decay_time_ + release_time_);
+#ifndef ELEMENTS_LIGHTWEIGHT
                 filter_env_.SetAD(attack_time_ * 0.25f, (decay_time_ + release_time_) * 0.33f);
+#endif
                 break;
             case 2: // AR (attack to peak, hold at peak, then release)
                 env_.SetAR(attack_time_, release_time_);
+#ifndef ELEMENTS_LIGHTWEIGHT
                 filter_env_.SetAR(attack_time_ * 0.25f, release_time_ * 0.4f);
+#endif
                 break;
             case 3: // AD-Loop (looping envelope for drones/pads)
                 env_.SetADLoop(attack_time_, decay_time_);
+#ifndef ELEMENTS_LIGHTWEIGHT
                 filter_env_.SetADLoop(attack_time_ * 0.5f, decay_time_ * 0.5f);
+#endif
                 break;
         }
     }
@@ -399,17 +442,21 @@ private:
     Resonator resonator_;
     String string_;
     MultiString multi_string_;
+#ifndef ELEMENTS_LIGHTWEIGHT
     MoogLadder filter_;
-    MultistageEnvelope env_;
     MultistageEnvelope filter_env_;
+#endif
+    MultistageEnvelope env_;
     
     Model model_;
     float pitch_;
     float velocity_ = 1.0f;
     float output_level_;
     float space_ = 0.7f;  // Default stereo width 70%
+#ifndef ELEMENTS_LIGHTWEIGHT
     float filter_cutoff_base_ = 8000.0f;
     float filter_env_amount_ = 0.5f;  // Default filter envelope amount (gives character to plucks)
+#endif
     
     // Envelope parameters
     int env_mode_ = 0;
@@ -418,6 +465,7 @@ private:
     float sustain_level_ = 0.7f;
     float release_time_ = 0.3f;
     
+#ifndef ELEMENTS_LIGHTWEIGHT
     // LFO parameters
     float lfo_rate_ = 1.0f;
     float lfo_phase_ = 0.0f;
@@ -427,6 +475,7 @@ private:
     int lfo_counter_ = 0;  // For control-rate LFO updates
     float lfo_random_value_ = 0.0f;  // For RND (sample & hold) waveform
     uint32_t lfo_random_state_ = 12345;  // Random state for S&H
+#endif
     
     // Base values for LFO modulation targets
     float structure_base_ = 0.5f;

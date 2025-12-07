@@ -28,6 +28,12 @@ For debug build with symbols:
 make DEBUG=1
 ```
 
+For lightweight build (no LFO or filter, matches drumlogue performance mode):
+```bash
+make clean
+make LIGHTWEIGHT=1
+```
+
 ## Usage
 
 ### Basic usage

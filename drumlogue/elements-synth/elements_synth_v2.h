@@ -14,6 +14,7 @@
 
 #include "unit.h"
 #include "modal_synth.h"
+#include "dsp/neon_dsp.h"
 
 class ElementsSynth {
 public:
@@ -34,9 +35,9 @@ public:
         
         // Page 2: Exciter Timbre
         params_[4] = 0;    // BOW TIMBRE (bipolar)
-        params_[5] = 0;    // BLOW TIMBRE (bipolar)
+        params_[5] = 0;    // FLOW (bipolar) - was BLOW TIMBRE
         params_[6] = 0;    // STK MODE (SAMPLE)
-        params_[7] = 0;    // GRANULAR DENSITY (bipolar)
+        params_[7] = 0;    // DENSITY (bipolar)
         
         // Page 3: Resonator
         params_[8] = 0;    // GEOMETRY (bipolar)
@@ -44,23 +45,43 @@ public:
         params_[10] = 0;   // DAMPING (bipolar)
         params_[11] = 0;   // POSITION (bipolar)
         
-        // Page 4: Filter & Model
+#ifdef ELEMENTS_LIGHTWEIGHT
+        // Page 4 (lightweight): Model, Space, Volume
+        params_[12] = 0;   // MODEL
+        params_[13] = 70;  // SPACE (0-127, default 70 = ~55% stereo width)
+        params_[14] = 100; // VOLUME (0-127, default 100 = ~79%)
+        params_[15] = 0;   // Blank
+        
+        // Page 5: Envelope
+        params_[16] = 5;   // ATTACK
+        params_[17] = 40;  // DECAY
+        params_[18] = 40;  // RELEASE
+        params_[19] = 0;   // CONTOUR (ADR)
+        
+        // Page 6: Tuning
+        params_[20] = 0;   // COARSE (bipolar: -64 to +63)
+        params_[21] = 0;   // FINE (bipolar: -64 to +63 = -100 to +100 cents)
+        params_[22] = 0;   // Blank
+        params_[23] = 0;   // Blank
+#else
+        // Page 4 (full): Filter & Model
         params_[12] = 127; // CUTOFF
         params_[13] = 0;   // RESONANCE
         params_[14] = 64;  // FLT ENV (filter envelope amount)
         params_[15] = 0;   // MODEL
         
-        // Page 5: Envelope (ADR)
+        // Page 5: Envelope
         params_[16] = 5;   // ATTACK
         params_[17] = 40;  // DECAY
         params_[18] = 40;  // RELEASE
-        params_[19] = 0;   // ENV MODE (ADR)
+        params_[19] = 0;   // CONTOUR (ADR)
         
         // Page 6: LFO
         params_[20] = 40;  // LFO RATE
         params_[21] = 0;   // LFO DEPTH (off by default)
         params_[22] = 0;   // LFO PRESET (OFF)
         params_[23] = 0;   // COARSE (bipolar: -64 to +63)
+#endif
         
         // Apply initial parameters
         for (int i = 0; i < kNumParams; ++i) {
@@ -105,16 +126,31 @@ public:
         while (frames_remaining > 0) {
             uint32_t process_frames = (frames_remaining > kMaxFrames) ? kMaxFrames : frames_remaining;
             
-            // Clear buffers before processing
+#ifdef USE_NEON
+            // NEON-optimized buffer clearing (4 floats per iteration)
+            modal::neon::ClearStereoBuffers(out_l, out_r, process_frames);
+#else
+            // Scalar buffer clearing
             for (uint32_t i = 0; i < process_frames; ++i) {
                 out_l[i] = 0.0f;
                 out_r[i] = 0.0f;
             }
+#endif
             
             // Call synth - this is where bad values might come from
             synth_.Process(out_l, out_r, process_frames);
             
-            // ULTRA-AGGRESSIVE protection and output
+#ifdef USE_NEON
+            // NEON-optimized sanitize (NaN removal) and clamp
+            // Single-pass protection for both channels
+            modal::neon::SanitizeAndClamp(out_l, 0.95f, process_frames);
+            modal::neon::SanitizeAndClamp(out_r, 0.95f, process_frames);
+            
+            // NEON-optimized stereo interleaving to output
+            modal::neon::InterleaveStereo(out_l, out_r, &out[out_idx], process_frames);
+            out_idx += process_frames * 2;
+#else
+            // Scalar protection and output
             for (uint32_t i = 0; i < process_frames; ++i) {
                 float l = out_l[i];
                 float r = out_r[i];
@@ -142,6 +178,7 @@ public:
                 out[out_idx++] = l;
                 out[out_idx++] = r;
             }
+#endif
             
             frames_remaining -= process_frames;
         }
@@ -186,20 +223,38 @@ public:
                 return mode_names[value];
             }
         }
-        // MODEL parameter (id 15)
-        if (id == 15) {
+#ifdef ELEMENTS_LIGHTWEIGHT
+        // MODEL parameter (id 12 in lightweight mode)
+        if (id == 12) {
             static const char* model_names[] = {"MODAL", "STRING", "MSTRING"};
             if (value >= 0 && value <= 2) {
                 return model_names[value];
             }
         }
-        // ENV MODE parameter (id 19)
+        // CONTOUR/ENV MODE parameter (id 19 in lightweight mode)
         if (id == 19) {
             static const char* env_names[] = {"ADR", "AD", "AR", "LOOP"};
             if (value >= 0 && value <= 3) {
                 return env_names[value];
             }
         }
+#else
+        // MODEL parameter (id 15 in full mode)
+        if (id == 15) {
+            static const char* model_names[] = {"MODAL", "STRING", "MSTRING"};
+            if (value >= 0 && value <= 2) {
+                return model_names[value];
+            }
+        }
+        // CONTOUR/ENV MODE parameter (id 19 in full mode)
+        if (id == 19) {
+            static const char* env_names[] = {"ADR", "AD", "AR", "LOOP"};
+            if (value >= 0 && value <= 3) {
+                return env_names[value];
+            }
+        }
+#endif
+#ifndef ELEMENTS_LIGHTWEIGHT
         // LFO PRESET parameter (id 22) - Shape + Destination combos
         if (id == 22) {
             static const char* lfo_names[] = {
@@ -216,6 +271,7 @@ public:
                 return lfo_names[value];
             }
         }
+#endif
         return nullptr;
     }
 
@@ -235,8 +291,8 @@ public:
             return;
         }
         
-        // Apply coarse tuning and pitch bend
-        float tuned_note = (float)note + coarse_tune_ + pitch_bend_;
+        // Apply coarse tuning, fine tuning, and pitch bend
+        float tuned_note = (float)note + coarse_tune_ + fine_tune_ + pitch_bend_;
         current_note_ = note;
         
         synth_.NoteOn((uint8_t)tuned_note, velocity);
@@ -249,7 +305,7 @@ public:
     }
 
     void GateOn(uint8_t velocity) {
-        float tuned_note = (float)current_note_ + coarse_tune_;
+        float tuned_note = (float)current_note_ + coarse_tune_ + fine_tune_;
         synth_.NoteOn((uint8_t)tuned_note, velocity);
     }
 
@@ -447,7 +503,43 @@ private:
                 synth_.SetPosition(bipolar_norm);
                 break;
                 
-            // Page 4: Filter & Model
+#ifdef ELEMENTS_LIGHTWEIGHT
+            // Page 4 (Lightweight): Model, Space, Volume
+            case 12: // MODEL
+                synth_.SetModel(params_[id]);
+                break;
+            case 13: // SPACE
+                synth_.SetSpace(norm);
+                break;
+            case 14: // VOLUME (0-127 -> 0.0-1.0)
+                synth_.SetOutputLevel(norm);
+                break;
+            // case 15: blank
+            
+            // Page 5: Envelope
+            case 16: // ATTACK
+                synth_.SetAttack(norm);
+                break;
+            case 17: // DECAY
+                synth_.SetDecay(norm);
+                break;
+            case 18: // RELEASE
+                synth_.SetRelease(norm);
+                break;
+            case 19: // CONTOUR (ENV MODE)
+                synth_.SetEnvMode(params_[id]);
+                break;
+            
+            // Page 6: Tuning
+            case 20: // COARSE (bipolar: -64 to +63 maps to -24 to +24 semitones)
+                coarse_tune_ = (float)params_[id] * 24.0f / 63.0f;
+                break;
+            case 21: // FINE (bipolar: -64 to +63 maps to -1 to +1 semitone = ±100 cents)
+                fine_tune_ = (float)params_[id] / 63.0f;
+                break;
+            // case 22, 23: blank
+#else
+            // Page 4 (Full): Filter & Model
             case 12: // CUTOFF
                 synth_.SetFilterCutoff(norm);
                 break;
@@ -461,7 +553,7 @@ private:
                 synth_.SetModel(params_[id]);
                 break;
                 
-            // Page 5: Envelope (ADR)
+            // Page 5: Envelope
             case 16: // ATTACK
                 synth_.SetAttack(norm);
                 break;
@@ -471,7 +563,7 @@ private:
             case 18: // RELEASE
                 synth_.SetRelease(norm);
                 break;
-            case 19: // ENV MODE
+            case 19: // CONTOUR (ENV MODE)
                 synth_.SetEnvMode(params_[id]);
                 break;
                 
@@ -488,6 +580,7 @@ private:
             case 23: // COARSE (bipolar: -64 to +63 maps to -24 to +24 semitones)
                 coarse_tune_ = (float)params_[id] * 24.0f / 63.0f;
                 break;
+#endif
             default:
                 break;
         }
@@ -502,6 +595,7 @@ private:
     uint32_t tempo_ = 120 << 16;
     
     float coarse_tune_ = 0.0f;
+    float fine_tune_ = 0.0f;    // -1 to +1 semitone (±100 cents)
     float pitch_bend_ = 0.0f;
     
     bool initialized_;
