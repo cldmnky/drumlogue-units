@@ -1,4 +1,5 @@
 #include "clouds_fx.h"
+#include "dsp/neon_dsp.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -236,13 +237,42 @@ void CloudsFx::Process(const float * in, float * out, uint32_t frames, uint8_t i
     }
     
     // Convert FloatFrame array back to interleaved float output
-    for (uint32_t i = 0; i < block_size; ++i) {
-      uint32_t dst_idx = (processed + i);
-      if (out_ch >= 2) {
-        out[dst_idx * out_ch + 0] = s_process_buffer[i].l;
-        out[dst_idx * out_ch + 1] = s_process_buffer[i].r;
-      } else {
-        out[dst_idx] = (s_process_buffer[i].l + s_process_buffer[i].r) * 0.5f;
+    // Use NEON utilities for output protection (NaN removal and clamping)
+    if (out_ch >= 2) {
+      // Stereo output: extract L/R, sanitize and clamp, then write
+      // Extract L/R from FloatFrame to separate buffers for NEON processing
+      static float temp_l[kMaxBlockSize];
+      static float temp_r[kMaxBlockSize];
+      
+      for (uint32_t i = 0; i < block_size; ++i) {
+        temp_l[i] = s_process_buffer[i].l;
+        temp_r[i] = s_process_buffer[i].r;
+      }
+      
+      // Apply NEON-optimized sanitization and clamping (±1.0 for safety)
+      neon::SanitizeAndClamp(temp_l, 1.0f, block_size);
+      neon::SanitizeAndClamp(temp_r, 1.0f, block_size);
+      
+      // Write to interleaved output
+      for (uint32_t i = 0; i < block_size; ++i) {
+        uint32_t dst_idx = (processed + i);
+        out[dst_idx * out_ch + 0] = temp_l[i];
+        out[dst_idx * out_ch + 1] = temp_r[i];
+      }
+    } else {
+      // Mono output: mix L+R and sanitize/clamp
+      static float temp_mono[kMaxBlockSize];
+      
+      for (uint32_t i = 0; i < block_size; ++i) {
+        temp_mono[i] = (s_process_buffer[i].l + s_process_buffer[i].r) * 0.5f;
+      }
+      
+      // Apply NEON-optimized sanitization and clamping
+      neon::SanitizeAndClamp(temp_mono, 1.0f, block_size);
+      
+      for (uint32_t i = 0; i < block_size; ++i) {
+        uint32_t dst_idx = (processed + i);
+        out[dst_idx] = temp_mono[i];
       }
     }
     
