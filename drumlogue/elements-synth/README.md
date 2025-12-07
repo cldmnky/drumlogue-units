@@ -149,7 +149,7 @@ All models run well within real-time budget.
 
 1. Connect drumlogue to computer via USB
 2. Drumlogue appears as mass storage device
-3. Copy `elements_synth.drmlgunit` to `Units/Synth/` folder
+3. Copy `elementish_synth.drmlgunit` to `Units/Synth/` folder
 4. Eject drumlogue and disconnect
 5. Select "Elementish" in synth slot
 
@@ -159,7 +159,7 @@ All models run well within real-time budget.
 # From repository root
 ./build.sh elements-synth
 
-# Output: drumlogue/elements-synth/elements_synth.drmlgunit
+# Output: drumlogue/elements-synth/elementish_synth.drmlgunit
 ```
 
 To build full mode (with filter and LFO), edit `config.mk` and comment out:

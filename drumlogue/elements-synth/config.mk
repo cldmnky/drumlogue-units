@@ -2,7 +2,7 @@
 # Project Configuration
 #
 
-PROJECT := elements_synth
+PROJECT := elementish_synth
 PROJECT_TYPE := synth
 
 ##############################################################################
