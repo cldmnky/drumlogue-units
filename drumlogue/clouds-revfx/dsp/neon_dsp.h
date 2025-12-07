@@ -361,8 +361,8 @@ inline void SanitizeBuffer(float* buffer, uint32_t frames) {
     for (; i + 4 <= frames; i += 4) {
         float32x4_t samples = vld1q_f32(&buffer[i]);
         
-        // NEON trick: NaN != NaN, so compare sample to itself
-        // ceq returns all 1s for valid, all 0s for NaN
+        // NEON trick: NaN != NaN (IEEE 754 property)
+        // vceqq_f32(x, x) returns 0xFFFFFFFF for valid floats, 0x00000000 for NaN
         uint32x4_t valid_mask = vceqq_f32(samples, samples);
         
         // Select: valid samples stay, NaN becomes 0
@@ -401,7 +401,8 @@ inline void SanitizeAndClamp(float* buffer, float limit, uint32_t frames) {
     for (; i + 4 <= frames; i += 4) {
         float32x4_t samples = vld1q_f32(&buffer[i]);
         
-        // Replace NaN with zero
+        // Replace NaN with zero (IEEE 754: NaN != NaN)
+        // vceqq_f32(x, x) returns 0xFFFFFFFF for valid, 0x00000000 for NaN
         uint32x4_t valid_mask = vceqq_f32(samples, samples);
         samples = vbslq_f32(valid_mask, samples, zero);
         
