@@ -1,6 +1,7 @@
 ---
 layout: default
 title: Installation Guide
+permalink: /installation/
 ---
 
 # Installation Guide

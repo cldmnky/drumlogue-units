@@ -6,6 +6,7 @@ unit_type: Synthesizer
 version: v1.0.0
 filename: elementish_synth.drmlgunit
 download_url: https://github.com/cldmnky/drumlogue-units/releases
+permalink: /units/elementish-synth/
 ---
 
 ## Overview

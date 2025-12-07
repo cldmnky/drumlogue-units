@@ -1,6 +1,7 @@
 ---
 layout: default
 title: Units
+permalink: /units/
 ---
 
 # Available Units
