@@ -230,7 +230,7 @@ The unit includes 8 carefully crafted presets:
 
 ## Version History
 
-### v1.0.0-pre1 - Initial Pre-release
+### v1.0.0 - Initial Release
 
 - Full Elements DSP integration at 48kHz
 - Three resonator models: MODAL, STRING, MSTRING
