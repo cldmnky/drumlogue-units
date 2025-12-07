@@ -372,9 +372,13 @@ private:
         // ADR mode uses a fixed sustain level of 0.0 (full decay to zero)
         switch (env_mode_) {
             case 0: // ADR (Attack-Decay-Release, sustain at 0)
-                env_.SetADSR(attack_time_, decay_time_, 0.0f, release_time_);
+                // ADR mode: attack, decay to sustain, then release
+                // For struck/plucked sounds, sustain is non-zero to let resonator ring
+                // The decay time controls how long until sustain level
+                // The release time controls fadeout after note-off
+                env_.SetADSR(attack_time_, decay_time_, 0.7f, release_time_);
                 filter_env_.SetADSR(attack_time_ * 0.25f, decay_time_ * 0.33f, 
-                                    0.0f, release_time_ * 0.4f);
+                                    0.5f, release_time_ * 0.4f);
                 break;
             case 1: // AD (no sustain, immediate decay to zero)
                 env_.SetAD(attack_time_, decay_time_ + release_time_);

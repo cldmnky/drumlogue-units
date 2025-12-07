@@ -409,7 +409,8 @@ private:
         
         // Q calculation (frequency-dependent, like Elements)
         // Higher partials naturally have higher Q to compensate for losses
-        float base_q = GetQFromDamping(damping_);
+        // Elements uses: q = 500.0f * lut_4_decades[damping * 0.8]
+        float base_q = 500.0f * GetQFromDamping(damping_);
         
         // Brightness attenuation at low geometry (prevents clipping)
         float brightness_attenuation = 1.0f - geometry_;
@@ -448,7 +449,10 @@ private:
         float stiffness = GetStiffness(geometry_);
         float harmonic = frequency_;
         float stretch_factor = 1.0f;
-        float base_q = GetQFromDamping(damping_);
+        // Elements uses: q = 500.0f * lut_4_decades[damping * 0.8]
+        // Our GetQFromDamping returns values already in 0.5-5000 range
+        // Scale by 500 to match Elements' q multiplier behavior
+        float base_q = 500.0f * GetQFromDamping(damping_);
         
         // Brightness attenuation
         float brightness_attenuation = 1.0f - geometry_;

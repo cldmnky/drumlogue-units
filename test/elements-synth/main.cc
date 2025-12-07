@@ -93,13 +93,15 @@ void PrintUsage(const char* program) {
   printf("Elements Synth Test Harness\n\n");
   printf("Usage: %s <output.wav> [options]\n", program);
   printf("       %s --list-presets\n", program);
-  printf("       %s --analyze  (check for NaN/Inf in output)\n", program);
+  printf("       %s --output <file.wav> --analyze  (generate and analyze)\n", program);
   printf("\nOptions:\n");
   printf("  --preset <name|num>   Use a preset (0-7 or name like MARIMBA, PLUCK)\n");
   printf("  --note <0-127>        MIDI note number (default: 60 = C4)\n");
   printf("  --velocity <1-127>    Note velocity (default: 100)\n");
   printf("  --duration <seconds>  Duration in seconds (default: 2.0)\n");
   printf("  --notes <n1,n2,...>   Play a sequence of notes\n");
+  printf("  --analyze             Analyze output for issues (NaN, clipping, etc)\n");
+  printf("  --verbose             Show detailed waveform analysis\n");
   printf("  --bow <0-127>         Bow level\n");
   printf("  --blow <0-127>        Blow level\n");
   printf("  --strike <0-127>      Strike level\n");
@@ -121,6 +123,7 @@ void PrintUsage(const char* program) {
   printf("  %s output.wav --preset MARIMBA --note 60\n", program);
   printf("  %s output.wav --bow 100 --model 0 --duration 3\n", program);
   printf("  %s output.wav --notes 60,64,67,72 --preset PLUCK\n", program);
+  printf("  %s output.wav --preset VIBES --analyze --verbose\n", program);
 }
 
 int FindPreset(const char* name_or_num) {
@@ -177,14 +180,19 @@ struct AnalysisResult {
   int nan_count = 0;
   int inf_count = 0;
   int clip_count = 0;
+  float zero_crossing_rate = 0.0f;
+  float estimated_freq = 0.0f;
+  std::vector<float> rms_timeline;  // RMS per 50ms window
 };
 
-AnalysisResult AnalyzeBuffer(const std::vector<float>& buffer) {
+AnalysisResult AnalyzeBuffer(const std::vector<float>& buffer, int sample_rate = 48000, int channels = 2) {
   AnalysisResult result;
   double sum_sq = 0.0;
+  int stride = channels;
+  size_t num_frames = buffer.size() / channels;
   
-  for (size_t i = 0; i < buffer.size(); ++i) {
-    float s = buffer[i];
+  for (size_t i = 0; i < num_frames; ++i) {
+    float s = buffer[i * stride];  // Left channel only
     
     if (std::isnan(s)) {
       result.has_nan = true;
@@ -208,16 +216,46 @@ AnalysisResult AnalyzeBuffer(const std::vector<float>& buffer) {
     sum_sq += s * s;
   }
   
-  result.rms = std::sqrt(sum_sq / buffer.size());
+  result.rms = std::sqrt(sum_sq / num_frames);
+  
+  // Zero crossing rate (first 1 second)
+  size_t analyze_frames = std::min(num_frames, (size_t)sample_rate);
+  int zero_crossings = 0;
+  for (size_t i = 1; i < analyze_frames; i++) {
+    float s0 = buffer[(i-1) * stride];
+    float s1 = buffer[i * stride];
+    if ((s0 >= 0 && s1 < 0) || (s0 < 0 && s1 >= 0)) {
+      zero_crossings++;
+    }
+  }
+  result.zero_crossing_rate = (float)zero_crossings / analyze_frames * sample_rate;
+  result.estimated_freq = result.zero_crossing_rate / 2.0f;
+  
+  // RMS timeline (every 50ms window)
+  int window_samples = 50 * sample_rate / 1000;  // 50ms
+  for (size_t t = 0; t < num_frames; t += window_samples) {
+    size_t end = std::min(t + window_samples, num_frames);
+    double win_sum = 0.0;
+    for (size_t i = t; i < end; i++) {
+      float s = buffer[i * stride];
+      if (!std::isnan(s) && !std::isinf(s)) {
+        win_sum += s * s;
+      }
+    }
+    result.rms_timeline.push_back(std::sqrt(win_sum / (end - t)));
+  }
+  
   return result;
 }
 
-void PrintAnalysis(const AnalysisResult& r) {
+void PrintAnalysis(const AnalysisResult& r, bool verbose = false) {
   printf("\n=== Audio Analysis ===\n");
-  printf("Max amplitude: %.4f (%.1f dB)\n", r.max_amplitude, 
+  printf("Peak amplitude: %.4f (%.1f dB)\n", r.max_amplitude, 
          20.0 * std::log10(r.max_amplitude + 1e-10));
-  printf("RMS: %.4f (%.1f dB)\n", r.rms,
+  printf("RMS level:      %.4f (%.1f dB)\n", r.rms,
          20.0 * std::log10(r.rms + 1e-10));
+  printf("Zero crossings: %.0f/sec (estimated freq: ~%.0f Hz)\n",
+         r.zero_crossing_rate, r.estimated_freq);
   
   if (r.has_nan) {
     printf("WARNING: %d NaN samples detected!\n", r.nan_count);
@@ -230,6 +268,25 @@ void PrintAnalysis(const AnalysisResult& r) {
   }
   if (!r.has_nan && !r.has_inf && !r.has_clipping) {
     printf("Status: OK - No issues detected\n");
+  }
+  
+  // Print RMS waveform visualization
+  if (verbose && !r.rms_timeline.empty()) {
+    printf("\nRMS Envelope (50ms windows):\n");
+    float max_rms = 0.0f;
+    for (float v : r.rms_timeline) {
+      if (v > max_rms) max_rms = v;
+    }
+    
+    for (size_t i = 0; i < r.rms_timeline.size(); ++i) {
+      int t_ms = i * 50;
+      float rms = r.rms_timeline[i];
+      int bars = (max_rms > 0) ? (int)(rms / max_rms * 50) : 0;
+      
+      printf("%5dms: %.4f |", t_ms, rms);
+      for (int b = 0; b < bars; b++) printf("*");
+      printf("\n");
+    }
   }
 }
 
@@ -272,6 +329,7 @@ int main(int argc, char* argv[]) {
   float duration = 2.0f;
   std::vector<int> notes;
   bool analyze_mode = false;
+  bool verbose_mode = false;
   
   // Individual parameters (use -999 as "not set")
   int param_bow = -999, param_blow = -999, param_strike = -999;
@@ -297,6 +355,8 @@ int main(int argc, char* argv[]) {
       notes = ParseNotes(argv[++i]);
     } else if (strcmp(argv[i], "--analyze") == 0) {
       analyze_mode = true;
+    } else if (strcmp(argv[i], "--verbose") == 0) {
+      verbose_mode = true;
     } else if (strcmp(argv[i], "--bow") == 0 && i + 1 < argc) {
       param_bow = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--blow") == 0 && i + 1 < argc) {
@@ -424,10 +484,10 @@ int main(int argc, char* argv[]) {
 
   printf("Wrote %zu frames to %s\n", output_buffer.size() / 2, output_path.c_str());
 
-  // Analyze if requested
-  if (analyze_mode) {
-    AnalysisResult analysis = AnalyzeBuffer(output_buffer);
-    PrintAnalysis(analysis);
+  // Analyze if requested (or always do basic analysis with verbose)
+  if (analyze_mode || verbose_mode) {
+    AnalysisResult analysis = AnalyzeBuffer(output_buffer, sample_rate, 2);
+    PrintAnalysis(analysis, verbose_mode);
     
     if (analysis.has_nan || analysis.has_inf) {
       return 2;  // Error code for DSP problems

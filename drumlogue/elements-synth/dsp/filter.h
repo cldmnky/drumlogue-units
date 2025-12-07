@@ -1,6 +1,8 @@
 /*
- * Moog Ladder Filter - 4-pole resonant low-pass
+ * Simple TPT One-Pole Lowpass Filter
  * Part of Modal Synth for Drumlogue
+ * 
+ * Using a simple one-pole instead of Moog ladder for stability at high frequencies
  */
 
 #pragma once
@@ -10,7 +12,7 @@
 namespace modal {
 
 // ============================================================================
-// 4-Pole Moog Ladder Filter
+// Simple One-Pole Lowpass Filter (stable for all frequencies)
 // ============================================================================
 
 class MoogLadder {
@@ -20,23 +22,31 @@ public:
     }
     
     void Reset() {
-        for (int i = 0; i < 4; ++i) stage_[i] = 0.0f;
-        delay_[0] = delay_[1] = delay_[2] = delay_[3] = 0.0f;
+        state_ = 0.0f;
         g_ = 0.0f;
         g_target_ = 0.0f;
+        initialized_ = false;
     }
     
     void SetCutoff(float freq) {
-        freq = Clamp(freq, 20.0f, kSampleRate * 0.45f);
+        // Clamp to safe range
+        freq = Clamp(freq, 20.0f, kSampleRate * 0.49f);
         
         // Use fast tangent approximation for filter coefficient
         // g = tan(π * fc) where fc = freq / sample_rate
         float fc = freq / kSampleRate;
         g_target_ = FastTan(fc);
+        
+        // On first cutoff set, initialize g_ immediately (no smoothing)
+        if (!initialized_) {
+            g_ = g_target_;
+            initialized_ = true;
+        }
     }
     
     void SetResonance(float res) {
-        res_ = Clamp(res, 0.0f, 1.0f) * 4.0f;  // 0 to 4 for self-oscillation threshold
+        // Not used in simple one-pole, but kept for API compatibility
+        res_ = Clamp(res, 0.0f, 1.0f);
     }
     
     float Process(float input) {
@@ -44,39 +54,31 @@ public:
         if (input != input) input = 0.0f;
         
         // Smooth cutoff coefficient (one-pole lowpass) - prevents zipper noise
-        // Coefficient 0.001 gives ~7ms smoothing at 48kHz
-        g_ += (g_target_ - g_) * 0.001f;
+        g_ += (g_target_ - g_) * 0.005f;  // Faster smoothing
         
-        // Apply resonance (feedback from output to input)
-        float feedback = res_ * delay_[3];
-        float in = input - feedback;
+        // Pre-compute G = g/(1+g) for TPT stability
+        float G = g_ / (1.0f + g_);
         
-        // Soft clip input to prevent runaway
-        in = FastTanh(in);
+        // TPT one-pole lowpass: v = (in - state) * G, out = state + v
+        float v = (input - state_) * G;
+        float output = state_ + v;
+        state_ = output + v;  // state = state + 2*v
         
-        // 4 cascaded one-pole filters
-        for (int i = 0; i < 4; ++i) {
-            float new_stage = (in - stage_[i]) * g_ + stage_[i];
-            delay_[i] = stage_[i];
-            stage_[i] = new_stage;
-            in = new_stage;
-        }
-        
-        // Stability check (NaN != NaN trick)
-        if (stage_[3] != stage_[3] || stage_[3] > 1e4f || stage_[3] < -1e4f) {
-            Reset();
+        // Stability check
+        if (state_ != state_ || state_ > 1e6f || state_ < -1e6f) {
+            state_ = 0.0f;
             return 0.0f;
         }
         
-        return stage_[3];
+        return output;
     }
     
 private:
-    float stage_[4];
-    float delay_[4];
+    float state_ = 0.0f;
     float g_ = 0.0f;
-    float g_target_ = 0.0f;  // Target for smoothed cutoff
-    float res_ = 0.0f;
+    float g_target_ = 0.0f;
+    float res_ = 0.0f;  // Not used but kept for API
+    bool initialized_ = false;
 };
 
 } // namespace modal

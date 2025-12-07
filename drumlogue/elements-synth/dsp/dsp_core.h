@@ -471,24 +471,24 @@ inline float GetStiffness(float geometry) {
 
 static const float kSvfGLUT[129] = {
     // tan(π * i / 256) for i = 0 to 128 (f = 0 to 0.5)
-    0.000000f, 0.012272f, 0.024548f, 0.036836f, 0.049145f, 0.061486f, 0.073869f, 0.086308f,  // 0-7
-    0.098815f, 0.111405f, 0.124094f, 0.136899f, 0.149839f, 0.162935f, 0.176208f, 0.189685f,  // 8-15
-    0.203392f, 0.217360f, 0.231622f, 0.246215f, 0.261176f, 0.276551f, 0.292388f, 0.308742f,  // 16-23
-    0.325672f, 0.343246f, 0.361540f, 0.380641f, 0.400643f, 0.421652f, 0.443787f, 0.467180f,  // 24-31
-    0.491987f, 0.518384f, 0.546579f, 0.576814f, 0.609372f, 0.644586f, 0.682843f, 0.724617f,  // 32-39
-    0.770478f, 0.821126f, 0.877440f, 0.940544f, 1.011837f, 1.093124f, 1.186804f, 1.296199f,  // 40-47
-    1.425947f, 1.582438f, 1.775464f, 2.020361f, 2.343069f, 2.791959f, 3.464611f, 4.599203f,  // 48-55
-    6.882946f, 13.726687f,100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f,       // 56-63
-    // Upper half (rarely used, clamped for stability)
-    100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f,          // 64-71
-    100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f,          // 72-79
-    100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f,          // 80-87
-    100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f,          // 88-95
-    100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f,          // 96-103
-    100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f,          // 104-111
-    100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f,          // 112-119
-    100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f, 100.000f,          // 120-127
-    100.000f  // Extra entry for interpolation
+    // Correctly computed values for SVF frequency coefficient
+    0.000000f, 0.012272f, 0.024549f, 0.036832f, 0.049127f, 0.061436f, 0.073764f, 0.086115f,  // 0-7
+    0.098491f, 0.110898f, 0.123338f, 0.135816f, 0.148336f, 0.160901f, 0.173516f, 0.186185f,  // 8-15
+    0.198912f, 0.211702f, 0.224558f, 0.237484f, 0.250487f, 0.263570f, 0.276737f, 0.289995f,  // 16-23
+    0.303347f, 0.316799f, 0.330355f, 0.344023f, 0.357806f, 0.371710f, 0.385743f, 0.399908f,  // 24-31
+    0.414214f, 0.428665f, 0.443270f, 0.458034f, 0.472965f, 0.488070f, 0.503358f, 0.518835f,  // 32-39
+    0.534511f, 0.550394f, 0.566493f, 0.582817f, 0.599377f, 0.616182f, 0.633243f, 0.650571f,  // 40-47
+    0.668179f, 0.686077f, 0.704279f, 0.722799f, 0.741651f, 0.760848f, 0.780408f, 0.800345f,  // 48-55
+    0.820679f, 0.841426f, 0.862606f, 0.884239f, 0.906347f, 0.928952f, 0.952079f, 0.975753f,  // 56-63
+    1.000000f, 1.024850f, 1.050333f, 1.076481f, 1.103330f, 1.130916f, 1.159278f, 1.188459f,  // 64-71
+    1.218504f, 1.249460f, 1.281382f, 1.314323f, 1.348344f, 1.383510f, 1.419891f, 1.457562f,  // 72-79
+    1.496606f, 1.537110f, 1.579173f, 1.622897f, 1.668399f, 1.715803f, 1.765247f, 1.816880f,  // 80-87
+    1.870868f, 1.927394f, 1.986659f, 2.048886f, 2.114322f, 2.183246f, 2.255964f, 2.332823f,  // 88-95
+    2.414214f, 2.500574f, 2.592403f, 2.690266f, 2.794813f, 2.906786f, 3.027043f, 3.156580f,  // 96-103
+    3.296558f, 3.448340f, 3.613536f, 3.794063f, 3.992224f, 4.210802f, 4.453202f, 4.723629f,  // 104-111
+    5.027339f, 5.370990f, 5.763142f, 6.214988f, 6.741452f, 7.362888f, 8.107786f, 9.017302f,  // 112-119
+    10.153170f, 11.612399f, 13.556669f, 16.277008f, 20.355468f, 27.150171f, 40.735484f, 81.483240f,  // 120-127
+    100.000000f  // Extra entry for interpolation (clamped at Nyquist)
 };
 
 // Fast SVF G coefficient lookup with linear interpolation
@@ -590,43 +590,56 @@ inline float GetVelocityAccent(int velocity) {
 }
 
 // ============================================================================
-// CosineOscillator - Walking cosine for smooth amplitude modulation
-// From Mutable Instruments stmlib/dsp/cosine_oscillator.h
+// CosineOscillator - Walking cosine for position-based amplitude modulation
+// From Mutable Instruments stmlib/dsp/cosine_oscillator.h (approximate mode)
+// Used to create pickup position simulation in modal resonator
 // ============================================================================
 
 class CosineOscillator {
 public:
-    CosineOscillator() : y0_(0.0f), y1_(0.0f), iir_coefficient_(0.0f) {}
+    CosineOscillator() : y0_(0.5f), y1_(0.0f), iir_coefficient_(0.0f), 
+                         initial_amplitude_(0.0f) {}
     
-    // Initialize for a given position [0, 1] representing one period
-    void Init(float position) {
-        // iir_coefficient = 2 * cos(position * 2π)
-        // But we want cos(position * π) for mode amplitudes
-        iir_coefficient_ = 2.0f * FastCos(position);
-        // Initial conditions: y1 = sin(θ), y0 = sin(θ + π/2) = cos(θ)
-        y1_ = FastSin(position);
-        y0_ = FastCos(position);
+    // Initialize for a given position/frequency [0, 1]
+    // Uses polynomial approximation of cosine suitable for modal amplitudes
+    void Init(float frequency) {
+        // Polynomial approximation from stmlib
+        float sign = 16.0f;
+        frequency -= 0.25f;
+        if (frequency < 0.0f) {
+            frequency = -frequency;
+        } else {
+            if (frequency > 0.5f) {
+                frequency -= 0.5f;
+            } else {
+                sign = -16.0f;
+            }
+        }
+        iir_coefficient_ = sign * frequency * (1.0f - 2.0f * frequency);
+        initial_amplitude_ = iir_coefficient_ * 0.25f;
     }
     
-    // Start the oscillator (resets internal state for iteration)
+    // Start the oscillator for iteration
     void Start() {
-        // Nothing needed - Init already set up the state
+        y1_ = initial_amplitude_;
+        y0_ = 0.5f;
     }
     
-    // Get next sample (walking through harmonics)
+    // Get next sample - returns value in [0, 1] range
     float Next() {
         float temp = y0_;
         y0_ = iir_coefficient_ * y0_ - y1_;
         y1_ = temp;
-        return temp;
+        return temp + 0.5f;
     }
     
     // Get current value without advancing
-    float Value() const { return y0_; }
+    float Value() const { return y1_ + 0.5f; }
     
 private:
     float y0_, y1_;
     float iir_coefficient_;
+    float initial_amplitude_;
 };
 
 } // namespace modal
