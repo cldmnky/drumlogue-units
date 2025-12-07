@@ -48,8 +48,15 @@ esac
 
 echo ">> Building ${PROJECT}..."
 
-# Artifact name uses underscores instead of hyphens
-ARTIFACT_NAME="${PROJECT//-/_}.drmlgunit"
+# Get actual project name from config.mk (the SDK uses this to name the artifact)
+CONFIG_MK="${SCRIPT_DIR}/drumlogue/${PROJECT}/config.mk"
+if [ -f "${CONFIG_MK}" ]; then
+    SDK_PROJECT_NAME=$(grep "^PROJECT *:=" "${CONFIG_MK}" | sed 's/^PROJECT *:= *//' | tr -d ' \t')
+    ARTIFACT_NAME="${SDK_PROJECT_NAME}.drmlgunit"
+else
+    # Fallback: convert hyphens to underscores
+    ARTIFACT_NAME="${PROJECT//-/_}.drmlgunit"
+fi
 OUTPUT_DIR="${SCRIPT_DIR}/drumlogue/${PROJECT}"
 
 # Mount the project directory directly into the workspace to avoid symlink permission issues
