@@ -42,7 +42,7 @@ endif
 
 # Paths
 REPO_ROOT := $(shell cd ../.. && pwd)
-DSP_SRC := $(REPO_ROOT)/drumlogue/elements-synth
+DSP_SRC := $(REPO_ROOT)/drumlogue/elementish-synth
 DSP_DIR := $(DSP_SRC)/dsp
 
 # Include paths

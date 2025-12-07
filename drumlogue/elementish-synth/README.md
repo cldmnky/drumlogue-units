@@ -157,9 +157,9 @@ All models run well within real-time budget.
 
 ```bash
 # From repository root
-./build.sh elements-synth
+./build.sh elementish-synth
 
-# Output: drumlogue/elements-synth/elementish_synth.drmlgunit
+# Output: drumlogue/elementish-synth/elementish_synth.drmlgunit
 ```
 
 To build full mode (with filter and LFO), edit `config.mk` and comment out:
