@@ -120,10 +120,17 @@ jobs:
           echo "🔨 Building ${UNIT}..."
           ./build.sh "${UNIT}"
           
-          # Verify the build succeeded by checking for artifact
-          ARTIFACT_NAME=$(echo "${UNIT}" | tr '-' '_').drmlgunit
+          # Get actual project name from config.mk
+          CONFIG_MK="drumlogue/${UNIT}/config.mk"
+          if [ -f "${CONFIG_MK}" ]; then
+            SDK_PROJECT_NAME=$(grep "^PROJECT *:=" "${CONFIG_MK}" | sed 's/^PROJECT *:= *//' | tr -d ' \t')
+            ARTIFACT_NAME="${SDK_PROJECT_NAME}.drmlgunit"
+          else
+            ARTIFACT_NAME=$(echo "${UNIT}" | tr '-' '_').drmlgunit
+          fi
+          
           if [ ! -f "drumlogue/${UNIT}/${ARTIFACT_NAME}" ]; then
-            echo "❌ Build failed - artifact not created"
+            echo "❌ Build failed - artifact not created at drumlogue/${UNIT}/${ARTIFACT_NAME}"
             exit 1
           fi
           echo "✅ Build succeeded"
@@ -132,8 +139,15 @@ jobs:
         id: artifact
         run: |
           UNIT="${{ needs.extract-info.outputs.unit }}"
-          # The artifact name uses underscores instead of hyphens
-          ARTIFACT_NAME=$(echo "${UNIT}" | tr '-' '_').drmlgunit
+          
+          # Get actual project name from config.mk
+          CONFIG_MK="drumlogue/${UNIT}/config.mk"
+          if [ -f "${CONFIG_MK}" ]; then
+            SDK_PROJECT_NAME=$(grep "^PROJECT *:=" "${CONFIG_MK}" | sed 's/^PROJECT *:= *//' | tr -d ' \t')
+            ARTIFACT_NAME="${SDK_PROJECT_NAME}.drmlgunit"
+          else
+            ARTIFACT_NAME=$(echo "${UNIT}" | tr '-' '_').drmlgunit
+          fi
           
           # The build script now copies the artifact to drumlogue/${UNIT}/
           ARTIFACT_PATH="drumlogue/${UNIT}/${ARTIFACT_NAME}"
