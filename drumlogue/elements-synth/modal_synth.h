@@ -21,6 +21,79 @@
 #include "dsp/filter.h"
 #endif
 
+// ============================================================================
+// DSP Profiling Support (Test Harness Only)
+// ============================================================================
+#if defined(TEST) && defined(DSP_PROFILE)
+#include <chrono>
+
+// Forward declarations for profiling stats from main.cc
+extern struct DSPProfileStats g_profile_exciter;
+extern struct DSPProfileStats g_profile_resonator;
+extern struct DSPProfileStats g_profile_string;
+extern struct DSPProfileStats g_profile_multistring;
+extern struct DSPProfileStats g_profile_filter;
+
+// Helper class for scoped timing
+class ProfileTimer {
+public:
+    ProfileTimer(DSPProfileStats& stats) : stats_(stats) {
+        start_ = std::chrono::high_resolution_clock::now();
+    }
+    ~ProfileTimer() {
+        auto end = std::chrono::high_resolution_clock::now();
+        double us = std::chrono::duration<double, std::micro>(end - start_).count();
+        stats_.Record(us);
+    }
+private:
+    DSPProfileStats& stats_;
+    std::chrono::high_resolution_clock::time_point start_;
+};
+
+#define PROFILE_EXCITER_BEGIN() auto _exc_start = std::chrono::high_resolution_clock::now()
+#define PROFILE_EXCITER_END() do { \
+    auto _exc_end = std::chrono::high_resolution_clock::now(); \
+    g_profile_exciter.Record(std::chrono::duration<double, std::micro>(_exc_end - _exc_start).count()); \
+} while(0)
+
+#define PROFILE_RESONATOR_BEGIN() auto _res_start = std::chrono::high_resolution_clock::now()
+#define PROFILE_RESONATOR_END() do { \
+    auto _res_end = std::chrono::high_resolution_clock::now(); \
+    g_profile_resonator.Record(std::chrono::duration<double, std::micro>(_res_end - _res_start).count()); \
+} while(0)
+
+#define PROFILE_STRING_BEGIN() auto _str_start = std::chrono::high_resolution_clock::now()
+#define PROFILE_STRING_END() do { \
+    auto _str_end = std::chrono::high_resolution_clock::now(); \
+    g_profile_string.Record(std::chrono::duration<double, std::micro>(_str_end - _str_start).count()); \
+} while(0)
+
+#define PROFILE_MULTISTRING_BEGIN() auto _mstr_start = std::chrono::high_resolution_clock::now()
+#define PROFILE_MULTISTRING_END() do { \
+    auto _mstr_end = std::chrono::high_resolution_clock::now(); \
+    g_profile_multistring.Record(std::chrono::duration<double, std::micro>(_mstr_end - _mstr_start).count()); \
+} while(0)
+
+#define PROFILE_FILTER_BEGIN() auto _flt_start = std::chrono::high_resolution_clock::now()
+#define PROFILE_FILTER_END() do { \
+    auto _flt_end = std::chrono::high_resolution_clock::now(); \
+    g_profile_filter.Record(std::chrono::duration<double, std::micro>(_flt_end - _flt_start).count()); \
+} while(0)
+
+#else
+// No-op macros when profiling is disabled
+#define PROFILE_EXCITER_BEGIN()
+#define PROFILE_EXCITER_END()
+#define PROFILE_RESONATOR_BEGIN()
+#define PROFILE_RESONATOR_END()
+#define PROFILE_STRING_BEGIN()
+#define PROFILE_STRING_END()
+#define PROFILE_MULTISTRING_BEGIN()
+#define PROFILE_MULTISTRING_END()
+#define PROFILE_FILTER_BEGIN()
+#define PROFILE_FILTER_END()
+#endif // TEST && DSP_PROFILE
+
 namespace modal {
 
 // ============================================================================
@@ -331,7 +404,9 @@ public:
 #endif  // ELEMENTS_LIGHTWEIGHT
             
             // Generate excitation
+            PROFILE_EXCITER_BEGIN();
             float exc = exciter_.Process() * velocity_;
+            PROFILE_EXCITER_END();
             
             // Get bow strength for resonator bowing
             float bow_strength = exciter_.GetBowStrength() * velocity_;
@@ -341,19 +416,30 @@ public:
             if (model_ == kModal) {
                 // Modal resonator outputs stereo directly (Elements-style)
                 // Pass bow strength for banded waveguide bowing
+                PROFILE_RESONATOR_BEGIN();
                 resonator_.Process(exc, bow_strength, center, side);
+                PROFILE_RESONATOR_END();
             } else if (model_ == kString) {
                 // Single string model is mono
+                PROFILE_STRING_BEGIN();
                 center = string_.Process(exc);
+                PROFILE_STRING_END();
                 side = 0.0f;
+                // Gain compensation: STRING is ~9.7dB quieter than MODAL
+                center *= 3.0f;
             } else {
                 // Multi-string model (5 sympathetic strings)
+                PROFILE_MULTISTRING_BEGIN();
                 center = multi_string_.Process(exc);
+                PROFILE_MULTISTRING_END();
                 side = 0.0f;
+                // Gain compensation: MSTRING is ~15.7dB quieter than MODAL
+                center *= 6.0f;
             }
             
 #ifndef ELEMENTS_LIGHTWEIGHT
             // Apply filter with envelope modulation (only if LFO not targeting cutoff)
+            PROFILE_FILTER_BEGIN();
             float env_val = filter_env_.Process();
             if (lfo_dest_ != 1) {
                 float cutoff = filter_cutoff_base_ * (1.0f + env_val * filter_env_amount_ * 4.0f);
@@ -363,6 +449,7 @@ public:
             
             // Filter center channel (side is already difference signal)
             float filtered_center = filter_.Process(center);
+            PROFILE_FILTER_END();
 #else
             // No filter in lightweight mode - pass through directly
             float filtered_center = center;

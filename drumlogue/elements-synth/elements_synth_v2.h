@@ -16,6 +16,25 @@
 #include "modal_synth.h"
 #include "dsp/neon_dsp.h"
 
+// ============================================================================
+// DSP Profiling Support (Test Harness Only)
+// ============================================================================
+#if defined(TEST) && defined(DSP_PROFILE)
+#include <chrono>
+
+// Forward declaration for profiling stats from main.cc
+extern struct DSPProfileStats g_profile_render;
+
+#define PROFILE_RENDER_BEGIN() auto _render_start = std::chrono::high_resolution_clock::now()
+#define PROFILE_RENDER_END() do { \
+    auto _render_end = std::chrono::high_resolution_clock::now(); \
+    g_profile_render.Record(std::chrono::duration<double, std::micro>(_render_end - _render_start).count()); \
+} while(0)
+#else
+#define PROFILE_RENDER_BEGIN()
+#define PROFILE_RENDER_END()
+#endif // TEST && DSP_PROFILE
+
 class ElementsSynth {
 public:
     ElementsSynth() : initialized_(false) {}
@@ -107,11 +126,14 @@ public:
     void Suspend() {}
 
     void Render(float* out, uint32_t frames) {
+        PROFILE_RENDER_BEGIN();
+        
         // Safety: if not initialized, output silence
         if (!initialized_) {
             for (uint32_t i = 0; i < frames * 2; ++i) {
                 out[i] = 0.0f;
             }
+            PROFILE_RENDER_END();
             return;
         }
         
@@ -182,6 +204,8 @@ public:
             
             frames_remaining -= process_frames;
         }
+        
+        PROFILE_RENDER_END();
     }
 
     void setParameter(uint8_t id, int32_t value) {

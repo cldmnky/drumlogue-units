@@ -669,8 +669,9 @@ public:
         damping_ = 0.5f;
         brightness_ = 0.5f;
         dispersion_ = 0.0f;
-        damping_filter_.Init();
-        dispersion_filter_.Reset();
+        lp_state_ = 0.0f;
+        dc_blocker_x_ = 0.0f;
+        dc_blocker_y_ = 0.0f;
         UpdateCoefficients();
     }
     
@@ -681,15 +682,12 @@ public:
     
     void SetDamping(float d) {
         damping_ = Clamp(d, 0.0f, 1.0f);
-        // Configure damping filter with smooth transition
-        float feedback = 0.998f - damping_ * 0.05f;
-        damping_filter_.Configure(feedback, brightness_, 48);  // ~1ms transition
+        UpdateCoefficients();
     }
     
     void SetBrightness(float b) {
         brightness_ = Clamp(b, 0.0f, 1.0f);
-        float feedback = 0.998f - damping_ * 0.05f;
-        damping_filter_.Configure(feedback, brightness_, 48);
+        UpdateCoefficients();
     }
     
     // Set dispersion amount (0 = none, 1 = piano-like)
@@ -702,7 +700,7 @@ public:
         // Protect against NaN input
         if (excitation != excitation) excitation = 0.0f;
         
-        // Read from delay line (linear interpolation)
+        // Read from delay line with linear interpolation
         float read_pos = static_cast<float>(write_ptr_) - delay_samples_;
         if (read_pos < 0.0f) read_pos += kMaxDelay;
         
@@ -714,11 +712,24 @@ public:
         
         float delayed = delay_[idx0] * (1.0f - frac) + delay_[idx1] * frac;
         
-        // Apply damping filter (3-tap FIR with feedback)
-        float filtered = damping_filter_.Process(delayed);
+        // Simple one-pole lowpass for brightness control
+        // Lower cutoff = darker sound (more high freq damping)
+        lp_state_ += lp_coeff_ * (delayed - lp_state_);
+        float filtered = lp_state_;
         
-        // Apply dispersion (piano-like inharmonicity)
-        filtered = dispersion_filter_.Process(filtered);
+        // Apply feedback (damping controls decay time)
+        filtered *= feedback_;
+        
+        // Apply dispersion (piano-like inharmonicity) if enabled
+        if (dispersion_ > 0.01f) {
+            filtered = dispersion_filter_.Process(filtered);
+        }
+        
+        // DC blocker to prevent drift
+        float dc_out = filtered - dc_blocker_x_ + 0.995f * dc_blocker_y_;
+        dc_blocker_x_ = filtered;
+        dc_blocker_y_ = dc_out;
+        filtered = dc_out;
         
         // Stability check
         if (filtered != filtered || filtered > 1e4f || filtered < -1e4f) {
@@ -730,14 +741,29 @@ public:
         delay_[write_ptr_] = excitation + filtered;
         write_ptr_ = (write_ptr_ + 1) & (kMaxDelay - 1);
         
-        return filtered * 3.0f;
+        return filtered;
     }
     
 private:
     void UpdateCoefficients() {
+        // Calculate delay in samples for the fundamental frequency
         delay_samples_ = kSampleRate / freq_;
         if (delay_samples_ > kMaxDelay - 2) delay_samples_ = kMaxDelay - 2;
         if (delay_samples_ < 2) delay_samples_ = 2;
+        
+        // Feedback coefficient for decay time
+        // damping = 0 -> long decay (feedback ~0.9995)
+        // damping = 1 -> short decay (feedback ~0.98)
+        // Higher frequencies need slightly more damping to sound natural
+        float freq_compensation = 1.0f - (freq_ / 8000.0f) * 0.1f;
+        feedback_ = (0.9998f - damping_ * 0.02f) * freq_compensation;
+        feedback_ = Clamp(feedback_, 0.9f, 0.9998f);
+        
+        // One-pole lowpass coefficient for brightness
+        // brightness = 0 -> very dark (lp_coeff ~0.1)
+        // brightness = 1 -> bright (lp_coeff ~0.9)
+        lp_coeff_ = 0.1f + brightness_ * 0.85f;
+        
         // Update dispersion filter when frequency changes
         dispersion_filter_.Configure(freq_, dispersion_);
     }
@@ -745,7 +771,10 @@ private:
     float delay_[kMaxDelay];
     int write_ptr_;
     float delay_samples_;
-    DampingFilter damping_filter_;
+    float feedback_;
+    float lp_coeff_;
+    float lp_state_;
+    float dc_blocker_x_, dc_blocker_y_;
     DispersionFilter dispersion_filter_;
     float freq_, damping_, brightness_, dispersion_;
 };
@@ -761,22 +790,22 @@ public:
     
     // Detuning ratios for sympathetic strings (in cents)
     // String 0: main string (0 cents)
-    // Strings 1-4: slightly detuned for chorus/shimmer effect
+    // Strings 1-4: sympathetic strings with subtle detuning for chorus effect
     static constexpr float kDetuning[kNumStrings] = {
         0.0f,    // Main string
-        -7.0f,   // Slightly flat
-        7.0f,    // Slightly sharp
-        -12.0f,  // More flat (creates beating)
-        12.0f    // More sharp
+        -5.0f,   // Slightly flat
+        5.0f,    // Slightly sharp
+        -10.0f,  // More flat (creates beating)
+        10.0f    // More sharp
     };
     
-    // Amplitude ratios for each string
+    // Amplitude ratios for each string (main louder, sympathetics softer)
     static constexpr float kAmplitude[kNumStrings] = {
         1.0f,    // Main string full volume
-        0.5f,    // Sympathetic strings quieter
-        0.5f,
-        0.3f,
-        0.3f
+        0.4f,    // Sympathetic strings quieter
+        0.4f,
+        0.25f,
+        0.25f
     };
     
     MultiString() {
@@ -827,14 +856,15 @@ public:
         // Main string gets full excitation
         out += strings_[0].Process(excitation) * kAmplitude[0];
         
-        // Sympathetic strings get reduced excitation (they resonate)
-        float sympathetic_input = excitation * 0.3f;
+        // Sympathetic strings get reduced excitation
+        // They "ring along" with the main string via acoustic coupling
+        float sympathetic_input = excitation * 0.2f;
         for (int i = 1; i < kNumStrings; ++i) {
             out += strings_[i].Process(sympathetic_input) * kAmplitude[i];
         }
         
-        // Normalize output
-        return out * 0.5f;
+        // Normalize output (sum of amplitudes is ~2.3)
+        return out * 0.45f;
     }
     
 private:
@@ -842,7 +872,8 @@ private:
         for (int i = 0; i < kNumStrings; ++i) {
             // Convert cents to frequency ratio: ratio = 2^(cents/1200)
             float cents = kDetuning[i] * detune_amount_;
-            float ratio = 1.0f + cents * (1.0f / 1200.0f) * 0.693147f;  // Approximation
+            // More accurate cents to ratio: 2^(c/1200) ≈ 1 + c * 0.0005778
+            float ratio = 1.0f + cents * 0.0005778f;
             strings_[i].SetFrequency(freq_ * ratio);
         }
     }

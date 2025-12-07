@@ -7,6 +7,8 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#include <chrono>
+#include <algorithm>
 
 #include "wav_file.h"
 
@@ -15,8 +17,133 @@
 #define TEST
 #endif
 
+// Enable DSP profiling for test harness
+// This enables timing instrumentation in DSP code
+#ifndef DSP_PROFILE
+#define DSP_PROFILE
+#endif
+
 // Include the stub unit.h
 #include "unit.h"
+
+// ============================================================================
+// DSP Profiling Infrastructure
+// ============================================================================
+#ifdef DSP_PROFILE
+
+struct DSPProfileStats {
+  const char* name;
+  uint64_t total_calls;
+  double total_time_us;
+  double min_time_us;
+  double max_time_us;
+  
+  DSPProfileStats(const char* n = "unknown") 
+    : name(n), total_calls(0), total_time_us(0), 
+      min_time_us(1e12), max_time_us(0) {}
+  
+  void Record(double time_us) {
+    total_calls++;
+    total_time_us += time_us;
+    if (time_us < min_time_us) min_time_us = time_us;
+    if (time_us > max_time_us) max_time_us = time_us;
+  }
+  
+  double AvgTimeUs() const {
+    return total_calls > 0 ? total_time_us / total_calls : 0;
+  }
+};
+
+// Global profiling stats
+static DSPProfileStats g_profile_exciter("Exciter::Process");
+static DSPProfileStats g_profile_resonator("Resonator::Process");
+static DSPProfileStats g_profile_string("String::Process");
+static DSPProfileStats g_profile_multistring("MultiString::Process");
+static DSPProfileStats g_profile_render("ElementsSynth::Render");
+static DSPProfileStats g_profile_filter("MoogLadder::Process");
+
+// Helper class for automatic timing
+class ScopedTimer {
+public:
+  ScopedTimer(DSPProfileStats& stats) : stats_(stats) {
+    start_ = std::chrono::high_resolution_clock::now();
+  }
+  ~ScopedTimer() {
+    auto end = std::chrono::high_resolution_clock::now();
+    double us = std::chrono::duration<double, std::micro>(end - start_).count();
+    stats_.Record(us);
+  }
+private:
+  DSPProfileStats& stats_;
+  std::chrono::high_resolution_clock::time_point start_;
+};
+
+// Macros for profiling DSP functions
+#define DSP_PROFILE_SCOPE(stats) ScopedTimer _timer(stats)
+#define DSP_PROFILE_EXCITER() DSP_PROFILE_SCOPE(g_profile_exciter)
+#define DSP_PROFILE_RESONATOR() DSP_PROFILE_SCOPE(g_profile_resonator)
+#define DSP_PROFILE_STRING() DSP_PROFILE_SCOPE(g_profile_string)
+#define DSP_PROFILE_MULTISTRING() DSP_PROFILE_SCOPE(g_profile_multistring)
+#define DSP_PROFILE_RENDER() DSP_PROFILE_SCOPE(g_profile_render)
+#define DSP_PROFILE_FILTER() DSP_PROFILE_SCOPE(g_profile_filter)
+
+void ResetProfileStats() {
+  g_profile_exciter = DSPProfileStats("Exciter::Process");
+  g_profile_resonator = DSPProfileStats("Resonator::Process");
+  g_profile_string = DSPProfileStats("String::Process");
+  g_profile_multistring = DSPProfileStats("MultiString::Process");
+  g_profile_render = DSPProfileStats("ElementsSynth::Render");
+  g_profile_filter = DSPProfileStats("MoogLadder::Process");
+}
+
+void PrintProfileStats() {
+  printf("\n=== DSP Profile Statistics ===\n");
+  printf("%-25s %10s %12s %12s %12s %12s\n", 
+         "Function", "Calls", "Total(ms)", "Avg(us)", "Min(us)", "Max(us)");
+  printf("%-25s %10s %12s %12s %12s %12s\n", 
+         "------------------------", "----------", "------------", "------------", "------------", "------------");
+  
+  auto PrintRow = [](const DSPProfileStats& s) {
+    if (s.total_calls > 0) {
+      printf("%-25s %10lu %12.3f %12.3f %12.3f %12.3f\n",
+             s.name, (unsigned long)s.total_calls, s.total_time_us / 1000.0,
+             s.AvgTimeUs(), s.min_time_us, s.max_time_us);
+    }
+  };
+  
+  PrintRow(g_profile_render);
+  PrintRow(g_profile_exciter);
+  PrintRow(g_profile_resonator);
+  PrintRow(g_profile_string);
+  PrintRow(g_profile_multistring);
+  PrintRow(g_profile_filter);
+  
+  // Calculate CPU load estimate (assuming 48kHz, 64-sample blocks)
+  double samples_per_block = 64.0;
+  double block_time_us = samples_per_block / 48000.0 * 1e6;  // ~1333us per block
+  double avg_render_us = g_profile_render.AvgTimeUs();
+  double cpu_load = (avg_render_us / block_time_us) * 100.0;
+  
+  printf("\n--- Performance Estimate ---\n");
+  printf("Block time budget:    %.1f us (64 samples @ 48kHz)\n", block_time_us);
+  printf("Average render time:  %.1f us\n", avg_render_us);
+  printf("Estimated CPU load:   %.1f%%\n", cpu_load);
+  if (cpu_load > 100) {
+    printf("WARNING: Render time exceeds real-time budget!\n");
+  }
+}
+
+#else
+// No-op macros when profiling is disabled
+#define DSP_PROFILE_EXCITER()
+#define DSP_PROFILE_RESONATOR()
+#define DSP_PROFILE_STRING()
+#define DSP_PROFILE_MULTISTRING()
+#define DSP_PROFILE_RENDER()
+#define DSP_PROFILE_FILTER()
+#define ResetProfileStats()
+#define PrintProfileStats()
+#endif // DSP_PROFILE
 
 // Define the unit_header stub for desktop testing
 const unit_header_t unit_header = {
@@ -67,34 +194,79 @@ const unit_header_t unit_header = {
 #include "elements_synth_v2.h"
 
 // Preset definitions
+// Parameter layout differs between LIGHTWEIGHT and FULL modes:
+//
+// FULL MODE (24 params):
+//   Page 1: BOW(0), BLOW(1), STRIKE(2), MALLET(3)
+//   Page 2: BOW TIM(4), FLOW(5), STK MOD(6), DENSITY(7)
+//   Page 3: GEOMETRY(8), BRIGHT(9), DAMPING(10), POSITION(11)
+//   Page 4: CUTOFF(12), RESO(13), FLT ENV(14), MODEL(15)
+//   Page 5: ATTACK(16), DECAY(17), RELEASE(18), CONTOUR(19)
+//   Page 6: LFO RT(20), LFO DEP(21), LFO PRE(22), COARSE(23)
+//
+// LIGHTWEIGHT MODE (24 params, filter/LFO removed):
+//   Page 1: BOW(0), BLOW(1), STRIKE(2), MALLET(3)
+//   Page 2: BOW TIM(4), FLOW(5), STK MOD(6), DENSITY(7)
+//   Page 3: GEOMETRY(8), BRIGHT(9), DAMPING(10), POSITION(11)
+//   Page 4: MODEL(12), SPACE(13), VOLUME(14), blank(15)
+//   Page 5: ATTACK(16), DECAY(17), RELEASE(18), CONTOUR(19)
+//   Page 6: COARSE(20), FINE(21), blank(22), blank(23)
+
 struct PresetDef {
   const char* name;
-  int bow, blow, strike, mallet;
-  int bowT, blwT, stkMode, granD;
-  int geo, bright, damp, pos;
-  int cutoff, reso, fltEnv, model;
-  int atk, dec, rel, envMode;
-  int lfoRt, lfoDep, lfoPre, coarse;
+  int bow, blow, strike, mallet;         // Page 1: Exciter mix
+  int bowT, flow, stkMode, granD;        // Page 2: Exciter timbre  
+  int geo, bright, damp, pos;            // Page 3: Resonator
+#ifdef ELEMENTS_LIGHTWEIGHT
+  int model, space, volume;              // Page 4: Model & Output (lightweight)
+  int atk, dec, rel, contour;            // Page 5: Envelope
+  int coarse, fine;                      // Page 6: Tuning (lightweight)
+#else
+  int cutoff, reso, fltEnv, model;       // Page 4: Filter & Model (full)
+  int atk, dec, rel, contour;            // Page 5: Envelope  
+  int lfoRt, lfoDep, lfoPre, coarse;     // Page 6: LFO (full)
+#endif
 };
 
+#ifdef ELEMENTS_LIGHTWEIGHT
+// Presets for LIGHTWEIGHT mode (no filter/LFO, with SPACE/VOLUME/FINE)
 static const PresetDef kPresets[] = {
-  {"INIT",     0, 0, 100, 0,   0, 0, 0, 0,   0, 0, 0, 0,   127, 0, 64, 0,   5, 40, 40, 0,   40, 0, 0, 0},
-  {"MARIMBA",  0, 0, 100, 0,   0, 0, 0, 0,   -20, 10, -10, 0,   100, 0, 80, 0,   2, 30, 50, 0,   40, 0, 0, 0},
-  {"VIBES",    0, 0, 100, 2,   0, 0, 0, 0,   10, 20, -30, 20,   127, 10, 60, 0,   3, 60, 70, 0,   40, 0, 0, 0},
-  {"PLUCK",    0, 0, 100, 6,   0, 0, 3, 0,   0, 0, 10, 0,   80, 20, 90, 1,   1, 20, 30, 0,   40, 0, 0, 0},
-  {"BOW",      100, 0, 0, 0,   20, 0, 0, 0,   -10, 30, -20, 10,   100, 30, 40, 0,   30, 50, 80, 2,   40, 0, 0, 0},
-  {"FLUTE",    0, 100, 0, 0,   0, 30, 0, 0,   20, 20, -10, 0,   90, 20, 50, 0,   10, 40, 60, 2,   40, 0, 0, 0},
-  {"STRING",   0, 0, 100, 6,   0, 0, 3, 0,   0, 10, -20, 0,   127, 10, 70, 1,   5, 50, 80, 0,   40, 0, 0, 0},
-  {"MSTRING",  0, 0, 100, 0,   0, 0, 0, 0,   0, 20, -10, 0,   127, 0, 60, 2,   5, 60, 90, 0,   40, 0, 0, 0},
+  //           Exciter Mix          Exciter Timbre       Resonator            Model/Space/Vol   Envelope          Tuning
+  //           bow  blo  str  mal   bowT flow stk  grn   geo  bri  dmp  pos   mod  spc  vol     atk  dec  rel  cnt   crs  fin
+  {"INIT",     0,   0,  100,  0,    0,   0,   0,   0,    0,   0,   0,   0,    0,   70, 100,     5,  40,  40,   0,    0,   0},
+  {"MARIMBA",  0,   0,  100,  0,    0,   0,   0,   0,   -20,  10, -10,  0,    0,   80, 100,     2,  30,  50,   0,    0,   0},
+  {"VIBES",    0,   0,  100,  2,    0,   0,   0,   0,    10,  20, -30, 20,    0,   90, 100,     3,  60,  70,   0,    0,   0},
+  {"PLUCK",    0,   0,  100,  6,    0,   0,   3,   0,    0,   0,  10,   0,    1,   70, 110,     1,  20,  30,   0,    0,   0},
+  {"BOW",    100,   0,    0,  0,   20,   0,   0,   0,   -10,  30, -20, 10,    0,   80, 100,    30,  50,  80,   2,    0,   0},
+  {"FLUTE",    0, 100,    0,  0,    0,  30,   0,   0,    20,  20, -10,  0,    0,   70, 100,    10,  40,  60,   2,    0,   0},
+  {"STRING",   0,   0,  100,  6,    0,   0,   3,   0,    0,   10, -20,  0,    1,   60, 115,     5,  50,  80,   0,    0,   0},
+  {"MSTRING",  0,   0,  100,  0,    0,   0,   0,   0,    0,   20, -10,  0,    2,   50, 120,     5,  60,  90,   0,    0,   0},
 };
+#else
+// Presets for FULL mode (with filter and LFO)
+static const PresetDef kPresets[] = {
+  //           Exciter Mix          Exciter Timbre       Resonator            Filter/Model      Envelope          LFO
+  //           bow  blo  str  mal   bowT flow stk  grn   geo  bri  dmp  pos   cut  res  flt  mod  atk  dec  rel  cnt   lfoR lfoD lfoP crs
+  {"INIT",     0,   0,  100,  0,    0,   0,   0,   0,    0,   0,   0,   0,   127,   0,  64,  0,    5,  40,  40,   0,   40,   0,   0,   0},
+  {"MARIMBA",  0,   0,  100,  0,    0,   0,   0,   0,   -20,  10, -10,  0,   100,   0,  80,  0,    2,  30,  50,   0,   40,   0,   0,   0},
+  {"VIBES",    0,   0,  100,  2,    0,   0,   0,   0,    10,  20, -30, 20,   127,  10,  60,  0,    3,  60,  70,   0,   40,   0,   0,   0},
+  {"PLUCK",    0,   0,  100,  6,    0,   0,   3,   0,    0,   0,  10,   0,    80,  20,  90,  1,    1,  20,  30,   0,   40,   0,   0,   0},
+  {"BOW",    100,   0,    0,  0,   20,   0,   0,   0,   -10,  30, -20, 10,   100,  30,  40,  0,   30,  50,  80,   2,   40,   0,   0,   0},
+  {"FLUTE",    0, 100,    0,  0,    0,  30,   0,   0,    20,  20, -10,  0,    90,  20,  50,  0,   10,  40,  60,   2,   40,   0,   0,   0},
+  {"STRING",   0,   0,  100,  6,    0,   0,   3,   0,    0,   10, -20,  0,   127,  10,  70,  1,    5,  50,  80,   0,   40,   0,   0,   0},
+  {"MSTRING",  0,   0,  100,  0,    0,   0,   0,   0,    0,   20, -10,  0,   127,   0,  60,  2,    5,  60,  90,   0,   40,   0,   0,   0},
+};
+#endif
 static const int kNumPresets = sizeof(kPresets) / sizeof(kPresets[0]);
 
 void PrintUsage(const char* program) {
   printf("Elements Synth Test Harness\n\n");
   printf("Usage: %s <output.wav> [options]\n", program);
   printf("       %s --list-presets\n", program);
+  printf("       %s --compare-modes [options]      Compare all resonator models\n", program);
+  printf("       %s --multi-note <notes> [options] Compare models across notes\n", program);
   printf("       %s --output <file.wav> --analyze  (generate and analyze)\n", program);
-  printf("\nOptions:\n");
+  printf("\nGeneral Options:\n");
   printf("  --preset <name|num>   Use a preset (0-7 or name like MARIMBA, PLUCK)\n");
   printf("  --note <0-127>        MIDI note number (default: 60 = C4)\n");
   printf("  --velocity <1-127>    Note velocity (default: 100)\n");
@@ -102,6 +274,12 @@ void PrintUsage(const char* program) {
   printf("  --notes <n1,n2,...>   Play a sequence of notes\n");
   printf("  --analyze             Analyze output for issues (NaN, clipping, etc)\n");
   printf("  --verbose             Show detailed waveform analysis\n");
+  printf("  --profile             Show DSP profiling statistics\n");
+  printf("\nMode Comparison Options:\n");
+  printf("  --compare-modes       Compare MODAL, STRING, MSTRING resonator modes\n");
+  printf("  --save-comparison     Save individual WAV files for each mode\n");
+  printf("  --multi-note <notes>  Compare modes across multiple notes (e.g., 36,48,60,72,84)\n");
+  printf("\nParameter Options:\n");
   printf("  --bow <0-127>         Bow level\n");
   printf("  --blow <0-127>        Blow level\n");
   printf("  --strike <0-127>      Strike level\n");
@@ -124,6 +302,9 @@ void PrintUsage(const char* program) {
   printf("  %s output.wav --bow 100 --model 0 --duration 3\n", program);
   printf("  %s output.wav --notes 60,64,67,72 --preset PLUCK\n", program);
   printf("  %s output.wav --preset VIBES --analyze --verbose\n", program);
+  printf("  %s --compare-modes --note 60 --save-comparison\n", program);
+  printf("  %s --multi-note 36,48,60,72,84 --velocity 100\n", program);
+  printf("  %s output.wav --preset STRING --profile\n", program);
 }
 
 int FindPreset(const char* name_or_num) {
@@ -144,30 +325,60 @@ void ApplyPreset(ElementsSynth& synth, int preset_idx) {
   if (preset_idx < 0 || preset_idx >= kNumPresets) return;
   const PresetDef& p = kPresets[preset_idx];
   
+  // Page 1: Exciter Mix (same for both modes)
   synth.setParameter(0, p.bow);
   synth.setParameter(1, p.blow);
   synth.setParameter(2, p.strike);
   synth.setParameter(3, p.mallet);
+  
+  // Page 2: Exciter Timbre (same for both modes)
   synth.setParameter(4, p.bowT);
-  synth.setParameter(5, p.blwT);
+  synth.setParameter(5, p.flow);
   synth.setParameter(6, p.stkMode);
   synth.setParameter(7, p.granD);
+  
+  // Page 3: Resonator (same for both modes)
   synth.setParameter(8, p.geo);
   synth.setParameter(9, p.bright);
   synth.setParameter(10, p.damp);
   synth.setParameter(11, p.pos);
+  
+#ifdef ELEMENTS_LIGHTWEIGHT
+  // Page 4: Model, Space, Volume (lightweight mode)
+  synth.setParameter(12, p.model);
+  synth.setParameter(13, p.space);
+  synth.setParameter(14, p.volume);
+  // 15 is blank
+  
+  // Page 5: Envelope (same for both modes)
+  synth.setParameter(16, p.atk);
+  synth.setParameter(17, p.dec);
+  synth.setParameter(18, p.rel);
+  synth.setParameter(19, p.contour);
+  
+  // Page 6: Tuning (lightweight mode)
+  synth.setParameter(20, p.coarse);
+  synth.setParameter(21, p.fine);
+  // 22, 23 are blank
+#else
+  // Page 4: Filter & Model (full mode)
   synth.setParameter(12, p.cutoff);
   synth.setParameter(13, p.reso);
   synth.setParameter(14, p.fltEnv);
   synth.setParameter(15, p.model);
+  
+  // Page 5: Envelope (same for both modes)
   synth.setParameter(16, p.atk);
   synth.setParameter(17, p.dec);
   synth.setParameter(18, p.rel);
-  synth.setParameter(19, p.envMode);
+  synth.setParameter(19, p.contour);
+  
+  // Page 6: LFO (full mode)
   synth.setParameter(20, p.lfoRt);
   synth.setParameter(21, p.lfoDep);
   synth.setParameter(22, p.lfoPre);
   synth.setParameter(23, p.coarse);
+#endif
 }
 
 // Analyze output for problems
@@ -290,6 +501,312 @@ void PrintAnalysis(const AnalysisResult& r, bool verbose = false) {
   }
 }
 
+// ============================================================================
+// Mode Comparison Functionality
+// ============================================================================
+
+struct ModeComparisonResult {
+  const char* mode_name;
+  int model_id;
+  AnalysisResult analysis;
+  double render_time_ms;
+  double avg_render_us;
+  bool success;
+};
+
+// Generate audio for a specific model and analyze it
+ModeComparisonResult GenerateAndAnalyzeMode(int model_id, int midi_note, int velocity,
+                                            float duration_sec, int sample_rate = 48000) {
+  ModeComparisonResult result;
+  result.model_id = model_id;
+  result.success = false;
+  
+  switch (model_id) {
+    case 0: result.mode_name = "MODAL"; break;
+    case 1: result.mode_name = "STRING"; break;
+    case 2: result.mode_name = "MSTRING"; break;
+    default: result.mode_name = "UNKNOWN"; return result;
+  }
+  
+  // Initialize synth
+  ElementsSynth synth;
+  unit_runtime_desc_t runtime = {
+    .target = 0,
+    .api = 0,
+    .samplerate = (uint32_t)sample_rate,
+    .frames_per_buffer = 64,
+    .input_channels = 0,
+    .output_channels = 2,
+    .padding = {0, 0}
+  };
+  
+  if (synth.Init(&runtime) != k_unit_err_none) {
+    return result;
+  }
+  
+  // Set up a standard test configuration
+  // Common parameters (same layout for both modes)
+  synth.setParameter(0, 0);      // bow = 0
+  synth.setParameter(1, 0);      // blow = 0
+  synth.setParameter(2, 100);    // strike = 100
+  synth.setParameter(3, 0);      // mallet = 0
+  synth.setParameter(8, 0);      // geometry = center
+  synth.setParameter(9, 0);      // brightness = center
+  synth.setParameter(10, -20);   // damping = moderate
+  synth.setParameter(11, 0);     // position = center
+  
+#ifdef ELEMENTS_LIGHTWEIGHT
+  // Lightweight: MODEL at param 12, SPACE at 13, VOLUME at 14
+  synth.setParameter(12, model_id);  // MODEL
+  synth.setParameter(13, 70);        // space = 70%
+  synth.setParameter(14, 100);       // volume = default
+#else
+  // Full: CUTOFF at 12, RESO at 13, FLT ENV at 14, MODEL at 15
+  synth.setParameter(12, 127);       // cutoff = max
+  synth.setParameter(13, 0);         // resonance = 0
+  synth.setParameter(14, 64);        // filter env = 50%
+  synth.setParameter(15, model_id);  // MODEL
+#endif
+
+  synth.setParameter(16, 5);     // attack = fast
+  synth.setParameter(17, 50);    // decay = medium
+  synth.setParameter(18, 60);    // release = medium
+  
+  // Reset profiling
+  ResetProfileStats();
+  
+  const int block_size = 64;
+  int total_samples = static_cast<int>(duration_sec * sample_rate);
+  int gate_samples = static_cast<int>(duration_sec * 0.7f * sample_rate);  // 70% gate
+  
+  std::vector<float> output_buffer;
+  std::vector<float> block_buffer(block_size * 2);
+  
+  auto start_time = std::chrono::high_resolution_clock::now();
+  
+  // Note on
+  synth.NoteOn(midi_note, velocity);
+  
+  int samples_rendered = 0;
+  bool note_off_sent = false;
+  
+  while (samples_rendered < total_samples) {
+    if (!note_off_sent && samples_rendered >= gate_samples) {
+      synth.NoteOff(midi_note);
+      note_off_sent = true;
+    }
+    
+    synth.Render(block_buffer.data(), block_size);
+    output_buffer.insert(output_buffer.end(), block_buffer.begin(), block_buffer.end());
+    samples_rendered += block_size;
+  }
+  
+  auto end_time = std::chrono::high_resolution_clock::now();
+  result.render_time_ms = std::chrono::duration<double, std::milli>(end_time - start_time).count();
+  
+#ifdef DSP_PROFILE
+  result.avg_render_us = g_profile_render.AvgTimeUs();
+#else
+  result.avg_render_us = 0;
+#endif
+  
+  // Analyze
+  result.analysis = AnalyzeBuffer(output_buffer, sample_rate, 2);
+  result.success = true;
+  
+  return result;
+}
+
+void RunModeComparison(int midi_note, int velocity, float duration_sec, 
+                       bool save_files, const std::string& output_prefix) {
+  printf("\n");
+  printf("╔══════════════════════════════════════════════════════════════════════════════╗\n");
+  printf("║                         RESONATOR MODE COMPARISON                            ║\n");
+  printf("╠══════════════════════════════════════════════════════════════════════════════╣\n");
+  printf("║  Note: MIDI %d | Velocity: %d | Duration: %.1fs                              ║\n", 
+         midi_note, velocity, duration_sec);
+  printf("╚══════════════════════════════════════════════════════════════════════════════╝\n");
+  
+  std::vector<ModeComparisonResult> results;
+  
+  // Test all three models
+  for (int model = 0; model <= 2; ++model) {
+    printf("\nGenerating %s mode...\n", 
+           model == 0 ? "MODAL" : (model == 1 ? "STRING" : "MSTRING"));
+    
+    ModeComparisonResult r = GenerateAndAnalyzeMode(model, midi_note, velocity, duration_sec);
+    results.push_back(r);
+    
+    if (!r.success) {
+      printf("  ERROR: Failed to generate audio for model %d\n", model);
+    } else {
+      printf("  Peak: %.4f (%.1f dB), RMS: %.4f (%.1f dB)\n",
+             r.analysis.max_amplitude, 
+             20.0 * std::log10(r.analysis.max_amplitude + 1e-10),
+             r.analysis.rms,
+             20.0 * std::log10(r.analysis.rms + 1e-10));
+    }
+    
+    // Save individual files if requested
+    if (save_files && r.success) {
+      // Re-generate and save (simpler than storing buffer)
+      ElementsSynth synth;
+      unit_runtime_desc_t runtime = {
+        .target = 0, .api = 0, .samplerate = 48000,
+        .frames_per_buffer = 64, .input_channels = 0, .output_channels = 2,
+        .padding = {0, 0}
+      };
+      synth.Init(&runtime);
+      synth.setParameter(2, 100);    // strike
+      synth.setParameter(10, -20);   // damping
+#ifdef ELEMENTS_LIGHTWEIGHT
+      synth.setParameter(12, model); // MODEL (lightweight)
+      synth.setParameter(13, 70);    // space
+      synth.setParameter(14, 100);   // volume
+#else
+      synth.setParameter(12, 127);   // cutoff (full)
+      synth.setParameter(15, model); // MODEL (full)
+#endif
+      synth.setParameter(16, 5);
+      synth.setParameter(17, 50);
+      synth.setParameter(18, 60);
+      
+      std::vector<float> buf;
+      std::vector<float> block(128);
+      synth.NoteOn(midi_note, velocity);
+      int samples = static_cast<int>(duration_sec * 48000);
+      int gate = static_cast<int>(duration_sec * 0.7f * 48000);
+      int rendered = 0;
+      bool note_off = false;
+      while (rendered < samples) {
+        if (!note_off && rendered >= gate) {
+          synth.NoteOff(midi_note);
+          note_off = true;
+        }
+        synth.Render(block.data(), 64);
+        buf.insert(buf.end(), block.begin(), block.end());
+        rendered += 64;
+      }
+      
+      std::string filename = output_prefix + "_" + r.mode_name + ".wav";
+      WavFile wav;
+      if (wav.OpenWrite(filename, 48000, 2)) {
+        wav.Write(buf);
+        wav.Close();
+        printf("  Saved: %s\n", filename.c_str());
+      }
+    }
+  }
+  
+  // Print comparison table
+  printf("\n┌──────────────────────────────────────────────────────────────────────────────┐\n");
+  printf("│                            COMPARISON RESULTS                                │\n");
+  printf("├──────────┬────────────┬────────────┬────────────┬────────────┬───────────────┤\n");
+  printf("│ Mode     │ Peak (dB)  │ RMS (dB)   │ Est. Freq  │ Render/blk │ Status        │\n");
+  printf("├──────────┼────────────┼────────────┼────────────┼────────────┼───────────────┤\n");
+  
+  for (const auto& r : results) {
+    if (r.success) {
+      float peak_db = 20.0f * std::log10(r.analysis.max_amplitude + 1e-10f);
+      float rms_db = 20.0f * std::log10(r.analysis.rms + 1e-10f);
+      const char* status = "OK";
+      if (r.analysis.has_nan) status = "NaN ERROR";
+      else if (r.analysis.has_inf) status = "Inf ERROR";
+      else if (r.analysis.has_clipping) status = "CLIPPING";
+      else if (r.analysis.rms < 0.01f) status = "TOO QUIET";
+      
+      printf("│ %-8s │ %+7.1f dB │ %+7.1f dB │ %7.0f Hz │ %7.1f us │ %-13s │\n",
+             r.mode_name, peak_db, rms_db, r.analysis.estimated_freq,
+             r.avg_render_us, status);
+    } else {
+      printf("│ %-8s │    FAILED  │    FAILED  │    FAILED  │    FAILED  │ INIT ERROR    │\n",
+             r.mode_name);
+    }
+  }
+  printf("└──────────┴────────────┴────────────┴────────────┴────────────┴───────────────┘\n");
+  
+  // Level balance check
+  if (results.size() >= 3 && results[0].success && results[1].success && results[2].success) {
+    float modal_rms = results[0].analysis.rms;
+    float string_rms = results[1].analysis.rms;
+    float mstring_rms = results[2].analysis.rms;
+    
+    float max_rms = std::max({modal_rms, string_rms, mstring_rms});
+    float min_rms = std::min({modal_rms, string_rms, mstring_rms});
+    float ratio_db = 20.0f * std::log10(max_rms / (min_rms + 1e-10f));
+    
+    printf("\n=== Level Balance Analysis ===\n");
+    printf("RMS ratio (loudest/quietest): %.1f dB\n", ratio_db);
+    
+    if (ratio_db < 3.0f) {
+      printf("Status: GOOD - Modes are well balanced (< 3dB difference)\n");
+    } else if (ratio_db < 6.0f) {
+      printf("Status: ACCEPTABLE - Modes have moderate level difference (3-6dB)\n");
+    } else {
+      printf("Status: WARNING - Modes have significant level difference (> 6dB)\n");
+      printf("        Consider adjusting output gains for better balance.\n");
+    }
+    
+    // Identify which modes need adjustment
+    if (ratio_db >= 3.0f) {
+      printf("\nPer-mode adjustments needed to match MODAL level:\n");
+      printf("  MODAL:   %+.1f dB (reference)\n", 0.0f);
+      printf("  STRING:  %+.1f dB\n", 20.0f * std::log10(modal_rms / (string_rms + 1e-10f)));
+      printf("  MSTRING: %+.1f dB\n", 20.0f * std::log10(modal_rms / (mstring_rms + 1e-10f)));
+    }
+  }
+  
+  // Performance summary
+#ifdef DSP_PROFILE
+  printf("\n=== Performance Summary ===\n");
+  double block_budget_us = 64.0 / 48000.0 * 1e6;  // ~1333us
+  printf("Real-time budget: %.0f us per 64-sample block\n", block_budget_us);
+  for (const auto& r : results) {
+    if (r.success && r.avg_render_us > 0) {
+      double load = (r.avg_render_us / block_budget_us) * 100.0;
+      printf("  %-8s: %.1f us avg (%.1f%% CPU)\n", r.mode_name, r.avg_render_us, load);
+    }
+  }
+#endif
+}
+
+// Test multiple notes for each mode
+void RunMultiNoteComparison(const std::vector<int>& notes, int velocity, float note_duration) {
+  printf("\n");
+  printf("╔══════════════════════════════════════════════════════════════════════════════╗\n");
+  printf("║                      MULTI-NOTE MODE COMPARISON                              ║\n");
+  printf("╚══════════════════════════════════════════════════════════════════════════════╝\n");
+  
+  printf("\n%-8s", "Note");
+  for (int model = 0; model <= 2; ++model) {
+    const char* name = model == 0 ? "MODAL" : (model == 1 ? "STRING" : "MSTRING");
+    printf(" │ %-12s", name);
+  }
+  printf("\n");
+  printf("────────");
+  for (int i = 0; i < 3; ++i) printf("─┼──────────────");
+  printf("\n");
+  
+  for (int note : notes) {
+    printf("MIDI %-3d", note);
+    
+    for (int model = 0; model <= 2; ++model) {
+      auto r = GenerateAndAnalyzeMode(model, note, velocity, note_duration);
+      if (r.success) {
+        float rms_db = 20.0f * std::log10(r.analysis.rms + 1e-10f);
+        const char* flag = "";
+        if (r.analysis.has_nan) flag = " NaN!";
+        else if (r.analysis.has_inf) flag = " Inf!";
+        else if (r.analysis.has_clipping) flag = " CLIP";
+        printf(" │ %+6.1f dB%s", rms_db, flag);
+      } else {
+        printf(" │    ERROR    ");
+      }
+    }
+    printf("\n");
+  }
+}
+
 std::vector<int> ParseNotes(const char* notes_str) {
   std::vector<int> notes;
   std::string s(notes_str);
@@ -330,6 +847,10 @@ int main(int argc, char* argv[]) {
   std::vector<int> notes;
   bool analyze_mode = false;
   bool verbose_mode = false;
+  bool profile_mode = false;
+  bool compare_modes = false;
+  bool save_comparison = false;
+  std::vector<int> multi_notes;
   
   // Individual parameters (use -999 as "not set")
   int param_bow = -999, param_blow = -999, param_strike = -999;
@@ -357,6 +878,14 @@ int main(int argc, char* argv[]) {
       analyze_mode = true;
     } else if (strcmp(argv[i], "--verbose") == 0) {
       verbose_mode = true;
+    } else if (strcmp(argv[i], "--profile") == 0) {
+      profile_mode = true;
+    } else if (strcmp(argv[i], "--compare-modes") == 0) {
+      compare_modes = true;
+    } else if (strcmp(argv[i], "--save-comparison") == 0) {
+      save_comparison = true;
+    } else if (strcmp(argv[i], "--multi-note") == 0 && i + 1 < argc) {
+      multi_notes = ParseNotes(argv[++i]);
     } else if (strcmp(argv[i], "--bow") == 0 && i + 1 < argc) {
       param_bow = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--blow") == 0 && i + 1 < argc) {
@@ -388,11 +917,32 @@ int main(int argc, char* argv[]) {
     }
   }
 
+  // Handle multi-note comparison mode
+  if (!multi_notes.empty()) {
+    RunMultiNoteComparison(multi_notes, velocity, duration);
+    return 0;
+  }
+
+  // Handle compare-modes
+  if (compare_modes) {
+    std::string prefix = output_path.empty() ? "comparison" : output_path;
+    // Remove .wav extension if present
+    size_t ext_pos = prefix.rfind(".wav");
+    if (ext_pos != std::string::npos) {
+      prefix = prefix.substr(0, ext_pos);
+    }
+    RunModeComparison(note, velocity, duration, save_comparison, prefix);
+    return 0;
+  }
+
   if (output_path.empty()) {
     fprintf(stderr, "Error: No output file specified\n");
     PrintUsage(argv[0]);
     return 1;
   }
+
+  // Reset profiling stats
+  ResetProfileStats();
 
   // Initialize synth
   ElementsSynth synth;
@@ -492,6 +1042,11 @@ int main(int argc, char* argv[]) {
     if (analysis.has_nan || analysis.has_inf) {
       return 2;  // Error code for DSP problems
     }
+  }
+
+  // Print profiling stats if requested
+  if (profile_mode) {
+    PrintProfileStats();
   }
 
   return 0;
