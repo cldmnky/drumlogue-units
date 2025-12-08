@@ -218,41 +218,7 @@ inline float FastTanh(float x) {
     return x * (27.0f + x2) / (27.0f + 9.0f * x2);
 }
 
-#ifdef USE_NEON
-// NEON-optimized FastTanh for 4 values simultaneously
-// tanh(x) ≈ x * (27 + x²) / (27 + 9*x²)
-inline float32x4_t FastTanh4(float32x4_t x) {
-    const float32x4_t k27 = vdupq_n_f32(27.0f);
-    const float32x4_t k9 = vdupq_n_f32(9.0f);
-    const float32x4_t kOne = vdupq_n_f32(1.0f);
-    const float32x4_t kNegOne = vdupq_n_f32(-1.0f);
-    const float32x4_t kFour = vdupq_n_f32(4.0f);
-    const float32x4_t kNegFour = vdupq_n_f32(-4.0f);
-    
-    // x² 
-    float32x4_t x2 = vmulq_f32(x, x);
-    
-    // numerator = x * (27 + x²)
-    float32x4_t num = vmulq_f32(x, vaddq_f32(k27, x2));
-    
-    // denominator = 27 + 9*x²
-    float32x4_t denom = vmlaq_f32(k27, k9, x2);  // 27 + 9*x²
-    
-    // Approximate division: num / denom
-    // Use Newton-Raphson reciprocal for better accuracy
-    float32x4_t recip = vrecpeq_f32(denom);
-    recip = vmulq_f32(vrecpsq_f32(denom, recip), recip);  // One NR iteration
-    float32x4_t result = vmulq_f32(num, recip);
-    
-    // Clamp to [-1, 1] for |x| > 4
-    uint32x4_t gt4 = vcgtq_f32(x, kFour);
-    uint32x4_t ltneg4 = vcltq_f32(x, kNegFour);
-    result = vbslq_f32(gt4, kOne, result);
-    result = vbslq_f32(ltneg4, kNegOne, result);
-    
-    return result;
-}
-#endif
+// Note: FastTanh4 NEON version is in common/neon_dsp.h
 
 // Fast absolute value
 inline float FastAbs(float x) {

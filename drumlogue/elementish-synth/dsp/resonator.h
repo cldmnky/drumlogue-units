@@ -118,82 +118,6 @@ private:
     float a1_, a2_, a3_;       // Pre-computed coefficients
 };
 
-#ifdef USE_NEON
-// ============================================================================
-// NEON-optimized Modal Mode Batch Processing
-// Processes 4 SVF modes simultaneously using SIMD
-// ============================================================================
-
-class Mode4 {
-public:
-    Mode4() {
-        state_1_ = vdupq_n_f32(0.0f);
-        state_2_ = vdupq_n_f32(0.0f);
-        a1_ = vdupq_n_f32(0.5f);
-        a2_ = vdupq_n_f32(0.05f);
-        a3_ = vdupq_n_f32(0.005f);
-    }
-    
-    // Load coefficients from 4 Mode instances
-    void LoadCoefficients(Mode* modes) {
-        float a1_arr[4] = { modes[0].a1(), modes[1].a1(), modes[2].a1(), modes[3].a1() };
-        float a2_arr[4] = { modes[0].a2(), modes[1].a2(), modes[2].a2(), modes[3].a2() };
-        float a3_arr[4] = { modes[0].a3(), modes[1].a3(), modes[2].a3(), modes[3].a3() };
-        a1_ = vld1q_f32(a1_arr);
-        a2_ = vld1q_f32(a2_arr);
-        a3_ = vld1q_f32(a3_arr);
-    }
-    
-    // Load state from 4 Mode instances
-    void LoadState(Mode* modes) {
-        float s1_arr[4] = { modes[0].state1(), modes[1].state1(), modes[2].state1(), modes[3].state1() };
-        float s2_arr[4] = { modes[0].state2(), modes[1].state2(), modes[2].state2(), modes[3].state2() };
-        state_1_ = vld1q_f32(s1_arr);
-        state_2_ = vld1q_f32(s2_arr);
-    }
-    
-    // Store state back to 4 Mode instances
-    void StoreState(Mode* modes) {
-        float s1_arr[4], s2_arr[4];
-        vst1q_f32(s1_arr, state_1_);
-        vst1q_f32(s2_arr, state_2_);
-        modes[0].state1() = s1_arr[0]; modes[0].state2() = s2_arr[0];
-        modes[1].state1() = s1_arr[1]; modes[1].state2() = s2_arr[1];
-        modes[2].state1() = s1_arr[2]; modes[2].state2() = s2_arr[2];
-        modes[3].state1() = s1_arr[3]; modes[3].state2() = s2_arr[3];
-    }
-    
-    // Process 4 modes in parallel with same input
-    // Returns bandpass outputs for all 4 modes
-    float32x4_t Process(float32x4_t in) {
-        // v3 = in - state_2_
-        float32x4_t v3 = vsubq_f32(in, state_2_);
-        
-        // v1 = a1*state_1 + a2*v3 (bandpass)
-        float32x4_t v1 = vmlaq_f32(vmulq_f32(a1_, state_1_), a2_, v3);
-        
-        // v2 = state_2 + a2*state_1 + a3*v3 (lowpass)
-        float32x4_t v2 = vaddq_f32(state_2_, vmlaq_f32(vmulq_f32(a2_, state_1_), a3_, v3));
-        
-        // Update states: state = 2*v - state
-        const float32x4_t k2 = vdupq_n_f32(2.0f);
-        state_1_ = vsubq_f32(vmulq_f32(k2, v1), state_1_);
-        state_2_ = vsubq_f32(vmulq_f32(k2, v2), state_2_);
-        
-        return v1;  // Return bandpass outputs
-    }
-    
-    void Reset() {
-        state_1_ = vdupq_n_f32(0.0f);
-        state_2_ = vdupq_n_f32(0.0f);
-    }
-    
-private:
-    float32x4_t state_1_, state_2_;
-    float32x4_t a1_, a2_, a3_;
-};
-#endif // USE_NEON
-
 // ============================================================================
 // Bowed Mode - Bandpass filter + Delay line for banded waveguide synthesis
 // Each bowed mode simulates a string resonating at a specific partial
@@ -415,9 +339,17 @@ public:
         
 #ifdef USE_NEON
         // NEON-optimized mode processing: 4 modes at a time
+        // Protect against NaN input (same as scalar Mode::Process)
+        if (excitation != excitation) excitation = 0.0f;
+        
         float32x4_t exc_vec = vdupq_n_f32(excitation);
         float32x4_t sum_center_vec = vdupq_n_f32(0.0f);
         float32x4_t sum_side_vec = vdupq_n_f32(0.0f);
+        
+        // Constants for stability checking
+        const float32x4_t stability_limit = vdupq_n_f32(1e6f);
+        const float32x4_t neg_stability_limit = vdupq_n_f32(-1e6f);
+        const float32x4_t zero_vec = vdupq_n_f32(0.0f);
         
         // Pre-compute amplitudes for all modes (batch of 4)
         size_t i = 0;
@@ -452,6 +384,23 @@ public:
             const float32x4_t k2 = vdupq_n_f32(2.0f);
             state_1 = vsubq_f32(vmulq_f32(k2, v1), state_1);
             state_2 = vsubq_f32(vmulq_f32(k2, v2), state_2);
+            
+            // Stability check: detect NaN or values exceeding ±1e6
+            // NaN check: x != x is true for NaN
+            uint32x4_t nan_1 = vmvnq_u32(vceqq_f32(state_1, state_1));  // NaN mask
+            uint32x4_t nan_2 = vmvnq_u32(vceqq_f32(state_2, state_2));
+            uint32x4_t unstable_1 = vorrq_u32(vcgtq_f32(state_1, stability_limit),
+                                              vcltq_f32(state_1, neg_stability_limit));
+            uint32x4_t unstable_2 = vorrq_u32(vcgtq_f32(state_2, stability_limit),
+                                              vcltq_f32(state_2, neg_stability_limit));
+            uint32x4_t reset_mask = vorrq_u32(vorrq_u32(nan_1, nan_2),
+                                              vorrq_u32(unstable_1, unstable_2));
+            
+            // Reset unstable states to zero
+            state_1 = vbslq_f32(reset_mask, zero_vec, state_1);
+            state_2 = vbslq_f32(reset_mask, zero_vec, state_2);
+            // Zero output for unstable modes
+            v1 = vbslq_f32(reset_mask, zero_vec, v1);
             
             // Store updated states back
             vst1q_f32(s1_arr, state_1);
