@@ -242,6 +242,73 @@ inline void SanitizeAndClamp(float* buffer, float limit, uint32_t frames) {
 #endif
 }
 
+#ifdef USE_NEON
+// NEON-optimized FastTanh for 4 values simultaneously
+// tanh(x) ≈ x * (27 + x²) / (27 + 9*x²)
+inline float32x4_t FastTanh4(float32x4_t x) {
+    const float32x4_t k27 = vdupq_n_f32(27.0f);
+    const float32x4_t k9 = vdupq_n_f32(9.0f);
+    const float32x4_t kOne = vdupq_n_f32(1.0f);
+    const float32x4_t kNegOne = vdupq_n_f32(-1.0f);
+    const float32x4_t kFour = vdupq_n_f32(4.0f);
+    const float32x4_t kNegFour = vdupq_n_f32(-4.0f);
+    
+    // x² 
+    float32x4_t x2 = vmulq_f32(x, x);
+    
+    // numerator = x * (27 + x²)
+    float32x4_t num = vmulq_f32(x, vaddq_f32(k27, x2));
+    
+    // denominator = 27 + 9*x²
+    float32x4_t denom = vmlaq_f32(k27, k9, x2);  // 27 + 9*x²
+    
+    // Approximate division: num / denom
+    // Use Newton-Raphson reciprocal for better accuracy
+    float32x4_t recip = vrecpeq_f32(denom);
+    recip = vmulq_f32(vrecpsq_f32(denom, recip), recip);  // One NR iteration
+    float32x4_t result = vmulq_f32(num, recip);
+    
+    // Clamp to [-1, 1] for |x| > 4
+    uint32x4_t gt4 = vcgtq_f32(x, kFour);
+    uint32x4_t ltneg4 = vcltq_f32(x, kNegFour);
+    result = vbslq_f32(gt4, kOne, result);
+    result = vbslq_f32(ltneg4, kNegOne, result);
+    
+    return result;
+}
+
+// NEON-optimized soft clamp using tanh for stereo buffers
+// Applies tanh(x * drive) * gain for smooth saturation
+inline void SoftClampStereo(float* left, float* right, float drive, float gain, uint32_t frames) {
+    float32x4_t drive_vec = vdupq_n_f32(drive);
+    float32x4_t gain_vec = vdupq_n_f32(gain);
+    uint32_t i = 0;
+    for (; i + 4 <= frames; i += 4) {
+        float32x4_t l = vld1q_f32(&left[i]);
+        float32x4_t r = vld1q_f32(&right[i]);
+        
+        // Apply soft clipping: tanh(x * drive) * gain
+        l = vmulq_f32(FastTanh4(vmulq_f32(l, drive_vec)), gain_vec);
+        r = vmulq_f32(FastTanh4(vmulq_f32(r, drive_vec)), gain_vec);
+        
+        vst1q_f32(&left[i], l);
+        vst1q_f32(&right[i], r);
+    }
+    // Scalar fallback for remaining samples
+    for (; i < frames; ++i) {
+        float lv = left[i] * drive;
+        float rv = right[i] * drive;
+        // Simple tanh approximation
+        if (lv > 4.0f) lv = 1.0f; else if (lv < -4.0f) lv = -1.0f;
+        else { float l2 = lv*lv; lv = lv * (27.0f + l2) / (27.0f + 9.0f * l2); }
+        if (rv > 4.0f) rv = 1.0f; else if (rv < -4.0f) rv = -1.0f;
+        else { float r2 = rv*rv; rv = rv * (27.0f + r2) / (27.0f + 9.0f * r2); }
+        left[i] = lv * gain;
+        right[i] = rv * gain;
+    }
+}
+#endif
+
 } // namespace neon
 } // namespace NEON_DSP_NS
 

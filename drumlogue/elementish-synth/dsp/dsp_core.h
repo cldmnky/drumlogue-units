@@ -8,6 +8,10 @@
 #include <cstdint>
 #include <cmath>
 
+#ifdef USE_NEON
+#include <arm_neon.h>
+#endif
+
 namespace modal {
 
 // ============================================================================
@@ -213,6 +217,8 @@ inline float FastTanh(float x) {
     float x2 = x * x;
     return x * (27.0f + x2) / (27.0f + 9.0f * x2);
 }
+
+// Note: FastTanh4 NEON version is in common/neon_dsp.h
 
 // Fast absolute value
 inline float FastAbs(float x) {
@@ -631,6 +637,27 @@ public:
         y0_ = iir_coefficient_ * y0_ - y1_;
         y1_ = temp;
         return temp + 0.5f;
+    }
+    
+    // Batch compute 4 samples - optimized for NEON loop usage
+    // Returns 4 consecutive values and advances oscillator state by 4
+    void Next4(float* out) {
+        float y0 = y0_;
+        float y1 = y1_;
+        float c = iir_coefficient_;
+        
+        // Unrolled 4 iterations
+        out[0] = y0 + 0.5f;
+        float y2 = c * y0 - y1;
+        out[1] = y2 + 0.5f;
+        float y3 = c * y2 - y0;
+        out[2] = y3 + 0.5f;
+        float y4 = c * y3 - y2;
+        out[3] = y4 + 0.5f;
+        
+        // Update state for next batch
+        y0_ = c * y4 - y3;
+        y1_ = y4;
     }
     
     // Get current value without advancing
