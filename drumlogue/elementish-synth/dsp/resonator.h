@@ -226,6 +226,12 @@ public:
             modes_[i].Reset();
             cached_g_[i] = 0.1f;
             cached_r_[i] = 0.01f;
+            // Initialize SoA arrays
+            soa_a1_[i] = 0.5f;
+            soa_a2_[i] = 0.05f;
+            soa_a3_[i] = 0.005f;
+            soa_state1_[i] = 0.0f;
+            soa_state2_[i] = 0.0f;
         }
         
         // Initialize bowed modes
@@ -339,6 +345,7 @@ public:
         
 #ifdef USE_NEON
         // NEON-optimized mode processing: 4 modes at a time
+        // Using Structure-of-Arrays (SoA) layout for direct SIMD loads
         // Protect against NaN input (same as scalar Mode::Process)
         if (excitation != excitation) excitation = 0.0f;
         
@@ -350,25 +357,17 @@ public:
         const float32x4_t stability_limit = vdupq_n_f32(1e6f);
         const float32x4_t neg_stability_limit = vdupq_n_f32(-1e6f);
         const float32x4_t zero_vec = vdupq_n_f32(0.0f);
+        const float32x4_t k2 = vdupq_n_f32(2.0f);
         
-        // Pre-compute amplitudes for all modes (batch of 4)
+        // Process modes in batches of 4 using SoA layout
         size_t i = 0;
         for (; i + 4 <= num_modes; i += 4) {
-            // Load coefficients and state for 4 modes
-            float a1_arr[4], a2_arr[4], a3_arr[4];
-            float s1_arr[4], s2_arr[4];
-            for (int j = 0; j < 4; ++j) {
-                a1_arr[j] = modes_[i+j].a1();
-                a2_arr[j] = modes_[i+j].a2();
-                a3_arr[j] = modes_[i+j].a3();
-                s1_arr[j] = modes_[i+j].state1();
-                s2_arr[j] = modes_[i+j].state2();
-            }
-            float32x4_t a1 = vld1q_f32(a1_arr);
-            float32x4_t a2 = vld1q_f32(a2_arr);
-            float32x4_t a3 = vld1q_f32(a3_arr);
-            float32x4_t state_1 = vld1q_f32(s1_arr);
-            float32x4_t state_2 = vld1q_f32(s2_arr);
+            // Direct SIMD loads from contiguous SoA arrays - no scatter-gather!
+            float32x4_t a1 = vld1q_f32(&soa_a1_[i]);
+            float32x4_t a2 = vld1q_f32(&soa_a2_[i]);
+            float32x4_t a3 = vld1q_f32(&soa_a3_[i]);
+            float32x4_t state_1 = vld1q_f32(&soa_state1_[i]);
+            float32x4_t state_2 = vld1q_f32(&soa_state2_[i]);
             
             // SVF processing for 4 modes
             // v3 = in - state_2
@@ -381,7 +380,6 @@ public:
             float32x4_t v2 = vaddq_f32(state_2, vmlaq_f32(vmulq_f32(a2, state_1), a3, v3));
             
             // Update states: state = 2*v - state
-            const float32x4_t k2 = vdupq_n_f32(2.0f);
             state_1 = vsubq_f32(vmulq_f32(k2, v1), state_1);
             state_2 = vsubq_f32(vmulq_f32(k2, v2), state_2);
             
@@ -402,15 +400,11 @@ public:
             // Zero output for unstable modes
             v1 = vbslq_f32(reset_mask, zero_vec, v1);
             
-            // Store updated states back
-            vst1q_f32(s1_arr, state_1);
-            vst1q_f32(s2_arr, state_2);
-            for (int j = 0; j < 4; ++j) {
-                modes_[i+j].state1() = s1_arr[j];
-                modes_[i+j].state2() = s2_arr[j];
-            }
+            // Direct SIMD stores to SoA arrays - no scatter!
+            vst1q_f32(&soa_state1_[i], state_1);
+            vst1q_f32(&soa_state2_[i], state_2);
             
-            // Compute amplitudes for this batch
+            // Compute amplitudes for this batch (still needs scalar - CosineOscillator is sequential)
             float amp_arr[4], aux_arr[4];
             for (int j = 0; j < 4; ++j) {
                 amp_arr[j] = amplitudes.Next();
@@ -435,22 +429,67 @@ public:
         sum_s_low = vadd_f32(sum_s_low, sum_s_high);
         sum_side = vget_lane_f32(vpadd_f32(sum_s_low, sum_s_low), 0);
         
-        // Process remaining modes (less than 4)
+        // Process remaining modes (less than 4) using scalar path
         for (; i < num_modes; ++i) {
-            float s = modes_[i].Process(excitation);
+            // Use SoA state for consistency with NEON path
+            float state_1 = soa_state1_[i];
+            float state_2 = soa_state2_[i];
+            float a1 = soa_a1_[i];
+            float a2 = soa_a2_[i];
+            float a3 = soa_a3_[i];
+            
+            // SVF processing
+            float v3 = excitation - state_2;
+            float v1 = a1 * state_1 + a2 * v3;
+            float v2 = state_2 + a2 * state_1 + a3 * v3;
+            state_1 = 2.0f * v1 - state_1;
+            state_2 = 2.0f * v2 - state_2;
+            
+            // Stability check
+            if (state_1 != state_1 || state_1 > 1e6f || state_1 < -1e6f ||
+                state_2 != state_2 || state_2 > 1e6f || state_2 < -1e6f) {
+                state_1 = state_2 = 0.0f;
+                v1 = 0.0f;
+            }
+            
+            soa_state1_[i] = state_1;
+            soa_state2_[i] = state_2;
+            
             float amp = amplitudes.Next();
             float aux_amp = aux_amplitudes.Next();
-            sum_center += s * amp;
-            sum_side += s * aux_amp;
+            sum_center += v1 * amp;
+            sum_side += v1 * aux_amp;
         }
 #else
-        // Scalar fallback: Process all active normal modes
+        // Scalar fallback: Process all active normal modes using SoA arrays
         for (size_t i = 0; i < num_modes; ++i) {
-            float s = modes_[i].Process(excitation);
+            float state_1 = soa_state1_[i];
+            float state_2 = soa_state2_[i];
+            float a1 = soa_a1_[i];
+            float a2 = soa_a2_[i];
+            float a3 = soa_a3_[i];
+            
+            // SVF processing
+            float v3 = excitation - state_2;
+            float v1 = a1 * state_1 + a2 * v3;
+            float v2 = state_2 + a2 * state_1 + a3 * v3;
+            state_1 = 2.0f * v1 - state_1;
+            state_2 = 2.0f * v2 - state_2;
+            
+            // Stability check
+            if (state_1 != state_1 || state_1 > 1e6f || state_1 < -1e6f ||
+                state_2 != state_2 || state_2 > 1e6f || state_2 < -1e6f) {
+                state_1 = state_2 = 0.0f;
+                v1 = 0.0f;
+            }
+            
+            soa_state1_[i] = state_1;
+            soa_state2_[i] = state_2;
+            
             float amp = amplitudes.Next();
             float aux_amp = aux_amplitudes.Next();
-            sum_center += s * amp;
-            sum_side += s * aux_amp;
+            sum_center += v1 * amp;
+            sum_side += v1 * aux_amp;
         }
 #endif
         
@@ -508,6 +547,8 @@ public:
     void Reset() {
         for (int i = 0; i < kNumModes; ++i) {
             modes_[i].Reset();
+            soa_state1_[i] = 0.0f;
+            soa_state2_[i] = 0.0f;
         }
         for (size_t i = 0; i < kMaxBowedModes; ++i) {
             bowed_modes_[i].Reset();
@@ -657,6 +698,13 @@ private:
                 
                 modes_[i].SetCoefficients(cached_g_[i], cached_r_[i]);
                 
+                // Update SoA arrays for NEON optimization
+                float g = cached_g_[i];
+                float k = cached_r_[i];
+                soa_a1_[i] = 1.0f / (1.0f + g * (g + k));
+                soa_a2_[i] = g * soa_a1_[i];
+                soa_a3_[i] = g * soa_a2_[i];
+                
                 // Also update bowed modes (first kMaxBowedModes)
                 if (i < kMaxBowedModes) {
                     // Calculate delay line period (samples per cycle)
@@ -691,6 +739,14 @@ private:
     BowedMode bowed_modes_[kMaxBowedModes];  // Banded waveguides for bowing
     float cached_g_[kNumModes];  // Cached g coefficients
     float cached_r_[kNumModes];  // Cached r coefficients
+    
+    // Structure-of-Arrays (SoA) layout for NEON optimization
+    // Allows direct vld1q_f32 loads without scatter-gather
+    float soa_a1_[kNumModes];    // Pre-computed a1 coefficients
+    float soa_a2_[kNumModes];    // Pre-computed a2 coefficients  
+    float soa_a3_[kNumModes];    // Pre-computed a3 coefficients
+    float soa_state1_[kNumModes]; // Filter state 1 (bandpass)
+    float soa_state2_[kNumModes]; // Filter state 2 (lowpass)
     
     float frequency_;           // Normalized frequency (freq/sample_rate)
     float geometry_;            // Structure/stiffness control
