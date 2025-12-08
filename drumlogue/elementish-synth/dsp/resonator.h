@@ -105,11 +105,94 @@ public:
     
     void Reset() { state_1_ = state_2_ = 0.0f; }
     
+    // Expose state for NEON batch processing
+    float& state1() { return state_1_; }
+    float& state2() { return state_2_; }
+    float a1() const { return a1_; }
+    float a2() const { return a2_; }
+    float a3() const { return a3_; }
+    
 private:
     float state_1_, state_2_;  // Filter state (ic1eq, ic2eq)
     float g_, k_;              // g = tan(pi*f), k = 1/Q
     float a1_, a2_, a3_;       // Pre-computed coefficients
 };
+
+#ifdef USE_NEON
+// ============================================================================
+// NEON-optimized Modal Mode Batch Processing
+// Processes 4 SVF modes simultaneously using SIMD
+// ============================================================================
+
+class Mode4 {
+public:
+    Mode4() {
+        state_1_ = vdupq_n_f32(0.0f);
+        state_2_ = vdupq_n_f32(0.0f);
+        a1_ = vdupq_n_f32(0.5f);
+        a2_ = vdupq_n_f32(0.05f);
+        a3_ = vdupq_n_f32(0.005f);
+    }
+    
+    // Load coefficients from 4 Mode instances
+    void LoadCoefficients(Mode* modes) {
+        float a1_arr[4] = { modes[0].a1(), modes[1].a1(), modes[2].a1(), modes[3].a1() };
+        float a2_arr[4] = { modes[0].a2(), modes[1].a2(), modes[2].a2(), modes[3].a2() };
+        float a3_arr[4] = { modes[0].a3(), modes[1].a3(), modes[2].a3(), modes[3].a3() };
+        a1_ = vld1q_f32(a1_arr);
+        a2_ = vld1q_f32(a2_arr);
+        a3_ = vld1q_f32(a3_arr);
+    }
+    
+    // Load state from 4 Mode instances
+    void LoadState(Mode* modes) {
+        float s1_arr[4] = { modes[0].state1(), modes[1].state1(), modes[2].state1(), modes[3].state1() };
+        float s2_arr[4] = { modes[0].state2(), modes[1].state2(), modes[2].state2(), modes[3].state2() };
+        state_1_ = vld1q_f32(s1_arr);
+        state_2_ = vld1q_f32(s2_arr);
+    }
+    
+    // Store state back to 4 Mode instances
+    void StoreState(Mode* modes) {
+        float s1_arr[4], s2_arr[4];
+        vst1q_f32(s1_arr, state_1_);
+        vst1q_f32(s2_arr, state_2_);
+        modes[0].state1() = s1_arr[0]; modes[0].state2() = s2_arr[0];
+        modes[1].state1() = s1_arr[1]; modes[1].state2() = s2_arr[1];
+        modes[2].state1() = s1_arr[2]; modes[2].state2() = s2_arr[2];
+        modes[3].state1() = s1_arr[3]; modes[3].state2() = s2_arr[3];
+    }
+    
+    // Process 4 modes in parallel with same input
+    // Returns bandpass outputs for all 4 modes
+    float32x4_t Process(float32x4_t in) {
+        // v3 = in - state_2_
+        float32x4_t v3 = vsubq_f32(in, state_2_);
+        
+        // v1 = a1*state_1 + a2*v3 (bandpass)
+        float32x4_t v1 = vmlaq_f32(vmulq_f32(a1_, state_1_), a2_, v3);
+        
+        // v2 = state_2 + a2*state_1 + a3*v3 (lowpass)
+        float32x4_t v2 = vaddq_f32(state_2_, vmlaq_f32(vmulq_f32(a2_, state_1_), a3_, v3));
+        
+        // Update states: state = 2*v - state
+        const float32x4_t k2 = vdupq_n_f32(2.0f);
+        state_1_ = vsubq_f32(vmulq_f32(k2, v1), state_1_);
+        state_2_ = vsubq_f32(vmulq_f32(k2, v2), state_2_);
+        
+        return v1;  // Return bandpass outputs
+    }
+    
+    void Reset() {
+        state_1_ = vdupq_n_f32(0.0f);
+        state_2_ = vdupq_n_f32(0.0f);
+    }
+    
+private:
+    float32x4_t state_1_, state_2_;
+    float32x4_t a1_, a2_, a3_;
+};
+#endif // USE_NEON
 
 // ============================================================================
 // Bowed Mode - Bandpass filter + Delay line for banded waveguide synthesis
@@ -330,7 +413,89 @@ public:
         float sum_center = 0.0f;
         float sum_side = 0.0f;
         
-        // Process all active normal modes
+#ifdef USE_NEON
+        // NEON-optimized mode processing: 4 modes at a time
+        float32x4_t exc_vec = vdupq_n_f32(excitation);
+        float32x4_t sum_center_vec = vdupq_n_f32(0.0f);
+        float32x4_t sum_side_vec = vdupq_n_f32(0.0f);
+        
+        // Pre-compute amplitudes for all modes (batch of 4)
+        size_t i = 0;
+        for (; i + 4 <= num_modes; i += 4) {
+            // Load coefficients and state for 4 modes
+            float a1_arr[4], a2_arr[4], a3_arr[4];
+            float s1_arr[4], s2_arr[4];
+            for (int j = 0; j < 4; ++j) {
+                a1_arr[j] = modes_[i+j].a1();
+                a2_arr[j] = modes_[i+j].a2();
+                a3_arr[j] = modes_[i+j].a3();
+                s1_arr[j] = modes_[i+j].state1();
+                s2_arr[j] = modes_[i+j].state2();
+            }
+            float32x4_t a1 = vld1q_f32(a1_arr);
+            float32x4_t a2 = vld1q_f32(a2_arr);
+            float32x4_t a3 = vld1q_f32(a3_arr);
+            float32x4_t state_1 = vld1q_f32(s1_arr);
+            float32x4_t state_2 = vld1q_f32(s2_arr);
+            
+            // SVF processing for 4 modes
+            // v3 = in - state_2
+            float32x4_t v3 = vsubq_f32(exc_vec, state_2);
+            
+            // v1 = a1*state_1 + a2*v3 (bandpass)
+            float32x4_t v1 = vmlaq_f32(vmulq_f32(a1, state_1), a2, v3);
+            
+            // v2 = state_2 + a2*state_1 + a3*v3 (lowpass)
+            float32x4_t v2 = vaddq_f32(state_2, vmlaq_f32(vmulq_f32(a2, state_1), a3, v3));
+            
+            // Update states: state = 2*v - state
+            const float32x4_t k2 = vdupq_n_f32(2.0f);
+            state_1 = vsubq_f32(vmulq_f32(k2, v1), state_1);
+            state_2 = vsubq_f32(vmulq_f32(k2, v2), state_2);
+            
+            // Store updated states back
+            vst1q_f32(s1_arr, state_1);
+            vst1q_f32(s2_arr, state_2);
+            for (int j = 0; j < 4; ++j) {
+                modes_[i+j].state1() = s1_arr[j];
+                modes_[i+j].state2() = s2_arr[j];
+            }
+            
+            // Compute amplitudes for this batch
+            float amp_arr[4], aux_arr[4];
+            for (int j = 0; j < 4; ++j) {
+                amp_arr[j] = amplitudes.Next();
+                aux_arr[j] = aux_amplitudes.Next();
+            }
+            float32x4_t amp_vec = vld1q_f32(amp_arr);
+            float32x4_t aux_vec = vld1q_f32(aux_arr);
+            
+            // Accumulate weighted outputs
+            sum_center_vec = vmlaq_f32(sum_center_vec, v1, amp_vec);
+            sum_side_vec = vmlaq_f32(sum_side_vec, v1, aux_vec);
+        }
+        
+        // Horizontal sum of vectors
+        float32x2_t sum_c_low = vget_low_f32(sum_center_vec);
+        float32x2_t sum_c_high = vget_high_f32(sum_center_vec);
+        sum_c_low = vadd_f32(sum_c_low, sum_c_high);
+        sum_center = vget_lane_f32(vpadd_f32(sum_c_low, sum_c_low), 0);
+        
+        float32x2_t sum_s_low = vget_low_f32(sum_side_vec);
+        float32x2_t sum_s_high = vget_high_f32(sum_side_vec);
+        sum_s_low = vadd_f32(sum_s_low, sum_s_high);
+        sum_side = vget_lane_f32(vpadd_f32(sum_s_low, sum_s_low), 0);
+        
+        // Process remaining modes (less than 4)
+        for (; i < num_modes; ++i) {
+            float s = modes_[i].Process(excitation);
+            float amp = amplitudes.Next();
+            float aux_amp = aux_amplitudes.Next();
+            sum_center += s * amp;
+            sum_side += s * aux_amp;
+        }
+#else
+        // Scalar fallback: Process all active normal modes
         for (size_t i = 0; i < num_modes; ++i) {
             float s = modes_[i].Process(excitation);
             float amp = amplitudes.Next();
@@ -338,6 +503,7 @@ public:
             sum_center += s * amp;
             sum_side += s * aux_amp;
         }
+#endif
         
         // Process bowed modes if bow_strength > 0
         if (bow_strength > 0.001f) {
