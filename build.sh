@@ -83,11 +83,14 @@ $ENGINE run --rm --entrypoint "" \
     -e HOME=/tmp \
     -v "${SDK_PLATFORM}:/sdk-platform:ro" \
     -v "${SCRIPT_DIR}/drumlogue/${PROJECT}:/project-src:ro" \
+    -v "${SCRIPT_DIR}/drumlogue/common:/project-common:ro" \
     -v "${OUTPUT_MOUNT}:/output" \
     -v "${SCRIPT_DIR}/eurorack:/repo/eurorack:ro" \
     "$IMAGE" /bin/bash -c "
         rm -rf /workspace/drumlogue && \
         cp -r /sdk-platform/drumlogue /workspace/ && \
+        mkdir -p /workspace/drumlogue/common && \
+        cp -r /project-common/* /workspace/drumlogue/common/ && \
         rm -rf /workspace/drumlogue/${PROJECT} && \
         mkdir -p /workspace/drumlogue/${PROJECT} && \
         cp -r /project-src/* /workspace/drumlogue/${PROJECT}/ && \

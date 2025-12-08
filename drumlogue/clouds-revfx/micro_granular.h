@@ -11,6 +11,13 @@
 #include "stmlib/dsp/dsp.h"
 #include "stmlib/utils/random.h"
 #include "clouds/dsp/frame.h"
+#include "dsp/neon_dsp.h"
+
+#include <algorithm>
+
+#ifdef USE_NEON
+#include "../common/simd_utils.h"
+#endif
 
 namespace clouds_revfx {
 
@@ -130,10 +137,8 @@ class MicroGranular {
     // Process all active grains and mix
     float out_l[64];
     float out_r[64];
-    for (size_t i = 0; i < size; ++i) {
-      out_l[i] = 0.0f;
-      out_r[i] = 0.0f;
-    }
+    // Use NEON-optimized buffer clearing
+    clouds_revfx::neon::ClearStereoBuffers(out_l, out_r, static_cast<uint32_t>(size));
     
     for (size_t g = 0; g < kMaxMicroGrains; ++g) {
       if (grains_[g].active) {
@@ -141,18 +146,33 @@ class MicroGranular {
       }
     }
     
+    // Soft clip the granular output buffers using NEON
+#ifdef USE_NEON
+    {
+      uint32_t i = 0;
+      for (; i + 4 <= size; i += 4) {
+        float32x4_t l = simd_load4(&out_l[i]);
+        float32x4_t r = simd_load4(&out_r[i]);
+        simd_store4(&out_l[i], simd_softclip4(l));
+        simd_store4(&out_r[i], simd_softclip4(r));
+      }
+      // Scalar tail
+      for (; i < size; ++i) {
+        out_l[i] = SoftClip(out_l[i]);
+        out_r[i] = SoftClip(out_r[i]);
+      }
+    }
+#else
+    for (size_t i = 0; i < size; ++i) {
+      out_l[i] = SoftClip(out_l[i]);
+      out_r[i] = SoftClip(out_r[i]);
+    }
+#endif
+    
     // Mix granular output with dry signal
     for (size_t i = 0; i < size; ++i) {
-      float wet_l = out_l[i];
-      float wet_r = out_r[i];
-      
-      // Soft clip the granular output
-      wet_l = SoftClip(wet_l);
-      wet_r = SoftClip(wet_r);
-      
-      // Mix
-      in_out[i].l = in_out[i].l * (1.0f - amount_) + wet_l * amount_;
-      in_out[i].r = in_out[i].r * (1.0f - amount_) + wet_r * amount_;
+      in_out[i].l = in_out[i].l * (1.0f - amount_) + out_l[i] * amount_;
+      in_out[i].r = in_out[i].r * (1.0f - amount_) + out_r[i] * amount_;
     }
   }
   
@@ -220,10 +240,95 @@ class MicroGranular {
   }
   
   void ProcessGrain(MicroGrain* grain, float* out_l, float* out_r, size_t size) {
-    for (size_t i = 0; i < size; ++i) {
+#ifdef USE_NEON
+    // NEON-optimized grain processing: process 4 samples at a time when possible
+    // Pre-calculate how many samples remain until grain ends
+    int32_t samples_until_end = grain->size - (grain->phase >> 16);
+    
+    // Guard against division by zero or very small envelope_increment
+    float env_samples_until_end;
+    if (grain->envelope_increment > 1e-6f) {
+      env_samples_until_end = (2.0f - grain->envelope_phase) / grain->envelope_increment;
+    } else {
+      env_samples_until_end = static_cast<float>(size);  // Effectively infinite
+    }
+    int32_t max_safe_samples = std::min(samples_until_end, 
+                                        static_cast<int32_t>(env_samples_until_end));
+    
+    size_t i = 0;
+    
+    // Process 4 samples at a time while we can guarantee grain stays active
+    while (i + 4 <= size && max_safe_samples >= 4) {
+      // Pre-compute envelope for 4 consecutive samples
+      float env0 = grain->GetEnvelope();
+      grain->envelope_phase += grain->envelope_increment;
+      float env1 = grain->GetEnvelope();
+      grain->envelope_phase += grain->envelope_increment;
+      float env2 = grain->GetEnvelope();
+      grain->envelope_phase += grain->envelope_increment;
+      float env3 = grain->GetEnvelope();
+      grain->envelope_phase += grain->envelope_increment;
+      
+      // Use vld1q_f32 for portable NEON vector initialization
+      float env_arr[4] = {env0, env1, env2, env3};
+      float32x4_t env_vec = vld1q_f32(env_arr);
+      float32x4_t gain_l_vec = vdupq_n_f32(grain->gain_l);
+      float32x4_t gain_r_vec = vdupq_n_f32(grain->gain_r);
+      
+      // Load 4 samples with linear interpolation (unrolled)
+      // Use mask-based wrap instead of modulo for performance
+      const int32_t buffer_mask = buffer_size_ - 1;  // Works if buffer_size_ is power of 2
+      float samples_l[4], samples_r[4];
+      for (int j = 0; j < 4; ++j) {
+        int32_t sample_index = grain->start_position + (grain->phase >> 16);
+        // Use mask if power-of-2, otherwise fall back to modulo
+        if ((buffer_size_ & buffer_mask) == 0) {
+          sample_index = sample_index & buffer_mask;
+        } else {
+          sample_index = sample_index % buffer_size_;
+        }
+        int32_t next_index = (sample_index + 1);
+        if ((buffer_size_ & buffer_mask) == 0) {
+          next_index = next_index & buffer_mask;
+        } else {
+          next_index = next_index % buffer_size_;
+        }
+        float frac = static_cast<float>(grain->phase & 0xFFFF) * (1.0f / 65536.0f);
+        float inv_frac = 1.0f - frac;
+        
+        samples_l[j] = buffer_l_[sample_index] * inv_frac + buffer_l_[next_index] * frac;
+        samples_r[j] = buffer_r_[sample_index] * inv_frac + buffer_r_[next_index] * frac;
+        
+        grain->phase += grain->phase_increment;
+      }
+      
+      // NEON multiply-accumulate: out += sample * env * gain
+      float32x4_t samp_l = vld1q_f32(samples_l);
+      float32x4_t samp_r = vld1q_f32(samples_r);
+      float32x4_t out_l_vec = vld1q_f32(&out_l[i]);
+      float32x4_t out_r_vec = vld1q_f32(&out_r[i]);
+      
+      // Apply envelope and gain: sample * env * gain
+      samp_l = vmulq_f32(samp_l, env_vec);
+      samp_l = vmulq_f32(samp_l, gain_l_vec);
+      samp_r = vmulq_f32(samp_r, env_vec);
+      samp_r = vmulq_f32(samp_r, gain_r_vec);
+      
+      // Accumulate
+      out_l_vec = vaddq_f32(out_l_vec, samp_l);
+      out_r_vec = vaddq_f32(out_r_vec, samp_r);
+      
+      vst1q_f32(&out_l[i], out_l_vec);
+      vst1q_f32(&out_r[i], out_r_vec);
+      
+      i += 4;
+      max_safe_samples -= 4;
+    }
+    
+    // Scalar tail: handle remaining samples or when near grain end
+    for (; i < size; ++i) {
       if (!grain->active) break;
       
-      // Get envelope
       float env = grain->GetEnvelope();
       grain->envelope_phase += grain->envelope_increment;
       
@@ -232,7 +337,38 @@ class MicroGranular {
         break;
       }
       
-      // Read from buffer with linear interpolation
+      int32_t sample_index = grain->start_position + (grain->phase >> 16);
+      sample_index = sample_index % buffer_size_;
+      int32_t next_index = (sample_index + 1) % buffer_size_;
+      float frac = static_cast<float>(grain->phase & 0xFFFF) * (1.0f / 65536.0f);
+      
+      float sample_l = buffer_l_[sample_index] * (1.0f - frac) + 
+                       buffer_l_[next_index] * frac;
+      float sample_r = buffer_r_[sample_index] * (1.0f - frac) + 
+                       buffer_r_[next_index] * frac;
+      
+      out_l[i] += sample_l * env * grain->gain_l;
+      out_r[i] += sample_r * env * grain->gain_r;
+      
+      grain->phase += grain->phase_increment;
+      
+      if ((grain->phase >> 16) >= grain->size) {
+        grain->active = false;
+      }
+    }
+#else
+    // Scalar fallback
+    for (size_t i = 0; i < size; ++i) {
+      if (!grain->active) break;
+      
+      float env = grain->GetEnvelope();
+      grain->envelope_phase += grain->envelope_increment;
+      
+      if (grain->envelope_phase >= 2.0f) {
+        grain->active = false;
+        break;
+      }
+      
       int32_t sample_index = grain->start_position + (grain->phase >> 16);
       sample_index = sample_index % buffer_size_;
       int32_t next_index = (sample_index + 1) % buffer_size_;
@@ -243,18 +379,16 @@ class MicroGranular {
       float sample_r = buffer_r_[sample_index] * (1.0f - frac) + 
                        buffer_r_[next_index] * frac;
       
-      // Apply envelope and panning
       out_l[i] += sample_l * env * grain->gain_l;
       out_r[i] += sample_r * env * grain->gain_r;
       
-      // Advance phase
       grain->phase += grain->phase_increment;
       
-      // Check if grain finished
       if ((grain->phase >> 16) >= grain->size) {
         grain->active = false;
       }
     }
+#endif
   }
   
   // Convert semitones to ratio

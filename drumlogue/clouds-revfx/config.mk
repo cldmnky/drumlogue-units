@@ -55,5 +55,10 @@ ULIBS += -lc
 ##############################################################################
 # Macros
 #
+# USE_NEON: Enable ARM NEON SIMD optimizations
+#   Targets simple parallel operations: buffer clear, gain, stereo interleave
+#   Uses 128-bit NEON registers (4 floats per operation)
+#   NOTE: Feedback loops (filters, delays) remain scalar - NEON doesn't help there
+#   Based on drumlogue developer findings, over-vectorization can hurt performance
 
-UDEFS = 
+UDEFS = -DUSE_NEON 
