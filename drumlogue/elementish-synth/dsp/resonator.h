@@ -404,12 +404,10 @@ public:
             vst1q_f32(&soa_state1_[i], state_1);
             vst1q_f32(&soa_state2_[i], state_2);
             
-            // Compute amplitudes for this batch (still needs scalar - CosineOscillator is sequential)
+            // Batch compute amplitudes using optimized Next4()
             float amp_arr[4], aux_arr[4];
-            for (int j = 0; j < 4; ++j) {
-                amp_arr[j] = amplitudes.Next();
-                aux_arr[j] = aux_amplitudes.Next();
-            }
+            amplitudes.Next4(amp_arr);
+            aux_amplitudes.Next4(aux_arr);
             float32x4_t amp_vec = vld1q_f32(amp_arr);
             float32x4_t aux_vec = vld1q_f32(aux_arr);
             
@@ -528,8 +526,25 @@ public:
         out_side = (sum_side - sum_center) * 4.0f * space_;
         
         // Soft clamp to avoid harsh clipping
+#ifdef USE_NEON
+        // Use NEON FastTanh4 for both channels in one operation
+        float32x2_t stereo = {out_center * 0.5f, out_side * 0.5f};
+        const float32x2_t k27_2 = vdup_n_f32(27.0f);
+        const float32x2_t k9_2 = vdup_n_f32(9.0f);
+        float32x2_t x2 = vmul_f32(stereo, stereo);
+        float32x2_t num = vmul_f32(stereo, vadd_f32(k27_2, x2));
+        float32x2_t denom = vmla_f32(k27_2, k9_2, x2);
+        // Use reciprocal estimate + Newton-Raphson
+        float32x2_t recip = vrecpe_f32(denom);
+        recip = vmul_f32(vrecps_f32(denom, recip), recip);
+        stereo = vmul_f32(num, recip);
+        stereo = vmul_f32(stereo, vdup_n_f32(2.0f));  // Scale by 2
+        out_center = vget_lane_f32(stereo, 0);
+        out_side = vget_lane_f32(stereo, 1);
+#else
         out_center = FastTanh(out_center * 0.5f) * 2.0f;
         out_side = FastTanh(out_side * 0.5f) * 2.0f;
+#endif
     }
     
     // Process with stereo output (Elements-style, no bowing)
@@ -1089,20 +1104,43 @@ public:
     }
     
     float Process(float excitation) {
-        float out = 0.0f;
-        
-        // Main string gets full excitation
-        out += strings_[0].Process(excitation) * kAmplitude[0];
+        // Main string gets full excitation (string 0)
+        float main_out = strings_[0].Process(excitation) * kAmplitude[0];
         
         // Sympathetic strings get reduced excitation
         // They "ring along" with the main string via acoustic coupling
         float sympathetic_input = excitation * 0.2f;
-        for (int i = 1; i < kNumStrings; ++i) {
-            out += strings_[i].Process(sympathetic_input) * kAmplitude[i];
+        float sympathetic_out = 0.0f;
+        
+#ifdef USE_NEON
+        // NEON: Process strings 1-4 in parallel
+        // First, process all 4 strings and collect outputs
+        float string_outs[4];
+        for (int i = 0; i < 4; ++i) {
+            string_outs[i] = strings_[i + 1].Process(sympathetic_input);
         }
         
-        // Normalize output (sum of amplitudes is ~2.3)
-        return out * 0.45f;
+        // Load outputs and amplitudes into NEON vectors
+        float32x4_t outs_vec = vld1q_f32(string_outs);
+        float32x4_t amps_vec = vld1q_f32(&kAmplitude[1]);  // Amplitudes for strings 1-4
+        
+        // Multiply and accumulate
+        float32x4_t weighted = vmulq_f32(outs_vec, amps_vec);
+        
+        // Horizontal sum
+        float32x2_t sum_low = vget_low_f32(weighted);
+        float32x2_t sum_high = vget_high_f32(weighted);
+        float32x2_t sum = vadd_f32(sum_low, sum_high);
+        sympathetic_out = vget_lane_f32(vpadd_f32(sum, sum), 0);
+#else
+        // Scalar fallback
+        for (int i = 1; i < kNumStrings; ++i) {
+            sympathetic_out += strings_[i].Process(sympathetic_input) * kAmplitude[i];
+        }
+#endif
+        
+        // Combine and normalize (sum of amplitudes is ~2.3)
+        return (main_out + sympathetic_out) * 0.45f;
     }
     
 private:
