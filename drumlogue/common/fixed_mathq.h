@@ -4,7 +4,7 @@
 // Minimal dependencies: uses arm_intrinsics for fast multiply and bitfield ops.
 
 #include <stdint.h>
-#include "arm_intrinsics.h"
+#include "./arm_intrinsics.h"
 
 #ifndef q31_t
 typedef int32_t q31_t;
@@ -30,7 +30,8 @@ typedef int8_t q7_t;
 
 #define q7_to_f32(q)  ((float)(q) * q7_to_f32_c)
 #define q11_to_f32(q) ((float)(q) * q11_to_f32_c)
-#define f32_to_q7(f)  ((q7_t)usat_asr(8, (int32_t)((f) * ((1 << 7) - 1)), 0))
+// Clamp to [-1, 1] before conversion to prevent int32_t overflow
+#define f32_to_q7(f)  ((q7_t)usat_asr(8, (int32_t)(((f) < -1.0f ? -1.0f : ((f) > 1.0f ? 1.0f : (f))) * ((1 << 7) - 1)), 0))
 
 // Q31 linear interpolation: x0 + frac * (x1 - x0). frac in [0, 0x7FFFFFFF].
 DRUMLOGUE_ALWAYS_INLINE q31_t linintq31(q31_t frac, q31_t x0, q31_t x1) {

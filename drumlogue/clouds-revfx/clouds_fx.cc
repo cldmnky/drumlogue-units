@@ -242,37 +242,34 @@ void CloudsFx::Process(const float * in, float * out, uint32_t frames, uint8_t i
     
     // Convert FloatFrame array back to interleaved float output
     // Use NEON utilities for output protection (NaN removal and clamping)
+    // Note: Uses pre-allocated member buffers (temp_l_, temp_r_, temp_mono_)
+    // to avoid stack overflow from 2KB+ per-call allocation
     if (out_ch >= 2) {
       // Stereo output: extract L/R, sanitize and clamp, then write
-      // Extract L/R from FloatFrame to separate buffers for NEON processing
-      float temp_l[kMaxBlockSize];
-      float temp_r[kMaxBlockSize];
-      
+      // Extract L/R from FloatFrame to member buffers for NEON processing
       for (uint32_t i = 0; i < block_size; ++i) {
-        temp_l[i] = s_process_buffer[i].l;
-        temp_r[i] = s_process_buffer[i].r;
+        temp_l_[i] = s_process_buffer[i].l;
+        temp_r_[i] = s_process_buffer[i].r;
       }
       
       // Apply NEON-optimized sanitization and clamping (±1.0 for safety)
-      clouds_revfx::neon::SanitizeAndClamp(temp_l, 1.0f, block_size);
-      clouds_revfx::neon::SanitizeAndClamp(temp_r, 1.0f, block_size);
+      clouds_revfx::neon::SanitizeAndClamp(temp_l_, 1.0f, block_size);
+      clouds_revfx::neon::SanitizeAndClamp(temp_r_, 1.0f, block_size);
       
       // Write to interleaved output using NEON-optimized InterleaveStereo
-      clouds_revfx::neon::InterleaveStereo(temp_l, temp_r, &out[processed * out_ch], block_size);
+      clouds_revfx::neon::InterleaveStereo(temp_l_, temp_r_, &out[processed * out_ch], block_size);
     } else {
       // Mono output: mix L+R and sanitize/clamp
-      float temp_mono[kMaxBlockSize];
-      
       for (uint32_t i = 0; i < block_size; ++i) {
-        temp_mono[i] = (s_process_buffer[i].l + s_process_buffer[i].r) * 0.5f;
+        temp_mono_[i] = (s_process_buffer[i].l + s_process_buffer[i].r) * 0.5f;
       }
       
       // Apply NEON-optimized sanitization and clamping
-      clouds_revfx::neon::SanitizeAndClamp(temp_mono, 1.0f, block_size);
+      clouds_revfx::neon::SanitizeAndClamp(temp_mono_, 1.0f, block_size);
       
       for (uint32_t i = 0; i < block_size; ++i) {
         uint32_t dst_idx = (processed + i);
-        out[dst_idx] = temp_mono[i];
+        out[dst_idx] = temp_mono_[i];
       }
     }
     

@@ -245,4 +245,6 @@ inline void SanitizeAndClamp(float* buffer, float limit, uint32_t frames) {
 } // namespace neon
 } // namespace NEON_DSP_NS
 
-#undef NEON_DSP_NS
+// NOTE: NEON_DSP_NS intentionally not undefined here.
+// The including file is responsible for defining and undefining it.
+// See drumlogue/clouds-revfx/dsp/neon_dsp.h for the pattern.

@@ -244,7 +244,14 @@ class MicroGranular {
     // NEON-optimized grain processing: process 4 samples at a time when possible
     // Pre-calculate how many samples remain until grain ends
     int32_t samples_until_end = grain->size - (grain->phase >> 16);
-    float env_samples_until_end = (2.0f - grain->envelope_phase) / grain->envelope_increment;
+    
+    // Guard against division by zero or very small envelope_increment
+    float env_samples_until_end;
+    if (grain->envelope_increment > 1e-6f) {
+      env_samples_until_end = (2.0f - grain->envelope_phase) / grain->envelope_increment;
+    } else {
+      env_samples_until_end = static_cast<float>(size);  // Effectively infinite
+    }
     int32_t max_safe_samples = std::min(samples_until_end, 
                                         static_cast<int32_t>(env_samples_until_end));
     
@@ -262,16 +269,30 @@ class MicroGranular {
       float env3 = grain->GetEnvelope();
       grain->envelope_phase += grain->envelope_increment;
       
-      float32x4_t env_vec = {env0, env1, env2, env3};
+      // Use vld1q_f32 for portable NEON vector initialization
+      float env_arr[4] = {env0, env1, env2, env3};
+      float32x4_t env_vec = vld1q_f32(env_arr);
       float32x4_t gain_l_vec = vdupq_n_f32(grain->gain_l);
       float32x4_t gain_r_vec = vdupq_n_f32(grain->gain_r);
       
       // Load 4 samples with linear interpolation (unrolled)
+      // Use mask-based wrap instead of modulo for performance
+      const int32_t buffer_mask = buffer_size_ - 1;  // Works if buffer_size_ is power of 2
       float samples_l[4], samples_r[4];
       for (int j = 0; j < 4; ++j) {
         int32_t sample_index = grain->start_position + (grain->phase >> 16);
-        sample_index = sample_index % buffer_size_;
-        int32_t next_index = (sample_index + 1) % buffer_size_;
+        // Use mask if power-of-2, otherwise fall back to modulo
+        if ((buffer_size_ & buffer_mask) == 0) {
+          sample_index = sample_index & buffer_mask;
+        } else {
+          sample_index = sample_index % buffer_size_;
+        }
+        int32_t next_index = (sample_index + 1);
+        if ((buffer_size_ & buffer_mask) == 0) {
+          next_index = next_index & buffer_mask;
+        } else {
+          next_index = next_index % buffer_size_;
+        }
         float frac = static_cast<float>(grain->phase & 0xFFFF) * (1.0f / 65536.0f);
         float inv_frac = 1.0f - frac;
         

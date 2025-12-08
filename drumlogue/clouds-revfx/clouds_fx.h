@@ -160,6 +160,13 @@ class CloudsFx {
   // Base parameter values (before LFO modulation)
   // Used to restore original values when LFO target changes
   std::array<float, UNIT_PARAM_MAX> base_param_values_{};
+  
+  // Pre-allocated temp buffers for NEON output processing
+  // Avoids per-call stack allocation of 2KB+ in Process()
+  static constexpr size_t kMaxTempBlockSize = 64;
+  float temp_l_[kMaxTempBlockSize];
+  float temp_r_[kMaxTempBlockSize];
+  float temp_mono_[kMaxTempBlockSize];
 };
 
 #endif  // CLOUDS_FX_H
