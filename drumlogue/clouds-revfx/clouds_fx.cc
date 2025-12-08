@@ -1,6 +1,10 @@
 #include "clouds_fx.h"
 #include "dsp/neon_dsp.h"
 
+#ifdef USE_NEON
+#include "../common/simd_utils.h"
+#endif
+
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -253,12 +257,8 @@ void CloudsFx::Process(const float * in, float * out, uint32_t frames, uint8_t i
       clouds_revfx::neon::SanitizeAndClamp(temp_l, 1.0f, block_size);
       clouds_revfx::neon::SanitizeAndClamp(temp_r, 1.0f, block_size);
       
-      // Write to interleaved output
-      for (uint32_t i = 0; i < block_size; ++i) {
-        uint32_t dst_idx = (processed + i);
-        out[dst_idx * out_ch + 0] = temp_l[i];
-        out[dst_idx * out_ch + 1] = temp_r[i];
-      }
+      // Write to interleaved output using NEON-optimized InterleaveStereo
+      clouds_revfx::neon::InterleaveStereo(temp_l, temp_r, &out[processed * out_ch], block_size);
     } else {
       // Mono output: mix L+R and sanitize/clamp
       float temp_mono[kMaxBlockSize];
