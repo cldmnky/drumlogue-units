@@ -105,13 +105,6 @@ public:
     
     void Reset() { state_1_ = state_2_ = 0.0f; }
     
-    // Expose state for NEON batch processing
-    float& state1() { return state_1_; }
-    float& state2() { return state_2_; }
-    float a1() const { return a1_; }
-    float a2() const { return a2_; }
-    float a3() const { return a3_; }
-    
 private:
     float state_1_, state_2_;  // Filter state (ic1eq, ic2eq)
     float g_, k_;              // g = tan(pi*f), k = 1/Q
@@ -346,9 +339,6 @@ public:
 #ifdef USE_NEON
         // NEON-optimized mode processing: 4 modes at a time
         // Using Structure-of-Arrays (SoA) layout for direct SIMD loads
-        // Protect against NaN input (same as scalar Mode::Process)
-        if (excitation != excitation) excitation = 0.0f;
-        
         float32x4_t exc_vec = vdupq_n_f32(excitation);
         float32x4_t sum_center_vec = vdupq_n_f32(0.0f);
         float32x4_t sum_side_vec = vdupq_n_f32(0.0f);
@@ -527,20 +517,31 @@ public:
         
         // Soft clamp to avoid harsh clipping
 #ifdef USE_NEON
-        // Use NEON FastTanh4 for both channels in one operation
-        float32x2_t stereo = {out_center * 0.5f, out_side * 0.5f};
+        // Use NEON FastTanh for both channels with clamping for |x| > 4
+        float32x2_t input = {out_center * 0.5f, out_side * 0.5f};
         const float32x2_t k27_2 = vdup_n_f32(27.0f);
         const float32x2_t k9_2 = vdup_n_f32(9.0f);
-        float32x2_t x2 = vmul_f32(stereo, stereo);
-        float32x2_t num = vmul_f32(stereo, vadd_f32(k27_2, x2));
+        const float32x2_t k4 = vdup_n_f32(4.0f);
+        const float32x2_t kOne = vdup_n_f32(1.0f);
+        const float32x2_t kNegOne = vdup_n_f32(-1.0f);
+        
+        float32x2_t x2 = vmul_f32(input, input);
+        float32x2_t num = vmul_f32(input, vadd_f32(k27_2, x2));
         float32x2_t denom = vmla_f32(k27_2, k9_2, x2);
         // Use reciprocal estimate + Newton-Raphson
         float32x2_t recip = vrecpe_f32(denom);
         recip = vmul_f32(vrecps_f32(denom, recip), recip);
-        stereo = vmul_f32(num, recip);
-        stereo = vmul_f32(stereo, vdup_n_f32(2.0f));  // Scale by 2
-        out_center = vget_lane_f32(stereo, 0);
-        out_side = vget_lane_f32(stereo, 1);
+        float32x2_t result = vmul_f32(num, recip);
+        
+        // Clamp to ±1 for |x| > 4, matching FastTanh4 behavior
+        uint32x2_t gt4 = vcgt_f32(input, k4);
+        uint32x2_t ltneg4 = vclt_f32(input, vneg_f32(k4));
+        result = vbsl_f32(gt4, kOne, result);
+        result = vbsl_f32(ltneg4, kNegOne, result);
+        
+        result = vmul_f32(result, vdup_n_f32(2.0f));  // Scale by 2
+        out_center = vget_lane_f32(result, 0);
+        out_side = vget_lane_f32(result, 1);
 #else
         out_center = FastTanh(out_center * 0.5f) * 2.0f;
         out_side = FastTanh(out_side * 0.5f) * 2.0f;
@@ -758,7 +759,7 @@ private:
     // Structure-of-Arrays (SoA) layout for NEON optimization
     // Allows direct vld1q_f32 loads without scatter-gather
     float soa_a1_[kNumModes];    // Pre-computed a1 coefficients
-    float soa_a2_[kNumModes];    // Pre-computed a2 coefficients  
+    float soa_a2_[kNumModes];    // Pre-computed a2 coefficients
     float soa_a3_[kNumModes];    // Pre-computed a3 coefficients
     float soa_state1_[kNumModes]; // Filter state 1 (bandpass)
     float soa_state2_[kNumModes]; // Filter state 2 (lowpass)
@@ -1104,43 +1105,22 @@ public:
     }
     
     float Process(float excitation) {
-        // Main string gets full excitation (string 0)
-        float main_out = strings_[0].Process(excitation) * kAmplitude[0];
+        float out = 0.0f;
+        
+        // Main string gets full excitation
+        out += strings_[0].Process(excitation) * kAmplitude[0];
         
         // Sympathetic strings get reduced excitation
         // They "ring along" with the main string via acoustic coupling
+        // Note: NEON optimization not used here - String::Process() is inherently
+        // serial due to stateful delay line, so NEON overhead exceeds benefit
         float sympathetic_input = excitation * 0.2f;
-        float sympathetic_out = 0.0f;
-        
-#ifdef USE_NEON
-        // NEON: Process strings 1-4 in parallel
-        // First, process all 4 strings and collect outputs
-        float string_outs[4];
-        for (int i = 0; i < 4; ++i) {
-            string_outs[i] = strings_[i + 1].Process(sympathetic_input);
-        }
-        
-        // Load outputs and amplitudes into NEON vectors
-        float32x4_t outs_vec = vld1q_f32(string_outs);
-        float32x4_t amps_vec = vld1q_f32(&kAmplitude[1]);  // Amplitudes for strings 1-4
-        
-        // Multiply and accumulate
-        float32x4_t weighted = vmulq_f32(outs_vec, amps_vec);
-        
-        // Horizontal sum
-        float32x2_t sum_low = vget_low_f32(weighted);
-        float32x2_t sum_high = vget_high_f32(weighted);
-        float32x2_t sum = vadd_f32(sum_low, sum_high);
-        sympathetic_out = vget_lane_f32(vpadd_f32(sum, sum), 0);
-#else
-        // Scalar fallback
         for (int i = 1; i < kNumStrings; ++i) {
-            sympathetic_out += strings_[i].Process(sympathetic_input) * kAmplitude[i];
+            out += strings_[i].Process(sympathetic_input) * kAmplitude[i];
         }
-#endif
         
-        // Combine and normalize (sum of amplitudes is ~2.3)
-        return (main_out + sympathetic_out) * 0.45f;
+        // Normalize output (sum of amplitudes is ~2.3)
+        return out * 0.45f;
     }
     
 private:
