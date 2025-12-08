@@ -28,29 +28,42 @@ static const char * const kPresetNames[kNumPresets] = {
 //               LFO1_ASSIGN, LFO1_SPEED, LFO1_DEPTH, LFO1_WAVE,
 //               LFO2_ASSIGN, LFO2_SPEED, LFO2_DEPTH, LFO2_WAVE}
 static const int32_t kPresets[kNumPresets][24] = {
-    // 0: INIT - Clean starting point
-    {100, 80, 80, 90, 50, 0, 0, 64, 64, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0},
+    // 0: INIT - Clean, neutral reverb starting point
+    // Medium mix, moderate decay, balanced diffusion, no extras
+    {100, 70, 70, 100, 50, 0, 0, 64, 64, 64, 64, 0, 0, 64, 64, 0, 0, 64, 0, 0, 0, 64, 0, 0},
     
-    // 1: HALL - Large concert hall, long decay
-    {120, 110, 100, 100, 40, 30, 0, 64, 64, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0},
+    // 1: HALL - Large concert hall, natural and spacious
+    // Long decay, high diffusion, slightly dark (LP~80), subtle texture for air
+    {110, 115, 100, 80, 45, 20, 0, 64, 64, 64, 64, 0, 0, 64, 64, 0, 0, 64, 0, 0, 0, 64, 0, 0},
     
-    // 2: PLATE - Bright plate reverb
-    {100, 70, 127, 127, 60, 0, 0, 64, 64, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0},
+    // 2: PLATE - Classic bright plate reverb
+    // Short-medium decay, max diffusion (dense), very bright, no texture/grain
+    {100, 55, 127, 127, 55, 0, 0, 64, 64, 64, 64, 0, 0, 64, 64, 0, 0, 64, 0, 0, 0, 64, 0, 0},
     
-    // 3: SHIMMER - Pitched reverb with octave up
-    {90, 100, 90, 80, 45, 40, 0, 64, 64, 64, 64, 0, 80, 88, 80, 0, 0, 64, 64, 0, 0, 64, 64, 0},
+    // 3: SHIMMER - Ethereal octave-up reverb
+    // Long decay, moderate diffusion, bright, strong pitch shift (+12 semis = 76)
+    // Subtle grain adds sparkle, slow LFO on shift pitch for movement
+    {120, 105, 85, 110, 40, 30, 25, 80, 50, 76, 64, 0, 90, 76, 85, 0, 13, 25, 40, 0, 0, 64, 0, 0},
     
-    // 4: CLOUD - Granular texture + reverb
-    {80, 90, 90, 85, 50, 60, 80, 90, 70, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0},
+    // 4: CLOUD - Dense granular texture cloud
+    // Heavy grain processing, moderate reverb, slow LFO on grain position
+    // Creates evolving, atmospheric textures
+    {90, 85, 80, 90, 45, 50, 100, 100, 85, 64, 64, 0, 0, 64, 64, 0, 11, 20, 60, 0, 9, 35, 45, 2},
     
-    // 5: FREEZE - For frozen/pad sounds
-    {100, 127, 100, 95, 30, 80, 60, 100, 50, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0, 0, 64, 64, 0},
+    // 5: FREEZE - Infinite sustain pad machine
+    // Very long decay, high diffusion, texture for smoothness
+    // Designed to capture and sustain incoming audio infinitely
+    {130, 127, 110, 85, 35, 70, 40, 90, 45, 64, 64, 0, 0, 64, 64, 0, 6, 15, 35, 0, 0, 64, 0, 0},
     
-    // 6: OCTAVER - Pitch shifted reverb
-    {90, 85, 80, 90, 50, 20, 0, 64, 64, 64, 64, 0, 100, 52, 70, 0, 0, 64, 64, 0, 0, 64, 64, 0},
+    // 6: OCTAVER - Pitch-shifted reverb (octave down)
+    // Clear pitch shift effect (-12 semis = 52), moderate reverb, crisp
+    // Good for thickening bass or creating sub-octave drones
+    {100, 75, 75, 95, 55, 15, 0, 64, 64, 64, 64, 0, 100, 52, 75, 0, 0, 64, 0, 0, 0, 64, 0, 0},
     
-    // 7: AMBIENT - Lush ambient wash with subtle LFO modulation on texture
-    {140, 120, 110, 75, 35, 50, 40, 80, 40, 64, 64, 0, 30, 76, 90, 0, 6, 40, 50, 0, 0, 64, 64, 0},
+    // 7: AMBIENT - Lush, evolving ambient wash
+    // Long decay, warm (LP lower), texture + light grain for movement
+    // Dual LFO: slow texture mod + slow grain density mod for organic evolution
+    {140, 110, 95, 70, 40, 55, 35, 85, 55, 64, 64, 0, 20, 71, 80, 0, 6, 18, 50, 0, 9, 22, 40, 0},
 };
 
 // Static buffer for reverb delay lines (~64KB for 32768 * 2 bytes)
@@ -448,7 +461,7 @@ uint8_t CloudsFx::getPresetIndex() const {
 
 const char * CloudsFx::getPresetName(uint8_t idx) {
   if (idx >= kNumPresets) {
-    idx = 0;
+    return nullptr;
   }
   return kPresetNames[idx];
 }

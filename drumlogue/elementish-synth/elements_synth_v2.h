@@ -360,51 +360,69 @@ public:
     void LoadPreset(uint8_t idx) {
         preset_index_ = idx;
         
+        // Reset DSP state before applying new preset to ensure clean transition
+        synth_.Reset();
+        
 #ifdef ELEMENTS_LIGHTWEIGHT
         // Lightweight preset format:
         // bow, blow, strike, mallet, bowT, blwT, stkMode, granD,
         // geo, bright, damp, pos, model, space, volume,
         // atk, dec, rel, envMode, coarse, fine
         switch (idx) {
-            case 0: // Init - Basic mallet hit
+            case 0: // Init - Clean percussive starting point
+                // Basic modal hit, neutral resonator, good for exploring
                 setPresetParams(0, 0, 100, 0,  0, 0, 0, 0,
-                               0, 0, 0, 0,  0, 70, 100,
-                               5, 40, 40, 0,  0, 0);
+                               0, 0, 0, 0,  0, 64, 100,
+                               3, 45, 50, 0,  0, 0);
                 break;
-            case 1: // Bowed String
-                setPresetParams(100, 0, 0, 0,  -24, 0, 0, 0,
-                               -64, -14, -34, -14,  0, 50, 100,
-                               30, 60, 60, 2,  0, 0);
+            case 1: // Bowed Str - Expressive bowed string
+                // Full bow, warm geometry (string-like), moderate damping
+                // Slow attack for realistic bow articulation
+                setPresetParams(100, 0, 0, 0,  -20, 0, 0, 0,
+                               -50, -10, -25, -20,  0, 55, 100,
+                               35, 70, 75, 2,  0, 0);
                 break;
-            case 2: // Bell
+            case 2: // Bell - Metallic bell/chime
+                // Strike with hard mallet, bright bell-like geometry
+                // Long sustain, minimal damping, wide stereo
                 setPresetParams(0, 0, 100, 4,  0, 0, 0, 0,
-                               63, 26, -49, 0,  0, 80, 100,
-                               2, 80, 80, 1,  0, 0);
+                               55, 30, -55, 0,  0, 90, 100,
+                               1, 90, 95, 1,  0, 0);
                 break;
-            case 3: // Pluck
-                setPresetParams(0, 0, 100, 6,  0, 0, 0, 0,
-                               -34, 6, -24, 0,  0, 60, 100,
-                               5, 50, 50, 0,  0, 0);
+            case 3: // Pluck - Acoustic plucked string
+                // Plectrum excitation, string geometry, natural damping
+                // Short attack, medium decay
+                setPresetParams(0, 0, 95, 6,  0, 0, 0, 0,
+                               -45, 10, -15, -10,  0, 60, 100,
+                               2, 55, 45, 0,  0, 0);
                 break;
-            case 4: // Blown Tube
-                setPresetParams(0, 100, 0, 0,  0, -14, 0, 0,
-                               -44, -4, -14, 0,  0, 50, 100,
-                               40, 30, 40, 2,  0, 0);
+            case 4: // Blown - Breathy wind instrument
+                // Pure blow excitation, tube-like geometry
+                // Slow attack for breath buildup, AR envelope
+                setPresetParams(0, 100, 0, 0,  0, -20, 0, 0,
+                               -35, -5, -10, 5,  0, 50, 100,
+                               45, 35, 50, 2,  0, 0);
                 break;
-            case 5: // Marimba
+            case 5: // Marimba - Wooden mallet percussion
+                // Soft mallet, bar-like geometry, warm brightness
+                // Quick attack, medium-long decay
                 setPresetParams(0, 0, 100, 0,  0, 0, 0, 0,
-                               16, 6, -39, -24,  0, 70, 100,
-                               5, 60, 70, 0,  0, 0);
+                               20, 5, -40, -30,  0, 70, 100,
+                               2, 65, 70, 0,  0, 0);
                 break;
-            case 6: // String (Karplus-Strong)
-                setPresetParams(0, 0, 90, 6,  0, 0, 0, 0,
-                               -64, 16, -4, -14,  1, 60, 100,
-                               2, 20, 30, 1,  0, 0);
+            case 6: // String - Karplus-Strong style pluck
+                // String model for realistic pluck, tight damping
+                // Very short attack, medium decay
+                setPresetParams(0, 0, 90, 7,  0, 0, 0, 0,
+                               -60, 15, -5, -15,  1, 60, 100,
+                               1, 40, 35, 1,  0, 0);
                 break;
-            case 7: // Multi-String (12-string style)
-                setPresetParams(0, 0, 100, 6,  0, 0, 0, 0,
-                               -14, -24, -44, 0,  2, 80, 100,
-                               5, 40, 50, 0,  0, 0);
+            case 7: // Drone - Evolving ambient texture
+                // Mixed excitation for complex texture, long sustain
+                // Looping envelope, wide stereo
+                setPresetParams(35, 40, 30, 0,  -10, 10, 2, 40,
+                               -20, -20, -50, 0,  2, 95, 95,
+                               55, 65, 60, 3,  0, 0);
                 break;
         }
 #else
@@ -413,45 +431,56 @@ public:
         // geo, bright, damp, pos, cutoff, reso, fltEnv, model,
         // atk, dec, rel, envMode, lfoRt, lfoDepth, lfoPre, coarse
         switch (idx) {
-            case 0: // Init - Basic mallet hit
+            case 0: // Init - Clean percussive starting point
+                // Basic modal hit, open filter, neutral resonator
                 setPresetParams(0, 0, 100, 0,  0, 0, 0, 0,
                                0, 0, 0, 0,  127, 0, 64, 0,
-                               5, 40, 40, 0,  40, 0, 0);
+                               3, 45, 50, 0,  40, 0, 0);
                 break;
-            case 1: // Bowed String
-                setPresetParams(100, 0, 0, 0,  -24, 0, 0, 0,
-                               -64, -14, -34, -14,  90, 20, 40, 0,
-                               30, 60, 60, 2,  40, 0, 0);
+            case 1: // Bowed Str - Expressive bowed string
+                // Full bow, warm geometry, filter follows envelope
+                setPresetParams(100, 0, 0, 0,  -20, 0, 0, 0,
+                               -50, -10, -25, -20,  85, 25, 50, 0,
+                               35, 70, 75, 2,  40, 0, 0);
                 break;
-            case 2: // Bell
+            case 2: // Bell - Bright metallic bell
+                // Hard mallet, bell geometry, open filter, long decay
                 setPresetParams(0, 0, 100, 4,  0, 0, 0, 0,
-                               63, 26, -49, 0,  127, 0, 80, 0,
-                               2, 80, 80, 1,  40, 0, 0);
+                               55, 30, -55, 0,  127, 0, 80, 0,
+                               1, 90, 95, 1,  40, 0, 0);
                 break;
-            case 3: // Wobble Bass (LFO on cutoff: TRI>CUT preset)
+            case 3: // Wobble - LFO-modulated bass
+                // Strike excitation, resonant filter with LFO sweep
+                // TRI>CUT preset for classic wobble
                 setPresetParams(0, 0, 100, 0,  0, 0, 0, 0,
-                               -34, 6, -24, 0,  80, 50, 90, 0,
-                               5, 50, 50, 0,  60, 90, 1);
+                               -40, 0, -20, 0,  75, 55, 95, 0,
+                               5, 50, 45, 0,  55, 95, 1);
                 break;
-            case 4: // Blown Tube
-                setPresetParams(0, 100, 0, 0,  0, -14, 0, 0,
-                               -44, -4, -14, 0,  70, 30, 50, 0,
-                               40, 30, 40, 2,  40, 0, 0);
+            case 4: // Blown - Breathy wind instrument
+                // Pure blow, tube geometry, moderate filter tracking
+                setPresetParams(0, 100, 0, 0,  0, -20, 0, 0,
+                               -35, -5, -10, 5,  80, 20, 45, 0,
+                               45, 35, 50, 2,  40, 0, 0);
                 break;
-            case 5: // Shimmer (LFO on brightness: TRI>BRI preset)
+            case 5: // Shimmer - Evolving brightness
+                // Mallet hit with LFO on brightness (TRI>BRI)
+                // Creates shimmering, animated texture
                 setPresetParams(0, 0, 100, 0,  0, 0, 0, 0,
-                               16, 6, -39, -24,  100, 10, 60, 0,
-                               5, 60, 70, 0,  50, 80, 4);
+                               20, 5, -40, -30,  110, 15, 65, 0,
+                               5, 70, 75, 0,  45, 85, 4);
                 break;
-            case 6: // Pluck String
-                setPresetParams(0, 0, 90, 6,  0, 0, 0, 0,
-                               -64, 16, -4, -14,  100, 0, 100, 1,
-                               2, 20, 30, 1,  40, 0, 0);
+            case 6: // Pluck Str - Realistic plucked string
+                // String model, plectrum excitation, natural filter
+                setPresetParams(0, 0, 90, 7,  0, 0, 0, 0,
+                               -60, 15, -5, -15,  100, 0, 90, 1,
+                               1, 40, 35, 1,  40, 0, 0);
                 break;
-            case 7: // Drone (looping envelope, LFO on geometry)
-                setPresetParams(30, 30, 40, 0,  -14, 6, 2, 36,
-                               -14, -24, -44, 0,  60, 50, 30, 0,
-                               60, 60, 60, 3,  30, 100, 2);
+            case 7: // Drone - Complex evolving texture
+                // Mixed excitation, looping env, LFO on geometry (SIN>GEO)
+                // Creates slowly morphing drone
+                setPresetParams(35, 40, 30, 0,  -10, 10, 2, 40,
+                               -20, -20, -50, 0,  65, 45, 35, 0,
+                               55, 65, 60, 3,  25, 100, 2);
                 break;
         }
 #endif
@@ -462,17 +491,30 @@ public:
     }
 
     static const char* getPresetName(uint8_t idx) {
+#ifdef ELEMENTS_LIGHTWEIGHT
+        static const char* names[] = {
+            "Init",
+            "Bowed Str",
+            "Bell",
+            "Pluck",
+            "Blown",
+            "Marimba",
+            "String",
+            "Drone"
+        };
+#else
         static const char* names[] = {
             "Init",
             "Bowed Str",
             "Bell",
             "Wobble",
-            "Blown Tube",
+            "Blown",
             "Shimmer",
             "Pluck Str",
             "Drone"
         };
-        return (idx < 8) ? names[idx] : "";
+#endif
+        return (idx < 8) ? names[idx] : nullptr;
     }
 
 private:
@@ -528,6 +570,9 @@ private:
         for (int i = 0; i < kNumParams; ++i) {
             applyParameter(i);
         }
+        
+        // Force resonator to recalculate coefficients with new preset values
+        synth_.ForceResonatorUpdate();
     }
 #else
     // Preset function for full mode (with filter & LFO)
@@ -576,6 +621,9 @@ private:
         for (int i = 0; i < kNumParams; ++i) {
             applyParameter(i);
         }
+        
+        // Force resonator to recalculate coefficients with new preset values
+        synth_.ForceResonatorUpdate();
     }
 #endif
     
