@@ -50,6 +50,9 @@ static const int8_t kScaleChromatic[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
 static const int8_t kScaleMajor[] = {0, 2, 4, 5, 7, 9, 11};
 static const int8_t kScaleMinor[] = {0, 2, 3, 5, 7, 8, 10};
 static const int8_t kScalePentatonic[] = {0, 2, 4, 7, 9};
+// Interval scales: Use out-of-octave offsets (e.g., -12, 12) to create large
+// melodic jumps. These are offsets applied to the base note, allowing octave
+// leaps, fifths below (-5 = fifth down), and other wide intervals.
 static const int8_t kScaleOctaves[] = {0, 12, -12};
 static const int8_t kScaleFifths[] = {0, 7, -5, 12};
 static const int8_t kScaleFourths[] = {0, 5, -7, 12};
@@ -59,9 +62,13 @@ static const int8_t kScaleSeventh[] = {0, 4, 7, 10, 11};
 // Loop buffer size for déjà vu
 static const int kLoopBufferSize = 8;
 
+// Note queue size - enough for max subdivisions per buffer
+static const int kNoteQueueSize = 8;
+
 class MarblesSequencer {
 public:
-    MarblesSequencer() : sample_rate_(48000.0f), enabled_(false), active_(false) {}
+    MarblesSequencer() : sample_rate_(48000.0f), enabled_(false), active_(false),
+                         note_queue_read_(0), note_queue_write_(0) {}
 
     void Init(float sample_rate) {
         sample_rate_ = sample_rate;
@@ -91,9 +98,9 @@ public:
         subdivisions_remaining_ = 0;
         subdivision_count_ = 1;
         
-        note_pending_ = false;
-        pending_note_ = 60;
-        pending_velocity_ = 100;
+        // Clear note queue
+        note_queue_read_ = 0;
+        note_queue_write_ = 0;
         
         UpdateClockRate();
     }
@@ -133,16 +140,26 @@ public:
 
     /**
      * Process audio frames - generates subdivision notes.
+     * Uses skip-ahead optimization instead of per-sample iteration.
+     * Multiple notes per buffer are queued to prevent loss.
      */
     void Process(uint32_t frames) {
         if (!enabled_ || !active_ || subdivisions_remaining_ <= 0) return;
+        if (phase_increment_ <= 0.0f) return;  // Avoid infinite loop
         
-        for (uint32_t i = 0; i < frames; ++i) {
-            phase_ += phase_increment_;
+        // Calculate total phase advance for this buffer
+        float total_advance = phase_increment_ * static_cast<float>(frames);
+        float current_phase = phase_;
+        
+        // Count triggers that will occur in this buffer using skip-ahead
+        while (total_advance > 0.0f && subdivisions_remaining_ > 0) {
+            // Distance to next trigger
+            float distance_to_trigger = 1.0f - current_phase;
             
-            // Check for subdivision trigger
-            if (phase_ >= 1.0f) {
-                phase_ -= 1.0f;
+            if (distance_to_trigger <= total_advance) {
+                // Trigger occurs within this buffer
+                total_advance -= distance_to_trigger;
+                current_phase = 0.0f;  // Reset phase after trigger
                 subdivisions_remaining_--;
                 
                 if (subdivisions_remaining_ > 0) {
@@ -150,17 +167,27 @@ public:
                 } else {
                     // Done with subdivisions for this beat
                     active_ = false;
+                    break;
                 }
+            } else {
+                // No more triggers in this buffer, just advance phase
+                current_phase += total_advance;
+                break;
             }
         }
+        
+        phase_ = current_phase;
     }
 
+    /**
+     * Get next queued note. Returns false if queue is empty.
+     */
     bool GetNextNote(uint8_t* note, uint8_t* velocity) {
-        if (!note_pending_) return false;
+        if (note_queue_read_ == note_queue_write_) return false;  // Queue empty
         
-        *note = pending_note_;
-        *velocity = pending_velocity_;
-        note_pending_ = false;
+        *note = note_queue_[note_queue_read_].note;
+        *velocity = note_queue_[note_queue_read_].velocity;
+        note_queue_read_ = (note_queue_read_ + 1) % kNoteQueueSize;
         return true;
     }
 
@@ -169,6 +196,10 @@ public:
     }
 
     void SetPreset(int preset) {
+        // Bounds checking before casting
+        if (preset < 0 || preset >= SEQ_NUM_PRESETS) {
+            preset = SEQ_OFF;
+        }
         preset_ = static_cast<SeqPreset>(preset);
         enabled_ = (preset_ != SEQ_OFF);
         UpdateClockRate();
@@ -290,9 +321,14 @@ private:
         if (final_velocity < 1) final_velocity = 1;
         if (final_velocity > 127) final_velocity = 127;
         
-        pending_note_ = static_cast<uint8_t>(final_note);
-        pending_velocity_ = static_cast<uint8_t>(final_velocity);
-        note_pending_ = true;
+        // Push to note queue (circular buffer)
+        uint8_t next_write = (note_queue_write_ + 1) % kNoteQueueSize;
+        if (next_write != note_queue_read_) {  // Check for queue full
+            note_queue_[note_queue_write_].note = static_cast<uint8_t>(final_note);
+            note_queue_[note_queue_write_].velocity = static_cast<uint8_t>(final_velocity);
+            note_queue_write_ = next_write;
+        }
+        // If queue is full, note is dropped (shouldn't happen with proper queue size)
     }
 
     int QuantizeToScale(int semitones) {
@@ -418,10 +454,15 @@ private:
     int subdivisions_remaining_;
     int subdivision_count_;
     
-    // Output
-    bool note_pending_;
-    uint8_t pending_note_;
-    uint8_t pending_velocity_;
+    // Note queue (circular buffer to prevent note loss when multiple
+    // subdivisions trigger within one Process() call)
+    struct QueuedNote {
+        uint8_t note;
+        uint8_t velocity;
+    };
+    QueuedNote note_queue_[kNoteQueueSize];
+    uint8_t note_queue_read_;
+    uint8_t note_queue_write_;
 };
 
 }  // namespace marbles

@@ -111,8 +111,10 @@ public:
         // Force resonator to recalculate coefficients with new parameters
         synth_.ForceResonatorUpdate();
         
-        // Initialize sequencer
+#ifdef ELEMENTS_LIGHTWEIGHT
+        // Initialize sequencer (only in lightweight mode)
         sequencer_.Init(48000.0f);  // drumlogue sample rate
+#endif
         
         initialized_ = true;
         return k_unit_err_none;
@@ -148,10 +150,10 @@ public:
             
             uint8_t note, velocity;
             while (sequencer_.GetNextNote(&note, &velocity)) {
-                // Apply coarse transpose
-                int transposed = static_cast<int>(note) + static_cast<int>(coarse_tune_);
-                if (transposed < 0) transposed = 0;
-                if (transposed > 127) transposed = 127;
+                // Apply coarse transpose, fine tune, and pitch bend (matching NoteOn behavior)
+                float transposed = static_cast<float>(note) + coarse_tune_ + fine_tune_ + pitch_bend_;
+                if (transposed < 0.0f) transposed = 0.0f;
+                if (transposed > 127.0f) transposed = 127.0f;
                 synth_.NoteOn(static_cast<uint8_t>(transposed), velocity);
             }
         }
