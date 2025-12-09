@@ -359,12 +359,7 @@ private:
             if (note < 0) note += 12;  // Handle negative offsets
             if (note >= 12) note -= 12;
             
-            int dist = semi - note;
-            if (dist < 0) dist = -dist;
-            
-            // Also check wrapping
-            int dist_wrap = 12 - dist;
-            if (dist_wrap < dist) dist = dist_wrap;
+            int dist = std::abs((semi - note + 12) % 12);
             
             if (dist < min_dist) {
                 min_dist = dist;
