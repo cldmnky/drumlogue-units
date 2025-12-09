@@ -244,7 +244,7 @@ Both units should:
 | 3 | SHIMMER | Ethereal octave-up | Long decay, +12 semitone shift, grain sparkle, LFO on pitch |
 | 4 | CLOUD | Granular texture | Heavy grain, dual LFO (position + density) |
 | 5 | FREEZE | Infinite sustain | Max decay, high texture, for pad capture |
-| 6 | OCTAVER | Sub-octave thickener | Clear -12 semitone shift, crisp reverb |
+| 6 | OCTAVER | Sub-octave thickener | -4.5 semitone shift, crisp reverb |
 | 7 | AMBIENT | Evolving wash | Long/warm decay, dual LFO (texture + grain density) |
 
 ### elementish-synth Preset Design
