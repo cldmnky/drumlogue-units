@@ -3,7 +3,7 @@ layout: unit
 title: Elementish Synth
 tagline: Modal synthesis voice with bow, blow, and strike exciters and versatile resonator models
 unit_type: Synthesizer
-version: v1.0.0
+version: v1.1.0
 filename: elementish_synth.drmlgunit
 download_url: https://github.com/cldmnky/drumlogue-units/releases
 permalink: /units/elementish-synth/
@@ -18,6 +18,7 @@ A powerful modal synthesis voice for the Korg drumlogue, inspired by **Mutable I
 - **Modal synthesis engine** based on Mutable Instruments Elements
 - **Three excitation types**: Bow (friction), Blow (breath), Strike (percussion)
 - **Three resonator models**: Modal (8-partial), String (Karplus-Strong), Multi-String (5 sympathetic strings)
+- **NEON SIMD optimizations** for improved ARM Cortex-A7 performance (~40% faster modal resonator)
 - **12 mallet types** for percussive variety
 - **5 strike modes** including sample, granular, noise, plectrum, and particle
 - **8 built-in presets** covering a range of sounds from mallets to strings to drones

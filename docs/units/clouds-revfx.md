@@ -3,7 +3,7 @@ layout: unit
 title: Clouds Reverb FX
 tagline: Lush, atmospheric reverb with texture processing, granular effects, pitch shifting, and dual LFOs
 unit_type: Reverb Effect
-version: v1.1.0
+version: v1.2.0
 filename: clouds_revfx.drmlgunit
 download_url: https://github.com/cldmnky/drumlogue-units/releases
 permalink: /units/clouds-revfx/
