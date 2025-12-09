@@ -1629,7 +1629,7 @@ int main(int argc, char* argv[]) {
   if (!gate_test_prefix.empty()) {
     SequencerTestConfig config = {
       "gate",
-      param_seq != -999 ? param_seq : 2,  // Default to FAST_RANDOM
+      param_seq != -999 ? param_seq : 3,  // Default to FAST_RANDOM
       param_spread != -999 ? param_spread : 64,
       param_dejavu != -999 ? param_dejavu : 0,
       note,
