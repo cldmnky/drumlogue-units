@@ -370,11 +370,25 @@ public:
     }
 
     void GateOn(uint8_t velocity) {
-        float tuned_note = (float)current_note_ + coarse_tune_ + fine_tune_;
+        // Gate messages from drumlogue pattern sequencer use current_note_ as base
+        float tuned_note = (float)current_note_ + coarse_tune_ + fine_tune_ + pitch_bend_;
+        
+#ifdef ELEMENTS_LIGHTWEIGHT
+        // Trigger sequencer subdivisions (pattern step triggers note burst)
+        if (sequencer_.IsEnabled()) {
+            sequencer_.Trigger(current_note_, velocity);
+            // Don't play the original note - sequencer will generate notes
+            return;
+        }
+#endif
+        
         synth_.NoteOn((uint8_t)tuned_note, velocity);
     }
 
     void GateOff() {
+#ifdef ELEMENTS_LIGHTWEIGHT
+        sequencer_.Release();
+#endif
         synth_.NoteOff();
     }
 

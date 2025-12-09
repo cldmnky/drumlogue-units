@@ -1076,6 +1076,151 @@ void RunSequencerTest(const SequencerTestConfig& config, const std::string& outp
   }
 }
 
+// Run a gate-based sequencer test (simulates drumlogue pattern sequencer)
+// This uses GateOn/GateOff instead of NoteOn/NoteOff
+void RunGateSequencerTest(const SequencerTestConfig& config, const std::string& output_path) {
+  printf("\n=== Gate-Based Sequencer Test (Drumlogue Pattern Sim) ===\n");
+  printf("SEQ=%d (%s), SPREAD=%d, DEJA_VU=%d\n", 
+         config.seq_preset, marbles::MarblesSequencer::GetPresetName(config.seq_preset),
+         config.spread, config.deja_vu);
+  printf("BPM=%.1f, Bars=%d, Base Note=%d (set via COARSE)\n", 
+         config.bpm, config.bars, config.base_note);
+  
+  const int sample_rate = 48000;
+  const int block_size = 64;
+  
+  // Calculate timing
+  float beat_duration = 60.0f / config.bpm;
+  int samples_per_beat = static_cast<int>(beat_duration * sample_rate);
+  int total_beats = config.bars * 4;
+  int total_samples = samples_per_beat * total_beats;
+  
+  printf("Beat duration: %.3fs (%d samples)\n", beat_duration, samples_per_beat);
+  printf("Total: %d beats, %.2fs\n", total_beats, (float)total_samples / sample_rate);
+  
+  // Initialize synth
+  ElementsSynth synth;
+  unit_runtime_desc_t runtime = {
+    .target = 0, .api = 0,
+    .samplerate = 48000, .frames_per_buffer = 64,
+    .input_channels = 0, .output_channels = 2,
+    .padding = {0, 0}
+  };
+  
+  if (synth.Init(&runtime) != k_unit_err_none) {
+    fprintf(stderr, "Failed to initialize synth\n");
+    return;
+  }
+  
+  // Set up synth parameters (similar to sequencer test)
+  synth.setParameter(0, 0);      // bow = 0
+  synth.setParameter(1, 0);      // blow = 0
+  synth.setParameter(2, 100);    // strike = 100
+  synth.setParameter(3, 0);      // mallet = soft
+  synth.setParameter(8, -20);    // geometry
+  synth.setParameter(9, 10);     // brightness
+  synth.setParameter(10, -20);   // damping
+  synth.setParameter(12, 0);     // model = MODAL
+  synth.setParameter(13, 70);    // space = 70%
+  synth.setParameter(14, 100);   // volume
+  synth.setParameter(16, 2);     // attack
+  synth.setParameter(17, 40);    // decay
+  synth.setParameter(18, 50);    // release
+  
+  // Set COARSE to set base note (param 20 in lightweight mode)
+  // COARSE is bipolar: -64 to +63, centered at middle C (60)
+  // So COARSE = base_note - 60
+  int coarse_offset = static_cast<int>(config.base_note) - 60;
+  synth.setParameter(20, coarse_offset);
+  
+  // Set sequencer parameters
+  synth.setParameter(21, config.seq_preset);
+  synth.setParameter(22, config.spread);
+  synth.setParameter(23, config.deja_vu);
+  
+  // Set tempo
+  uint32_t tempo_fixed = static_cast<uint32_t>(config.bpm * 65536.0f);
+  synth.SetTempo(tempo_fixed);
+  
+  printf("\nGenerating %d beats using GateOn/GateOff...\n", total_beats);
+  
+  std::vector<float> output_buffer;
+  std::vector<float> block_buffer(block_size * 2);
+  
+  int samples_rendered = 0;
+  int current_beat = 0;
+  int next_beat_sample = 0;
+  bool gate_on = false;
+  int gate_off_sample = 0;
+  
+  while (samples_rendered < total_samples) {
+    // Check for beat boundaries
+    if (samples_rendered >= next_beat_sample && current_beat < total_beats) {
+      // Gate off from previous beat
+      if (gate_on) {
+        synth.GateOff();
+        gate_on = false;
+      }
+      
+      // Gate on for this beat (velocity 100)
+      synth.GateOn(100);
+      gate_on = true;
+      
+      // Schedule gate off at 80% of beat
+      gate_off_sample = next_beat_sample + static_cast<int>(samples_per_beat * 0.8f);
+      
+      current_beat++;
+      next_beat_sample = current_beat * samples_per_beat;
+    }
+    
+    // Check for gate off
+    if (gate_on && samples_rendered >= gate_off_sample) {
+      synth.GateOff();
+      gate_on = false;
+    }
+    
+    // Render block
+    synth.Render(block_buffer.data(), block_size);
+    output_buffer.insert(output_buffer.end(), block_buffer.begin(), block_buffer.end());
+    samples_rendered += block_size;
+  }
+  
+  // Final gate off
+  if (gate_on) {
+    synth.GateOff();
+  }
+  
+  // Release tail
+  int release_samples = static_cast<int>(0.5f * sample_rate);
+  for (int i = 0; i < release_samples; i += block_size) {
+    synth.Render(block_buffer.data(), block_size);
+    output_buffer.insert(output_buffer.end(), block_buffer.begin(), block_buffer.end());
+  }
+  
+  // Analyze
+  AnalysisResult analysis = AnalyzeBuffer(output_buffer, sample_rate, 2);
+  
+  printf("\n=== Audio Analysis ===\n");
+  printf("Peak: %.4f (%.1f dB)\n", analysis.max_amplitude,
+         20.0f * std::log10(analysis.max_amplitude + 1e-10f));
+  printf("RMS:  %.4f (%.1f dB)\n", analysis.rms,
+         20.0f * std::log10(analysis.rms + 1e-10f));
+  if (analysis.has_nan) printf("WARNING: %d NaN samples!\n", analysis.nan_count);
+  if (analysis.has_inf) printf("WARNING: %d Inf samples!\n", analysis.inf_count);
+  if (analysis.has_clipping) printf("WARNING: %d clipping samples!\n", analysis.clip_count);
+  
+  // Write WAV file
+  if (!output_path.empty()) {
+    WavFile wav;
+    if (wav.OpenWrite(output_path, sample_rate, 2)) {
+      wav.Write(output_buffer);
+      wav.Close();
+      printf("\nSaved: %s (%.2fs)\n", output_path.c_str(), 
+             (float)output_buffer.size() / 2 / sample_rate);
+    }
+  }
+}
+
 // Run a pattern-based test with actual rhythmic content
 void RunPatternSequencerTest(const RhythmPattern& pattern, int seq_preset, int spread, int deja_vu,
                              const std::string& output_path) {
@@ -1382,6 +1527,7 @@ int main(int argc, char* argv[]) {
   // Sequencer test parameters
   std::string seq_test_prefix;
   std::string pattern_test_prefix;
+  std::string gate_test_prefix;  // Gate-based test (drumlogue pattern sim)
   int param_seq = -999;
   int param_spread = -999;
   int param_dejavu = -999;
@@ -1428,6 +1574,8 @@ int main(int argc, char* argv[]) {
       seq_test_prefix = argv[++i];
     } else if (strcmp(argv[i], "--pattern-test") == 0 && i + 1 < argc) {
       pattern_test_prefix = argv[++i];
+    } else if (strcmp(argv[i], "--gate-test") == 0 && i + 1 < argc) {
+      gate_test_prefix = argv[++i];
     } else if (strcmp(argv[i], "--seq") == 0 && i + 1 < argc) {
       param_seq = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--spread") == 0 && i + 1 < argc) {
@@ -1477,6 +1625,22 @@ int main(int argc, char* argv[]) {
   }
 
 #ifdef ELEMENTS_LIGHTWEIGHT
+  // Handle gate-based test (simulates drumlogue pattern sequencer)
+  if (!gate_test_prefix.empty()) {
+    SequencerTestConfig config = {
+      "gate",
+      param_seq != -999 ? param_seq : 2,  // Default to FAST_RANDOM
+      param_spread != -999 ? param_spread : 64,
+      param_dejavu != -999 ? param_dejavu : 0,
+      note,
+      param_bpm,
+      param_bars
+    };
+    std::string output = gate_test_prefix + ".wav";
+    RunGateSequencerTest(config, output);
+    return 0;
+  }
+  
   // Handle pattern test suite (comprehensive rhythmic patterns)
   if (!pattern_test_prefix.empty()) {
     RunPatternTestSuite(pattern_test_prefix);
