@@ -265,6 +265,7 @@ void PrintUsage(const char* program) {
   printf("       %s --list-presets\n", program);
   printf("       %s --compare-modes [options]      Compare all resonator models\n", program);
   printf("       %s --multi-note <notes> [options] Compare models across notes\n", program);
+  printf("       %s --seq-test <prefix>            Run Marbles sequencer test suite\n", program);
   printf("       %s --output <file.wav> --analyze  (generate and analyze)\n", program);
   printf("\nGeneral Options:\n");
   printf("  --preset <name|num>   Use a preset (0-7 or name like MARIMBA, PLUCK)\n");
@@ -279,6 +280,18 @@ void PrintUsage(const char* program) {
   printf("  --compare-modes       Compare MODAL, STRING, MSTRING resonator modes\n");
   printf("  --save-comparison     Save individual WAV files for each mode\n");
   printf("  --multi-note <notes>  Compare modes across multiple notes (e.g., 36,48,60,72,84)\n");
+#ifdef ELEMENTS_LIGHTWEIGHT
+  printf("\nMarbles Sequencer Options (LIGHTWEIGHT mode only):\n");
+  printf("  --seq-test <prefix>   Run sequencer test suite (steady quarter notes)\n");
+  printf("  --pattern-test <pfx>  Run pattern+sequencer test suite (various rhythms)\n");
+  printf("  --seq <0-15>          Set SEQ preset for single file output\n");
+  printf("  --spread <0-127>      Set SPREAD parameter\n");
+  printf("  --dejavu <0-127>      Set DEJA VU parameter\n");
+  printf("  --bpm <tempo>         Set tempo in BPM (default: 120)\n");
+  printf("  --bars <count>        Number of 4/4 bars (default: 4)\n");
+  printf("\n  Patterns: four_floor, offbeat, sparse, sixteenths, swing, melodic, breakbeat, halftime\n");
+  printf("  SEQ presets: OFF(0), SLOW(1), MED(2), FAST(3), X2(4), X4(5), MAJ(6), MIN(7), PENT(8)...\n");
+#endif
   printf("\nParameter Options:\n");
   printf("  --bow <0-127>         Bow level\n");
   printf("  --blow <0-127>        Blow level\n");
@@ -807,6 +820,519 @@ void RunMultiNoteComparison(const std::vector<int>& notes, int velocity, float n
   }
 }
 
+// ============================================================================
+// Marbles Sequencer Test Functionality (ELEMENTS_LIGHTWEIGHT only)
+// ============================================================================
+#ifdef ELEMENTS_LIGHTWEIGHT
+
+struct SequencerTestConfig {
+  const char* name;
+  int seq_preset;      // SEQ parameter (0-15)
+  int spread;          // SPREAD parameter (0-127)
+  int deja_vu;         // DEJA VU parameter (0-127)
+  int base_note;       // Base MIDI note
+  float bpm;           // Tempo in BPM
+  int bars;            // Number of 4/4 bars
+};
+
+// Rhythmic pattern step: timing in 16th notes (0-15 per bar), note, velocity
+struct PatternStep {
+  int sixteenth;       // Position in 16ths (0-15 within bar, or 0-63 for 4 bars)
+  int note;            // MIDI note
+  int velocity;        // Velocity 1-127
+  int gate_16ths;      // Gate length in 16th notes
+};
+
+// Pre-defined rhythmic patterns
+struct RhythmPattern {
+  const char* name;
+  const char* description;
+  std::vector<PatternStep> steps;
+  float bpm;
+};
+
+// Create common rhythm patterns
+static std::vector<RhythmPattern> GetRhythmPatterns() {
+  return {
+    // Basic 4-on-floor
+    {"four_floor", "Four-on-the-floor kick pattern", {
+      {0, 60, 100, 2}, {4, 60, 100, 2}, {8, 60, 100, 2}, {12, 60, 100, 2},  // Bar 1
+      {16, 60, 100, 2}, {20, 60, 100, 2}, {24, 60, 100, 2}, {28, 60, 100, 2}, // Bar 2
+      {32, 60, 100, 2}, {36, 60, 100, 2}, {40, 60, 100, 2}, {44, 60, 100, 2}, // Bar 3
+      {48, 60, 100, 2}, {52, 60, 100, 2}, {56, 60, 100, 2}, {60, 60, 100, 2}, // Bar 4
+    }, 120.0f},
+    
+    // Offbeat / syncopated
+    {"offbeat", "Offbeat syncopated pattern", {
+      {2, 60, 100, 2}, {6, 60, 80, 2}, {10, 60, 100, 2}, {14, 60, 80, 2},   // Bar 1
+      {18, 60, 100, 2}, {22, 60, 80, 2}, {26, 60, 100, 2}, {30, 60, 80, 2}, // Bar 2
+      {34, 60, 100, 2}, {38, 60, 80, 2}, {42, 60, 100, 2}, {46, 60, 80, 2}, // Bar 3
+      {50, 60, 100, 2}, {54, 60, 80, 2}, {58, 60, 100, 2}, {62, 60, 80, 2}, // Bar 4
+    }, 120.0f},
+    
+    // Sparse / minimal
+    {"sparse", "Sparse minimal hits", {
+      {0, 60, 110, 3},  {12, 60, 90, 2},                                      // Bar 1
+      {20, 60, 100, 3}, {28, 60, 80, 2},                                      // Bar 2
+      {32, 60, 110, 3}, {44, 60, 90, 2},                                      // Bar 3
+      {52, 60, 100, 3}, {60, 60, 80, 2},                                      // Bar 4
+    }, 100.0f},
+    
+    // Fast 16ths
+    {"sixteenths", "Rapid 16th note pattern", {
+      {0, 60, 100, 1}, {1, 62, 70, 1}, {2, 64, 80, 1}, {3, 60, 70, 1},
+      {4, 60, 100, 1}, {5, 62, 70, 1}, {6, 64, 80, 1}, {7, 60, 70, 1},
+      {8, 60, 100, 1}, {9, 62, 70, 1}, {10, 64, 80, 1}, {11, 60, 70, 1},
+      {12, 60, 100, 1}, {13, 62, 70, 1}, {14, 64, 80, 1}, {15, 60, 70, 1},
+      // Bar 2 same
+      {16, 60, 100, 1}, {17, 62, 70, 1}, {18, 64, 80, 1}, {19, 60, 70, 1},
+      {20, 60, 100, 1}, {21, 62, 70, 1}, {22, 64, 80, 1}, {23, 60, 70, 1},
+      {24, 60, 100, 1}, {25, 62, 70, 1}, {26, 64, 80, 1}, {27, 60, 70, 1},
+      {28, 60, 100, 1}, {29, 62, 70, 1}, {30, 64, 80, 1}, {31, 60, 70, 1},
+    }, 110.0f},
+    
+    // Swing / triplet feel (approximated with 16ths)
+    {"swing", "Swing/shuffle feel", {
+      {0, 60, 100, 2}, {3, 60, 70, 1},   {4, 60, 90, 2}, {7, 60, 70, 1},
+      {8, 60, 100, 2}, {11, 60, 70, 1},  {12, 60, 90, 2}, {15, 60, 70, 1},
+      {16, 60, 100, 2}, {19, 60, 70, 1}, {20, 60, 90, 2}, {23, 60, 70, 1},
+      {24, 60, 100, 2}, {27, 60, 70, 1}, {28, 60, 90, 2}, {31, 60, 70, 1},
+      {32, 60, 100, 2}, {35, 60, 70, 1}, {36, 60, 90, 2}, {39, 60, 70, 1},
+      {40, 60, 100, 2}, {43, 60, 70, 1}, {44, 60, 90, 2}, {47, 60, 70, 1},
+      {48, 60, 100, 2}, {51, 60, 70, 1}, {52, 60, 90, 2}, {55, 60, 70, 1},
+      {56, 60, 100, 2}, {59, 60, 70, 1}, {60, 60, 90, 2}, {63, 60, 70, 1},
+    }, 95.0f},
+    
+    // Melodic phrase with different notes
+    {"melodic", "Melodic phrase with pitch variation", {
+      {0, 48, 100, 3},  {4, 55, 80, 2},  {8, 60, 90, 2},  {12, 55, 70, 2},   // Bar 1: C-G-C-G
+      {16, 53, 100, 3}, {20, 60, 80, 2}, {24, 65, 90, 2}, {28, 60, 70, 2},   // Bar 2: F-C-F-C
+      {32, 55, 100, 3}, {36, 60, 80, 2}, {40, 67, 90, 2}, {44, 60, 70, 2},   // Bar 3: G-C-G-C
+      {48, 48, 110, 4}, {56, 60, 90, 4},                                      // Bar 4: C (long) - C
+    }, 115.0f},
+    
+    // Breakbeat style
+    {"breakbeat", "Breakbeat-style pattern", {
+      {0, 60, 110, 2},  {6, 60, 90, 1},  {8, 60, 100, 2}, {10, 60, 70, 1}, {14, 60, 80, 1},
+      {16, 60, 110, 2}, {22, 60, 90, 1}, {24, 60, 100, 2}, {26, 60, 70, 1}, {30, 60, 80, 1},
+      {32, 60, 110, 2}, {38, 60, 90, 1}, {40, 60, 100, 2}, {42, 60, 70, 1}, {46, 60, 80, 1},
+      {48, 60, 110, 2}, {54, 60, 90, 1}, {56, 60, 100, 2}, {58, 60, 70, 1}, {62, 60, 80, 1},
+    }, 130.0f},
+    
+    // Half-time
+    {"halftime", "Half-time feel", {
+      {0, 48, 110, 4},  {8, 60, 90, 4},                                       // Bar 1
+      {16, 48, 100, 4}, {24, 60, 80, 4},                                      // Bar 2
+      {32, 48, 110, 4}, {40, 60, 90, 4},                                      // Bar 3
+      {48, 48, 100, 6}, {56, 60, 90, 6},                                      // Bar 4
+    }, 80.0f},
+  };
+}
+
+// Test the Marbles sequencer with a simulated 4-bar pattern
+void RunSequencerTest(const SequencerTestConfig& config, const std::string& output_path) {
+  printf("\n=== Marbles Sequencer Test: %s ===\n", config.name);
+  printf("SEQ=%d (%s), SPREAD=%d, DEJA_VU=%d, Base=%d, BPM=%.0f, Bars=%d\n",
+         config.seq_preset, marbles::MarblesSequencer::GetPresetName(config.seq_preset),
+         config.spread, config.deja_vu, config.base_note, config.bpm, config.bars);
+  
+  const int sample_rate = 48000;
+  const int block_size = 64;
+  
+  // Calculate timing
+  float beat_duration = 60.0f / config.bpm;  // seconds per beat
+  int samples_per_beat = static_cast<int>(beat_duration * sample_rate);
+  int total_beats = config.bars * 4;  // 4 beats per bar
+  int total_samples = samples_per_beat * total_beats;
+  
+  printf("Beat duration: %.3fs (%d samples)\n", beat_duration, samples_per_beat);
+  printf("Total duration: %.2fs\n", (float)total_samples / sample_rate);
+  
+  // Initialize synth
+  ElementsSynth synth;
+  unit_runtime_desc_t runtime = {
+    .target = 0,
+    .api = 0,
+    .samplerate = (uint32_t)sample_rate,
+    .frames_per_buffer = 64,
+    .input_channels = 0,
+    .output_channels = 2,
+    .padding = {0, 0}
+  };
+  
+  if (synth.Init(&runtime) != k_unit_err_none) {
+    printf("ERROR: Failed to initialize synth\n");
+    return;
+  }
+  
+  // Set up a nice marimba-like sound for clear note articulation
+  synth.setParameter(0, 0);      // bow = 0
+  synth.setParameter(1, 0);      // blow = 0
+  synth.setParameter(2, 100);    // strike = 100
+  synth.setParameter(3, 0);      // mallet = soft
+  synth.setParameter(8, -20);    // geometry = slightly stringy
+  synth.setParameter(9, 10);     // brightness = slightly bright
+  synth.setParameter(10, -20);   // damping = moderate sustain
+  synth.setParameter(11, 0);     // position = center
+  synth.setParameter(12, 0);     // model = MODAL
+  synth.setParameter(13, 70);    // space = 70%
+  synth.setParameter(14, 100);   // volume = 100%
+  synth.setParameter(16, 2);     // attack = fast
+  synth.setParameter(17, 40);    // decay = medium
+  synth.setParameter(18, 50);    // release = medium
+  synth.setParameter(19, 0);     // contour = ADR
+  
+  // Set sequencer parameters (Page 6)
+  synth.setParameter(20, 0);                // coarse = 0
+  synth.setParameter(21, config.seq_preset); // SEQ preset
+  synth.setParameter(22, config.spread);     // SPREAD
+  synth.setParameter(23, config.deja_vu);    // DEJA VU
+  
+  // Set tempo (16.16 fixed point)
+  uint32_t tempo_fixed = static_cast<uint32_t>(config.bpm * 65536.0f);
+  synth.SetTempo(tempo_fixed);
+  
+  // Generate audio
+  std::vector<float> output_buffer;
+  std::vector<float> block_buffer(block_size * 2);
+  
+  int samples_rendered = 0;
+  int current_beat = 0;
+  int next_beat_sample = 0;
+  bool note_on = false;
+  int note_off_sample = 0;
+  
+  // Track notes for visualization
+  std::vector<std::pair<int, int>> note_events;  // (sample, note)
+  
+  printf("\nGenerating %d beats...\n", total_beats);
+  
+  while (samples_rendered < total_samples) {
+    // Check for beat boundaries (pattern steps)
+    if (samples_rendered >= next_beat_sample && current_beat < total_beats) {
+      // Note off from previous beat
+      if (note_on) {
+        synth.NoteOff(config.base_note);
+        note_on = false;
+      }
+      
+      // Note on for this beat
+      synth.NoteOn(config.base_note, 100);
+      note_on = true;
+      note_events.push_back({samples_rendered, config.base_note});
+      
+      // Schedule note off at 80% of beat
+      note_off_sample = next_beat_sample + static_cast<int>(samples_per_beat * 0.8f);
+      
+      current_beat++;
+      next_beat_sample = current_beat * samples_per_beat;
+    }
+    
+    // Note off at 80% through beat
+    if (note_on && samples_rendered >= note_off_sample) {
+      synth.NoteOff(config.base_note);
+      note_on = false;
+    }
+    
+    // Render block
+    synth.Render(block_buffer.data(), block_size);
+    output_buffer.insert(output_buffer.end(), block_buffer.begin(), block_buffer.end());
+    samples_rendered += block_size;
+  }
+  
+  // Final note off
+  if (note_on) {
+    synth.NoteOff(config.base_note);
+  }
+  
+  // Add release tail
+  int release_samples = static_cast<int>(0.5f * sample_rate);
+  for (int i = 0; i < release_samples; i += block_size) {
+    synth.Render(block_buffer.data(), block_size);
+    output_buffer.insert(output_buffer.end(), block_buffer.begin(), block_buffer.end());
+  }
+  
+  // Analyze
+  AnalysisResult analysis = AnalyzeBuffer(output_buffer, sample_rate, 2);
+  
+  printf("\n=== Audio Analysis ===\n");
+  printf("Peak: %.4f (%.1f dB)\n", analysis.max_amplitude,
+         20.0f * std::log10(analysis.max_amplitude + 1e-10f));
+  printf("RMS:  %.4f (%.1f dB)\n", analysis.rms,
+         20.0f * std::log10(analysis.rms + 1e-10f));
+  if (analysis.has_nan) printf("WARNING: %d NaN samples!\n", analysis.nan_count);
+  if (analysis.has_inf) printf("WARNING: %d Inf samples!\n", analysis.inf_count);
+  if (analysis.has_clipping) printf("WARNING: %d clipping samples!\n", analysis.clip_count);
+  
+  // Write WAV file
+  if (!output_path.empty()) {
+    WavFile wav;
+    if (wav.OpenWrite(output_path, sample_rate, 2)) {
+      wav.Write(output_buffer);
+      wav.Close();
+      printf("\nSaved: %s (%.2fs)\n", output_path.c_str(), 
+             (float)output_buffer.size() / 2 / sample_rate);
+    }
+  }
+}
+
+// Run a pattern-based test with actual rhythmic content
+void RunPatternSequencerTest(const RhythmPattern& pattern, int seq_preset, int spread, int deja_vu,
+                             const std::string& output_path) {
+  printf("\n=== Pattern Test: %s + SEQ=%d (%s) ===\n", pattern.name,
+         seq_preset, marbles::MarblesSequencer::GetPresetName(seq_preset));
+  printf("Pattern: %s\n", pattern.description);
+  printf("SEQ=%d, SPREAD=%d, DEJA_VU=%d, BPM=%.0f\n", seq_preset, spread, deja_vu, pattern.bpm);
+  
+  const int sample_rate = 48000;
+  const int block_size = 64;
+  const int bars = 4;
+  
+  // Calculate timing (16th note resolution)
+  float beat_duration = 60.0f / pattern.bpm;
+  float sixteenth_duration = beat_duration / 4.0f;
+  int samples_per_16th = static_cast<int>(sixteenth_duration * sample_rate);
+  int total_16ths = bars * 16;  // 16 sixteenths per bar
+  int total_samples = samples_per_16th * total_16ths;
+  
+  printf("16th note: %.3fs (%d samples)\n", sixteenth_duration, samples_per_16th);
+  printf("Total duration: %.2fs\n", (float)total_samples / sample_rate);
+  
+  // Initialize synth
+  ElementsSynth synth;
+  unit_runtime_desc_t runtime = {
+    .target = 0,
+    .api = 0,
+    .samplerate = (uint32_t)sample_rate,
+    .frames_per_buffer = 64,
+    .input_channels = 0,
+    .output_channels = 2,
+    .padding = {0, 0}
+  };
+  
+  if (synth.Init(&runtime) != k_unit_err_none) {
+    printf("ERROR: Failed to initialize synth\n");
+    return;
+  }
+  
+  // Set up a nice marimba-like sound for clear note articulation
+  synth.setParameter(0, 0);      // bow = 0
+  synth.setParameter(1, 0);      // blow = 0
+  synth.setParameter(2, 100);    // strike = 100
+  synth.setParameter(3, 0);      // mallet = soft
+  synth.setParameter(8, -20);    // geometry
+  synth.setParameter(9, 10);     // brightness
+  synth.setParameter(10, -20);   // damping
+  synth.setParameter(11, 0);     // position
+  synth.setParameter(12, 0);     // model = MODAL
+  synth.setParameter(13, 70);    // space = 70%
+  synth.setParameter(14, 100);   // volume = 100%
+  synth.setParameter(16, 2);     // attack = fast
+  synth.setParameter(17, 40);    // decay
+  synth.setParameter(18, 50);    // release
+  synth.setParameter(19, 0);     // contour = ADR
+  
+  // Set sequencer parameters (Page 6)
+  synth.setParameter(20, 0);          // coarse = 0
+  synth.setParameter(21, seq_preset); // SEQ preset
+  synth.setParameter(22, spread);     // SPREAD
+  synth.setParameter(23, deja_vu);    // DEJA VU
+  
+  // Set tempo
+  uint32_t tempo_fixed = static_cast<uint32_t>(pattern.bpm * 65536.0f);
+  synth.SetTempo(tempo_fixed);
+  
+  // Generate audio with pattern-based triggering
+  std::vector<float> output_buffer;
+  std::vector<float> block_buffer(block_size * 2);
+  
+  int samples_rendered = 0;
+  size_t step_index = 0;
+  int current_note = -1;
+  int note_off_sample = -1;
+  
+  // Sort steps by time
+  std::vector<PatternStep> sorted_steps = pattern.steps;
+  std::sort(sorted_steps.begin(), sorted_steps.end(), 
+            [](const PatternStep& a, const PatternStep& b) { return a.sixteenth < b.sixteenth; });
+  
+  printf("\nPattern steps:\n");
+  for (const auto& step : sorted_steps) {
+    float time_sec = step.sixteenth * sixteenth_duration;
+    printf("  [%2d] t=%.3fs note=%d vel=%d gate=%d\n", 
+           step.sixteenth, time_sec, step.note, step.velocity, step.gate_16ths);
+  }
+  printf("\nGenerating audio...\n");
+  
+  while (samples_rendered < total_samples) {
+    int current_16th = samples_rendered / samples_per_16th;
+    
+    // Check for note on events
+    while (step_index < sorted_steps.size() && 
+           sorted_steps[step_index].sixteenth <= current_16th &&
+           samples_rendered >= sorted_steps[step_index].sixteenth * samples_per_16th) {
+      const auto& step = sorted_steps[step_index];
+      
+      // Note off previous if active
+      if (current_note >= 0) {
+        synth.NoteOff(current_note);
+      }
+      
+      // Note on
+      synth.NoteOn(step.note, step.velocity);
+      current_note = step.note;
+      
+      // Schedule note off
+      note_off_sample = (step.sixteenth + step.gate_16ths) * samples_per_16th;
+      
+      step_index++;
+    }
+    
+    // Check for note off
+    if (current_note >= 0 && samples_rendered >= note_off_sample) {
+      synth.NoteOff(current_note);
+      current_note = -1;
+    }
+    
+    // Render block
+    synth.Render(block_buffer.data(), block_size);
+    output_buffer.insert(output_buffer.end(), block_buffer.begin(), block_buffer.end());
+    samples_rendered += block_size;
+  }
+  
+  // Final note off
+  if (current_note >= 0) {
+    synth.NoteOff(current_note);
+  }
+  
+  // Add release tail
+  int release_samples = static_cast<int>(0.5f * sample_rate);
+  for (int i = 0; i < release_samples; i += block_size) {
+    synth.Render(block_buffer.data(), block_size);
+    output_buffer.insert(output_buffer.end(), block_buffer.begin(), block_buffer.end());
+  }
+  
+  // Analyze
+  AnalysisResult analysis = AnalyzeBuffer(output_buffer, sample_rate, 2);
+  
+  printf("\n=== Audio Analysis ===\n");
+  printf("Peak: %.4f (%.1f dB)\n", analysis.max_amplitude,
+         20.0f * std::log10(analysis.max_amplitude + 1e-10f));
+  printf("RMS:  %.4f (%.1f dB)\n", analysis.rms,
+         20.0f * std::log10(analysis.rms + 1e-10f));
+  if (analysis.has_nan) printf("WARNING: %d NaN samples!\n", analysis.nan_count);
+  if (analysis.has_inf) printf("WARNING: %d Inf samples!\n", analysis.inf_count);
+  if (analysis.has_clipping) printf("WARNING: %d clipping samples!\n", analysis.clip_count);
+  
+  // Write WAV file
+  if (!output_path.empty()) {
+    WavFile wav;
+    if (wav.OpenWrite(output_path, sample_rate, 2)) {
+      wav.Write(output_buffer);
+      wav.Close();
+      printf("\nSaved: %s (%.2fs)\n", output_path.c_str(), 
+             (float)output_buffer.size() / 2 / sample_rate);
+    }
+  }
+}
+
+// Run comprehensive pattern + sequencer test suite
+void RunPatternTestSuite(const std::string& output_prefix) {
+  printf("\n");
+  printf("╔══════════════════════════════════════════════════════════════════════════════╗\n");
+  printf("║               PATTERN + SEQUENCER COMPREHENSIVE TEST SUITE                   ║\n");
+  printf("╚══════════════════════════════════════════════════════════════════════════════╝\n");
+  
+  auto patterns = GetRhythmPatterns();
+  
+  // Test configurations: {seq_preset, spread, deja_vu, suffix}
+  struct SeqConfig {
+    int preset;
+    int spread;
+    int deja_vu;
+    const char* suffix;
+  };
+  
+  std::vector<SeqConfig> seq_configs = {
+    {0,  64,   0, "off"},          // SEQ OFF - hear original pattern
+    {3,  64,   0, "fast_random"},  // FAST + random
+    {3,  64, 127, "fast_locked"},  // FAST + locked loop
+    {8,  50, 100, "pent_locked"},  // Pentatonic + mostly locked
+    {6,  64,  80, "major"},        // Major scale
+    {7,  64,  80, "minor"},        // Minor scale  
+    {10, 80,   0, "octaves"},      // Octave jumps
+    {4,  40, 127, "x2_locked"},    // X2 (32nds) + locked
+  };
+  
+  int file_count = 0;
+  
+  for (const auto& pattern : patterns) {
+    printf("\n────────────────────────────────────────────────────────────────────────────────\n");
+    printf("Testing pattern: %s\n", pattern.name);
+    printf("────────────────────────────────────────────────────────────────────────────────\n");
+    
+    for (const auto& seq : seq_configs) {
+      std::string filename = output_prefix + "_" + pattern.name + "_" + seq.suffix + ".wav";
+      RunPatternSequencerTest(pattern, seq.preset, seq.spread, seq.deja_vu, filename);
+      file_count++;
+    }
+  }
+  
+  printf("\n╔══════════════════════════════════════════════════════════════════════════════╗\n");
+  printf("║                        PATTERN TEST SUITE COMPLETE                           ║\n");
+  printf("╚══════════════════════════════════════════════════════════════════════════════╝\n");
+  printf("\nGenerated %d test files with prefix: %s\n", file_count, output_prefix.c_str());
+  printf("Patterns: %zu | Sequencer configs: %zu\n", patterns.size(), seq_configs.size());
+}
+
+// Run a suite of sequencer tests
+void RunSequencerTestSuite(const std::string& output_prefix) {
+  printf("\n");
+  printf("╔══════════════════════════════════════════════════════════════════════════════╗\n");
+  printf("║                    MARBLES SEQUENCER TEST SUITE                              ║\n");
+  printf("╚══════════════════════════════════════════════════════════════════════════════╝\n");
+  
+  std::vector<SequencerTestConfig> tests = {
+    // Basic rate tests - same note, different subdivision rates
+    {"seq_off",       0,  64, 0,   60, 120.0f, 4},  // SEQ=OFF (pass-through)
+    {"seq_slow",      1,  64, 0,   60, 120.0f, 4},  // 1 note/beat
+    {"seq_med",       2,  64, 0,   60, 120.0f, 4},  // 2 notes/beat
+    {"seq_fast",      3,  64, 0,   60, 120.0f, 4},  // 4 notes/beat (16ths)
+    {"seq_x2",        4,  64, 0,   60, 120.0f, 4},  // 8 notes/beat (32nds)
+    
+    // Scale tests - different musical scales
+    {"seq_major",     6,  64, 0,   60, 120.0f, 4},  // Major scale
+    {"seq_minor",     7,  64, 0,   60, 120.0f, 4},  // Minor scale
+    {"seq_pent",      8,  64, 0,   60, 120.0f, 4},  // Pentatonic
+    {"seq_octaves",  10,  80, 0,   60, 120.0f, 4},  // Octave jumps
+    {"seq_fifths",   11,  80, 0,   60, 120.0f, 4},  // Fifths
+    
+    // Spread tests - narrow vs wide range
+    {"spread_narrow", 3,  20, 0,   60, 120.0f, 4},  // Narrow range (±4 semi)
+    {"spread_wide",   3, 127, 0,   60, 120.0f, 4},  // Wide range (±24 semi)
+    
+    // Déjà vu tests - randomness vs looping
+    {"dejavu_random", 3,  64, 0,   60, 120.0f, 4},  // Pure random
+    {"dejavu_50",     3,  64, 64,  60, 120.0f, 4},  // 50% loop probability
+    {"dejavu_locked", 3,  64, 127, 60, 120.0f, 4},  // Locked 8-step loop
+    
+    // Musical patterns - combining features
+    {"pattern_arp",   8,  50, 100, 48, 140.0f, 4},  // Pentatonic arp, locked
+    {"pattern_bass", 10,  40, 127, 36, 100.0f, 4},  // Octave bass pattern
+    {"pattern_lead",  6,  64, 80,  72, 130.0f, 4},  // Major scale lead
+  };
+  
+  for (const auto& test : tests) {
+    std::string filename = output_prefix + "_" + test.name + ".wav";
+    RunSequencerTest(test, filename);
+  }
+  
+  printf("\n=== Test Suite Complete ===\n");
+  printf("Generated %zu test files with prefix: %s\n", tests.size(), output_prefix.c_str());
+}
+
+#endif // ELEMENTS_LIGHTWEIGHT
+
 std::vector<int> ParseNotes(const char* notes_str) {
   std::vector<int> notes;
   std::string s(notes_str);
@@ -852,6 +1378,17 @@ int main(int argc, char* argv[]) {
   bool save_comparison = false;
   std::vector<int> multi_notes;
   
+#ifdef ELEMENTS_LIGHTWEIGHT
+  // Sequencer test parameters
+  std::string seq_test_prefix;
+  std::string pattern_test_prefix;
+  int param_seq = -999;
+  int param_spread = -999;
+  int param_dejavu = -999;
+  float param_bpm = 120.0f;
+  int param_bars = 4;
+#endif
+  
   // Individual parameters (use -999 as "not set")
   int param_bow = -999, param_blow = -999, param_strike = -999;
   int param_mallet = -999, param_geometry = -999, param_brightness = -999;
@@ -886,6 +1423,22 @@ int main(int argc, char* argv[]) {
       save_comparison = true;
     } else if (strcmp(argv[i], "--multi-note") == 0 && i + 1 < argc) {
       multi_notes = ParseNotes(argv[++i]);
+#ifdef ELEMENTS_LIGHTWEIGHT
+    } else if (strcmp(argv[i], "--seq-test") == 0 && i + 1 < argc) {
+      seq_test_prefix = argv[++i];
+    } else if (strcmp(argv[i], "--pattern-test") == 0 && i + 1 < argc) {
+      pattern_test_prefix = argv[++i];
+    } else if (strcmp(argv[i], "--seq") == 0 && i + 1 < argc) {
+      param_seq = atoi(argv[++i]);
+    } else if (strcmp(argv[i], "--spread") == 0 && i + 1 < argc) {
+      param_spread = atoi(argv[++i]);
+    } else if (strcmp(argv[i], "--dejavu") == 0 && i + 1 < argc) {
+      param_dejavu = atoi(argv[++i]);
+    } else if (strcmp(argv[i], "--bpm") == 0 && i + 1 < argc) {
+      param_bpm = atof(argv[++i]);
+    } else if (strcmp(argv[i], "--bars") == 0 && i + 1 < argc) {
+      param_bars = atoi(argv[++i]);
+#endif
     } else if (strcmp(argv[i], "--bow") == 0 && i + 1 < argc) {
       param_bow = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--blow") == 0 && i + 1 < argc) {
@@ -922,6 +1475,35 @@ int main(int argc, char* argv[]) {
     RunMultiNoteComparison(multi_notes, velocity, duration);
     return 0;
   }
+
+#ifdef ELEMENTS_LIGHTWEIGHT
+  // Handle pattern test suite (comprehensive rhythmic patterns)
+  if (!pattern_test_prefix.empty()) {
+    RunPatternTestSuite(pattern_test_prefix);
+    return 0;
+  }
+  
+  // Handle sequencer test suite (steady quarter notes)
+  if (!seq_test_prefix.empty()) {
+    RunSequencerTestSuite(seq_test_prefix);
+    return 0;
+  }
+  
+  // Handle single sequencer test with custom params
+  if (param_seq != -999) {
+    SequencerTestConfig config = {
+      "custom",
+      param_seq,
+      param_spread != -999 ? param_spread : 64,
+      param_dejavu != -999 ? param_dejavu : 0,
+      note,
+      param_bpm,
+      param_bars
+    };
+    RunSequencerTest(config, output_path);
+    return 0;
+  }
+#endif
 
   // Handle compare-modes
   if (compare_modes) {
