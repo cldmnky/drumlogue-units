@@ -326,9 +326,10 @@ private:
         if (next_write != note_queue_read_) {  // Check for queue full
             note_queue_[note_queue_write_].note = static_cast<uint8_t>(final_note);
             note_queue_[note_queue_write_].velocity = static_cast<uint8_t>(final_velocity);
-            note_queue_write_ = next_write;
-        }
-        // If queue is full, note is dropped (shouldn't happen with proper queue size)
+    // Helper: returns true if scale is interval-based (OCT, 5TH, 4TH, TRI)
+    bool IsIntervalScale(const Scale* scale) const {
+        // These scales have notes outside 0-11, e.g. {0, 12, -12}
+        return (scale == &octaves || scale == &fifths || scale == &fourths || scale == &triad);
     }
 
     int QuantizeToScale(int semitones) {
@@ -336,38 +337,59 @@ private:
         if (!scale || scale->length == 0) {
             return semitones;  // No quantization
         }
-        
-        // Find octave and position within octave
-        int octave = 0;
-        int semi = semitones;
-        
-        if (semi >= 0) {
-            octave = semi / 12;
-            semi = semi % 12;
-        } else {
-            // Handle negative semitones
-            octave = (semi - 11) / 12;
-            semi = semi - octave * 12;
-        }
-        
-        // Find closest scale degree
-        int closest = scale->notes[0];
-        int min_dist = 100;
-        
-        for (int i = 0; i < scale->length; ++i) {
-            int note = scale->notes[i];
-            if (note < 0) note += 12;  // Handle negative offsets
-            if (note >= 12) note -= 12;
-            
-            int dist = std::abs((semi - note + 12) % 12);
-            
-            if (dist < min_dist) {
-                min_dist = dist;
-                closest = note;
+
+        if (IsIntervalScale(scale)) {
+            // For interval-based scales, quantize to closest offset (no normalization)
+            int closest = scale->notes[0];
+            int min_dist = 1000;
+            for (int i = 0; i < scale->length; ++i) {
+                int note = scale->notes[i];
+                int dist = semitones - note;
+                if (dist < 0) dist = -dist;
+                if (dist < min_dist) {
+                    min_dist = dist;
+                    closest = note;
+                }
             }
+            return closest;
+        } else {
+            // For regular scales, quantize within octave as before
+            int octave = 0;
+            int semi = semitones;
+
+            if (semi >= 0) {
+                octave = semi / 12;
+                semi = semi % 12;
+            } else {
+                // Handle negative semitones
+                octave = (semi - 11) / 12;
+                semi = semi - octave * 12;
+            }
+
+            // Find closest scale degree
+            int closest = scale->notes[0];
+            int min_dist = 100;
+
+            for (int i = 0; i < scale->length; ++i) {
+                int note = scale->notes[i];
+                if (note < 0) note += 12;  // Handle negative offsets
+                if (note >= 12) note -= 12;
+
+                int dist = semi - note;
+                if (dist < 0) dist = -dist;
+
+                // Also check wrapping
+                int dist_wrap = 12 - dist;
+                if (dist_wrap < dist) dist = dist_wrap;
+
+                if (dist < min_dist) {
+                    min_dist = dist;
+                    closest = note;
+                }
+            }
+
+            return octave * 12 + closest;
         }
-        
-        return octave * 12 + closest;
     }
 
     const Scale* GetCurrentScale() {
