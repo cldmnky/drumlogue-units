@@ -56,7 +56,7 @@ static const int32_t kPresets[kNumPresets][24] = {
     {130, 127, 110, 85, 35, 70, 40, 90, 45, 64, 64, 0, 0, 64, 64, 0, 6, 15, 35, 0, 0, 64, 0, 0},
     
     // 6: OCTAVER - Pitch-shifted reverb (octave down)
-    // Clear pitch shift effect (-12 semis = 52), moderate reverb, crisp
+    // Clear pitch shift effect (-12 semis = 32), moderate reverb, crisp
     // Good for thickening bass or creating sub-octave drones
     {100, 75, 75, 95, 55, 15, 0, 64, 64, 64, 64, 0, 100, 52, 75, 0, 0, 64, 0, 0, 0, 64, 0, 0},
     
