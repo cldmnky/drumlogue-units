@@ -241,7 +241,7 @@ Both units should:
 | 0 | INIT | Neutral starting point | Medium mix, moderate decay, balanced |
 | 1 | HALL | Large concert hall | Long decay, high diffusion, slightly dark |
 | 2 | PLATE | Classic plate reverb | Short-medium decay, max diffusion, very bright |
-| 3 | SHIMMER | Ethereal octave-up | Long decay, +12 semitone shift, grain sparkle, LFO on pitch |
+| 3 | SHIMMER | Ethereal octave-up | Long decay, +4.5 semitone shift, grain sparkle, LFO on pitch |
 | 4 | CLOUD | Granular texture | Heavy grain, dual LFO (position + density) |
 | 5 | FREEZE | Infinite sustain | Max decay, high texture, for pad capture |
 | 6 | OCTAVER | Sub-octave thickener | -4.5 semitone shift, crisp reverb |
