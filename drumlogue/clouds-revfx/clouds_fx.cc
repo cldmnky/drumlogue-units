@@ -41,7 +41,7 @@ static const int32_t kPresets[kNumPresets][24] = {
     {100, 55, 127, 127, 55, 0, 0, 64, 64, 64, 64, 0, 0, 64, 64, 0, 0, 64, 0, 0, 0, 64, 0, 0},
     
     // 3: SHIMMER - Ethereal octave-up reverb
-    // Long decay, moderate diffusion, bright, strong pitch shift (+12 semis = 76)
+    // Long decay, moderate diffusion, bright, strong pitch shift (+12 semis = 96)
     // Subtle grain adds sparkle, slow LFO on shift pitch for movement
     {120, 105, 85, 110, 40, 30, 25, 80, 50, 76, 64, 0, 90, 76, 85, 0, 13, 25, 40, 0, 0, 64, 0, 0},
     
