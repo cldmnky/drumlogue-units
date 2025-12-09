@@ -77,7 +77,10 @@ public:
         tempo_ = 120 << 16;  // Default 120 BPM in 16.16 fixed point
         
         // Initialize RNG with a variable seed
-        // If no seed provided, use stack address for pseudo-random initialization
+        // If no seed provided, use stack address for pseudo-random initialization.
+        // Note: This provides sufficient entropy for musical randomness but is not
+        // cryptographically secure. For deterministic sequences (e.g., testing),
+        // pass an explicit seed value.
         if (seed == 0) {
             volatile uint32_t stack_var;
             seed = reinterpret_cast<uintptr_t>(&stack_var);
