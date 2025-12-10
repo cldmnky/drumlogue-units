@@ -3,7 +3,7 @@ layout: unit
 title: Elementish Synth
 tagline: Modal synthesis voice with bow, blow, and strike exciters and versatile resonator models
 unit_type: Synthesizer
-version: v1.1.0
+version: v1.2.0
 filename: elementish_synth.drmlgunit
 download_url: https://github.com/cldmnky/drumlogue-units/releases
 permalink: /units/elementish-synth/
@@ -21,9 +21,12 @@ A powerful modal synthesis voice for the Korg drumlogue, inspired by **Mutable I
 - **NEON SIMD optimizations** for improved ARM Cortex-A7 performance (~40% faster modal resonator)
 - **12 mallet types** for percussive variety
 - **5 strike modes** including sample, granular, noise, plectrum, and particle
+- **Marbles-inspired generative sequencer** (Lightweight mode) with 16 presets
 - **8 built-in presets** covering a range of sounds from mallets to strings to drones
 - **Full velocity response** with expressive dynamics
 - **Pitch bend support** (±2 semitones)
+- **Tempo-synced subdivisions** from 1 to 16 notes per beat
+- **Déjà vu loop buffer** for repeating melodic patterns
 
 ---
 
@@ -86,14 +89,27 @@ The unit has 24 parameters organized across 6 pages:
 | **RELEASE** | 0-127 | Envelope release time |
 | **CONTOUR** | 0-3 | Envelope mode: ADR, AD, AR, or LOOP |
 
-### Page 6 - Tuning
+### Page 6 - Tuning / Sequencer
+
+> **Note**: Page 6 differs between Full and Lightweight modes. Lightweight mode replaces LFO with a generative sequencer.
+
+#### Full Mode (Page 6 - LFO)
 
 | Parameter | Range | Description |
-|-----------|-------|-------------|
+|-----------|-------|--------------|
+| **LFO RT** | 0-127 | LFO rate/speed |
+| **LFO DEP** | 0-127 | LFO modulation depth |
+| **LFO PRE** | 0-7 | LFO shape + destination preset |
 | **COARSE** | -64 to +63 | Pitch coarse tune. ±24 semitones range |
-| **FINE** | -64 to +63 | Pitch fine tune. ±100 cents range |
-| *(unused)* | - | Reserved for future use |
-| *(unused)* | - | Reserved for future use |
+
+#### Lightweight Mode (Page 6 - Sequencer)
+
+| Parameter | Range | Description |
+|-----------|-------|--------------|
+| **COARSE** | -64 to +63 | Base pitch for sequencer. Sets root note |
+| **SEQ** | 0-15 | Sequencer preset (see Sequencer Presets table) |
+| **SPREAD** | 0-127 | Note range. 0 = narrow, 127 = ±24 semitones |
+| **DEJA VU** | 0-127 | Pattern looping. 0 = random, 127 = locked loop |
 
 ---
 
@@ -146,6 +162,31 @@ The unit has 24 parameters organized across 6 pages:
 | 1 | AD | Attack-Decay only (no sustain) |
 | 2 | AR | Attack-Release only (gate-based) |
 | 3 | LOOP | Looping envelope for drones |
+
+---
+
+## Sequencer Presets (Lightweight Mode)
+
+The sequencer generates tempo-synced note subdivisions when triggered by the drumlogue pattern sequencer or MIDI notes.
+
+| Value | Name | Subdivision | Scale | Description |
+|-------|------|-------------|-------|-------------|
+| 0 | OFF | - | - | Sequencer disabled, normal note playback |
+| 1 | SLOW | 1/beat | Chromatic | 1 note per beat, chromatic random |
+| 2 | MED | 2/beat | Chromatic | 2 notes per beat (8th notes) |
+| 3 | FAST | 4/beat | Chromatic | 4 notes per beat (16th notes) |
+| 4 | X2 | 8/beat | Chromatic | 8 notes per beat (32nd notes) |
+| 5 | X4 | 16/beat | Chromatic | 16 notes per beat (64th notes) |
+| 6 | MAJ | 4/beat | Major | 16th notes quantized to major scale |
+| 7 | MIN | 4/beat | Minor | 16th notes quantized to minor scale |
+| 8 | PENT | 4/beat | Pentatonic | 16th notes quantized to pentatonic |
+| 9 | CHROM | 4/beat | Chromatic | 16th notes, full chromatic |
+| 10 | OCT | 2/beat | Octaves | 8th notes, octave jumps only |
+| 11 | 5TH | 2/beat | Fifths | 8th notes, perfect fifth intervals |
+| 12 | 4TH | 2/beat | Fourths | 8th notes, perfect fourth intervals |
+| 13 | TRI | 3/beat | Triads | Triplet feel, triad tones |
+| 14 | 7TH | 4/beat | 7th Chord | 16th notes, 7th chord tones |
+| 15 | RAND | 4/beat | Random | 16th notes, random scale each trigger |
 
 ---
 
@@ -215,6 +256,25 @@ The unit includes 8 carefully crafted presets:
 - Use **FINE** for detuning effects or pitch correction (±100 cents)
 - The synth responds to drumlogue's pitch bend (±2 semitones default)
 
+### Using the Generative Sequencer (Lightweight Mode)
+
+The sequencer is inspired by Mutable Instruments Marbles and creates tempo-synced generative melodies:
+
+1. **Enable**: Set **SEQ** to any preset other than OFF
+2. **Set base note**: Use **COARSE** to set the root note (0 = middle C)
+3. **Create pattern**: Create a pattern in drumlogue's sequencer - each step triggers the generative sequencer
+4. **Adjust spread**: **SPREAD** controls the note range (0 = unison, 127 = ±24 semitones)
+5. **Lock patterns**: **DEJA VU** controls repetition (0 = fully random, 127 = 8-step loop)
+
+#### Sequencer Tips
+
+- **Simple melodies**: Use PENT or MAJ with low SPREAD (20-40)
+- **Arpeggios**: Use TRI or 7TH presets with medium SPREAD
+- **Chaos**: Use CHROM or RAND with high SPREAD (100+)
+- **Repeating riffs**: Set DEJA VU to 127 for locked 8-step patterns
+- **Evolving patterns**: Set DEJA VU to 64-90 for mostly-repeating with variations
+- **Bass lines**: Use OCT or 5TH presets with COARSE set to -24
+
 ---
 
 ## Technical Specifications
@@ -225,18 +285,32 @@ The unit includes 8 carefully crafted presets:
 | **Processing** | Stereo output |
 | **Polyphony** | Monophonic (single voice) |
 | **CPU Usage** | Efficient - MODAL ~0.5%, STRING/MSTRING ~0.3% |
-| **Binary Size** | ~123KB |
+| **Binary Size** | ~124KB |
 
 ---
 
 ## Version History
+
+### v1.2.0 - Generative Sequencer Release
+
+- Marbles-inspired generative sequencer (Lightweight mode)
+- 16 sequencer presets with different subdivisions and scales
+- Déjà vu loop buffer for repeating patterns
+- Works with both MIDI notes and drumlogue pattern sequencer
+- Optimized note queue to prevent note loss at high subdivisions
+
+### v1.1.0 - Performance Optimization Release
+
+- NEON SIMD optimizations (~40% faster modal resonator)
+- CosineOscillator batch compute (~2.4x faster)
+- Stereo soft clamp optimization (2x faster)
+- Structure-of-Arrays layout for mode coefficients
 
 ### v1.0.0 - Initial Release
 
 - Full Elements DSP integration at 48kHz
 - Three resonator models: MODAL, STRING, MSTRING
 - Level-balanced output across all models
-- NEON SIMD optimizations for ARM
 - 8 factory presets
 - Lightweight mode for optimal drumlogue performance
 
@@ -245,5 +319,6 @@ The unit includes 8 carefully crafted presets:
 ## Credits
 
 - **DSP Algorithms**: Based on [Mutable Instruments Elements](https://mutable-instruments.net/modules/elements/) by Émilie Gillet
+- **Sequencer**: Inspired by [Mutable Instruments Marbles](https://mutable-instruments.net/modules/marbles/) déjà vu concept
 - **Original License**: MIT License
 - **drumlogue Port**: CLDM

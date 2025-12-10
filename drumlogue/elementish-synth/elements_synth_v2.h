@@ -15,6 +15,7 @@
 #include "unit.h"
 #include "modal_synth.h"
 #include "dsp/neon_dsp.h"
+#include "dsp/marbles_sequencer.h"
 
 // ============================================================================
 // DSP Profiling Support (Test Harness Only)
@@ -110,6 +111,11 @@ public:
         // Force resonator to recalculate coefficients with new parameters
         synth_.ForceResonatorUpdate();
         
+#ifdef ELEMENTS_LIGHTWEIGHT
+        // Initialize sequencer (only in lightweight mode)
+        sequencer_.Init(48000.0f);  // drumlogue sample rate
+#endif
+        
         initialized_ = true;
         return k_unit_err_none;
     }
@@ -136,6 +142,22 @@ public:
             PROFILE_RENDER_END();
             return;
         }
+        
+#ifdef ELEMENTS_LIGHTWEIGHT
+        // Process Marbles sequencer (generates internal note events)
+        if (sequencer_.IsEnabled()) {
+            sequencer_.Process(frames);
+            
+            uint8_t note, velocity;
+            while (sequencer_.GetNextNote(&note, &velocity)) {
+                // Apply coarse transpose, fine tune, and pitch bend (matching NoteOn behavior)
+                float transposed = static_cast<float>(note) + coarse_tune_ + fine_tune_ + pitch_bend_;
+                if (transposed < 0.0f) transposed = 0.0f;
+                if (transposed > 127.0f) transposed = 127.0f;
+                synth_.NoteOn(static_cast<uint8_t>(transposed), velocity);
+            }
+        }
+#endif
         
         // Process audio with static buffers
         static constexpr uint32_t kMaxFrames = 128;
@@ -262,6 +284,10 @@ public:
                 return env_names[value];
             }
         }
+        // SEQ parameter (id 21 in lightweight mode)
+        if (id == 21) {
+            return marbles::MarblesSequencer::GetPresetName(value);
+        }
 #else
         // MODEL parameter (id 15 in full mode)
         if (id == 15) {
@@ -307,6 +333,9 @@ public:
 
     void SetTempo(uint32_t tempo) {
         tempo_ = tempo;
+#ifdef ELEMENTS_LIGHTWEIGHT
+        sequencer_.SetTempo(tempo);
+#endif
     }
 
     void NoteOn(uint8_t note, uint8_t velocity) {
@@ -319,21 +348,47 @@ public:
         float tuned_note = (float)note + coarse_tune_ + fine_tune_ + pitch_bend_;
         current_note_ = note;
         
+#ifdef ELEMENTS_LIGHTWEIGHT
+        // Trigger sequencer subdivisions (pattern step triggers note burst)
+        if (sequencer_.IsEnabled()) {
+            sequencer_.Trigger(note, velocity);
+            // Don't play the original note - sequencer will generate notes
+            return;
+        }
+#endif
+        
         synth_.NoteOn((uint8_t)tuned_note, velocity);
     }
 
     void NoteOff(uint8_t note) {
         if (note == current_note_) {
+#ifdef ELEMENTS_LIGHTWEIGHT
+            sequencer_.Release();
+#endif
             synth_.NoteOff();
         }
     }
 
     void GateOn(uint8_t velocity) {
-        float tuned_note = (float)current_note_ + coarse_tune_ + fine_tune_;
+        // Gate messages from drumlogue pattern sequencer use current_note_ as base
+        float tuned_note = (float)current_note_ + coarse_tune_ + fine_tune_ + pitch_bend_;
+        
+#ifdef ELEMENTS_LIGHTWEIGHT
+        // Trigger sequencer subdivisions (pattern step triggers note burst)
+        if (sequencer_.IsEnabled()) {
+            sequencer_.Trigger(current_note_, velocity);
+            // Don't play the original note - sequencer will generate notes
+            return;
+        }
+#endif
+        
         synth_.NoteOn((uint8_t)tuned_note, velocity);
     }
 
     void GateOff() {
+#ifdef ELEMENTS_LIGHTWEIGHT
+        sequencer_.Release();
+#endif
         synth_.NoteOff();
     }
 
@@ -524,13 +579,13 @@ private:
     // Preset function for ELEMENTS_LIGHTWEIGHT mode
     // Page 4: MODEL, SPACE, VOLUME, (blank)
     // Page 5: ATK, DEC, REL, ENV_MODE
-    // Page 6: COARSE, FINE, (blank), (blank)
+    // Page 6: COARSE, SEQ, SPREAD, DEJA_VU
     void setPresetParams(int bow, int blow, int strike, int mallet,
                          int bowT, int blwT, int stkMode, int granD,
                          int geo, int bright, int damp, int pos,
                          int model, int space, int volume,
                          int atk, int dec, int rel, int envMode,
-                         int coarse = 0, int fine = 0) {
+                         int coarse = 0, int seq = 0, int spread = 64, int dejaVu = 0) {
         // Page 1: Exciter Mix
         params_[0] = bow;
         params_[1] = blow;
@@ -561,11 +616,11 @@ private:
         params_[18] = rel;
         params_[19] = envMode;
         
-        // Page 6: Tuning (Lightweight)
+        // Page 6: Sequencer (Lightweight)
         params_[20] = coarse;
-        params_[21] = fine;
-        params_[22] = 0;  // blank
-        params_[23] = 0;  // blank
+        params_[21] = seq;
+        params_[22] = spread;
+        params_[23] = dejaVu;
         
         for (int i = 0; i < kNumParams; ++i) {
             applyParameter(i);
@@ -703,14 +758,20 @@ private:
                 synth_.SetEnvMode(params_[id]);
                 break;
             
-            // Page 6: Tuning
+            // Page 6: Sequencer
             case 20: // COARSE (bipolar: -64 to +63 maps to -24 to +24 semitones)
                 coarse_tune_ = (float)params_[id] * 24.0f / 63.0f;
+                sequencer_.SetTranspose(static_cast<int>(coarse_tune_));
                 break;
-            case 21: // FINE (bipolar: -64 to +63 maps to -1 to +1 semitone = ±100 cents)
-                fine_tune_ = (float)params_[id] / 63.0f;
+            case 21: // SEQ (preset selection 0-15)
+                sequencer_.SetPreset(params_[id]);
                 break;
-            // case 22, 23: blank
+            case 22: // SPREAD (0-127 -> 0.0-1.0)
+                sequencer_.SetSpread(norm);
+                break;
+            case 23: // DEJA VU (0-127 -> 0.0-1.0)
+                sequencer_.SetDejaVu(norm);
+                break;
 #else
             // Page 4 (Full): Filter & Model
             case 12: // CUTOFF
@@ -762,6 +823,10 @@ private:
     const unit_runtime_desc_t* runtime_desc_;  // Cached for potential future use
     modal::ModalSynth synth_;
     int32_t params_[kNumParams];
+    
+#ifdef ELEMENTS_LIGHTWEIGHT
+    marbles::MarblesSequencer sequencer_;
+#endif
     
     uint8_t current_note_ = 60;
     uint8_t preset_index_ = 0;

@@ -91,7 +91,7 @@ install-deps-linux:
 	sudo apt-get install libsndfile1-dev
 
 # Test targets
-.PHONY: test test-preset test-notes test-pattern test-analyze test-compare test-profile test-all test-quick
+.PHONY: test test-preset test-notes test-pattern test-analyze test-compare test-profile test-all test-quick test-sequencer test-patterns
 
 # Quick sanity test
 test: $(TARGET)
@@ -218,21 +218,56 @@ test-all: $(TARGET)
 	@echo "║                        Build Mode: $(BUILD_MODE)                                      ║"
 	@echo "╚══════════════════════════════════════════════════════════════════════════════╝"
 	@echo ""
+	@echo "=== Phase 1: DSP Stability Tests ==="
 	@$(MAKE) test-analyze
 	@echo ""
+	@echo "=== Phase 2: Preset Tests ==="
 	@$(MAKE) test-preset
 	@echo ""
+	@echo "=== Phase 3: Note Sequence Tests ==="
 	@$(MAKE) test-notes
 	@echo ""
+	@echo "=== Phase 4: Musical Pattern Tests ==="
 	@$(MAKE) test-pattern
 	@echo ""
+	@echo "=== Phase 5: Mode Comparison Tests ==="
 	@$(MAKE) test-compare
 	@echo ""
+	@echo "=== Phase 6: CPU Profile Tests ==="
 	@$(MAKE) test-profile
+	@echo ""
+ifeq ($(BUILD_MODE),lightweight)
+	@echo "=== Phase 7: Marbles Sequencer Tests (LIGHTWEIGHT only) ==="
+	@$(MAKE) test-sequencer
+	@echo ""
+	@echo "=== Phase 8: Pattern+Sequencer Tests (LIGHTWEIGHT only) ==="
+	@$(MAKE) test-patterns
+	@echo ""
+endif
+	@echo "=== Cleanup: Removing generated WAV files ==="
+	@rm -f *.wav
+	@echo "Removed all .wav files"
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════════════════════╗"
 	@echo "║                    ALL TESTS COMPLETED SUCCESSFULLY!                         ║"
 	@echo "╚══════════════════════════════════════════════════════════════════════════════╝"
+
+# Marbles Sequencer tests (LIGHTWEIGHT mode only)
+test-sequencer: $(TARGET)
+	@echo "=== Marbles Sequencer Tests ==="
+	@echo "Testing basic sequencer presets with steady quarter notes..."
+	./$(TARGET) --seq-test seq_test
+	@echo ""
+	@echo "Testing custom sequencer parameters..."
+	./$(TARGET) --seq 8 --spread 80 --dejavu 100 --bpm 140 --bars 2 -o seq_custom.wav --analyze
+	@echo "Sequencer tests complete!"
+
+# Pattern + Sequencer tests (LIGHTWEIGHT mode only)  
+test-patterns: $(TARGET)
+	@echo "=== Pattern + Sequencer Comprehensive Tests ==="
+	@echo "Testing 8 rhythmic patterns × 8 sequencer configs (64 files)..."
+	./$(TARGET) --pattern-test pattern_test
+	@echo "Pattern tests complete!"
 
 # Debug run with gdb/lldb
 debug: $(TARGET)
@@ -254,7 +289,9 @@ help:
 	@echo "  test-analyze    - Test all presets for DSP stability"
 	@echo "  test-compare    - Compare resonator modes (MODAL/STRING/MSTRING)"
 	@echo "  test-profile    - Run CPU profiling on different modes"
-	@echo "  test-all        - Run comprehensive test suite"
+	@echo "  test-sequencer  - Test Marbles sequencer (LIGHTWEIGHT only)"
+	@echo "  test-patterns   - Test patterns + sequencer combos (LIGHTWEIGHT only)"
+	@echo "  test-all        - Run comprehensive test suite (cleans up WAVs after)"
 	@echo "  debug           - Run under debugger"
 	@echo ""
 	@echo "Build Options:"

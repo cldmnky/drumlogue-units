@@ -105,14 +105,15 @@ const __unit_header unit_header_t unit_header = {
         // COARSE: Pitch coarse tune (-24 to +24 semi)
         {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"COARSE"}}}};
 #else
-        // ==================== Page 6: Tuning (Lightweight) ====================
+        // ==================== Page 6: Sequencer (Lightweight) ====================
         // COARSE: Pitch coarse tune (-24 to +24 semitones)
         {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"COARSE"}},
-        // FINE: Pitch fine tune (-100 to +100 cents)
-        {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"FINE"}},
-        // Blank placeholders
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}}}};
+        // SEQ: Sequencer preset (rate + scale combination)
+        {0, 15, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"SEQ"}},
+        // SPREAD: Note range/spread amount (0=narrow, 127=wide)
+        {0, 127, 0, 64, k_unit_param_type_none, 0, 0, 0, {"SPREAD"}},
+        // DEJA VU: Sequence looping amount (0=random, 127=locked loop)
+        {0, 127, 0, 0, k_unit_param_type_none, 0, 0, 0, {"DEJA VU"}}}};
 #endif
 
 

@@ -1,5 +1,59 @@
 # Elementish Synth - Release Notes
 
+## v1.2.0 (December 2025)
+
+Generative sequencer release with Marbles-inspired note generation.
+
+### New Features
+
+- **Marbles-Inspired Generative Sequencer** (Lightweight mode only)
+  - Triggered by drumlogue pattern sequencer or MIDI notes
+  - Generates tempo-synced melodic subdivisions
+  - 16 presets combining subdivision rate and scale quantization
+
+- **16 Sequencer Presets**
+  - OFF: Normal note playback
+  - SLOW/MED/FAST: 1/2/4 notes per beat (chromatic)
+  - X2/X4: 8/16 notes per beat (extreme subdivisions)
+  - MAJ/MIN/PENT/CHROM: Scale-quantized 16th notes
+  - OCT/5TH/4TH: Interval-based 8th notes
+  - TRI: Triplet feel with triad quantization
+  - 7TH: 16th notes quantized to 7th chord tones
+  - RAND: Random scale selection per trigger
+
+- **Déjà Vu Loop Buffer**
+  - 8-step pattern memory
+  - DEJA VU parameter: 0 = fully random, 127 = locked loop
+  - Creates repeating melodic patterns from randomness
+
+- **SPREAD Control**
+  - Adjusts note range from unison (0) to ±24 semitones (127)
+  - Works with scale quantization for musical results
+
+### Technical Improvements
+
+- **Skip-ahead optimization** in Process() - no per-sample iteration
+- **Note queue** (8-deep circular buffer) prevents note loss at high subdivisions
+- **Gate triggering** - works with drumlogue's built-in pattern sequencer
+- **Bounds checking** on preset selection for safety
+
+### Page 6 Parameter Changes (Lightweight Mode)
+
+| Parameter | Description |
+|-----------|-------------|
+| COARSE | Base note for sequencer (±24 semitones from middle C) |
+| SEQ | Sequencer preset (0-15) |
+| SPREAD | Note range (0-127) |
+| DEJA VU | Pattern looping (0-127) |
+
+### Build Info
+
+- Binary size: ~124KB
+- All 16 sequencer presets validated
+- Gate and MIDI triggering tested
+
+---
+
 ## v1.1.0 (December 2025)
 
 Performance optimization release with ARM NEON SIMD support.
