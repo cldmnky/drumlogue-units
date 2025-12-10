@@ -10,7 +10,7 @@
 
 #include "ppg_waves.h"
 
-// 128 waveforms x 64 samples = 8192 bytes
+// 256 waveforms x 64 samples = 16384 bytes
 const uint8_t ppg_wave_data[PPG_NUM_WAVES * PPG_SAMPLES_PER_WAVE] = {
     // Wave   0 (0:0)
     131, 162, 188, 205, 211, 208, 196, 181,
