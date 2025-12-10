@@ -6,6 +6,8 @@
  * Uses PPG Wave style oscillators for authentic 8-bit character.
  * 
  * Voice allocation: Round-robin with oldest-note stealing when all voices busy.
+ * 
+ * v1.1.0: MOD HUB system for expanded modulation routing
  */
 
 #pragma once
@@ -18,6 +20,7 @@
 #include "envelope.h"
 #include "filter.h"
 #include "lfo.h"
+#include "smoothed_value.h"
 #include "resources/ppg_waves.h"
 #include "../common/stereo_widener.h"
 
@@ -65,13 +68,26 @@ enum Vapo2Params {
     P_FILT_SUSTAIN,
     P_FILT_RELEASE,
     
-    // Page 6: Modulation & Output
-    P_LFO_RATE,
-    P_LFO_TO_MORPH,
-    P_OSC_MIX,
-    P_SPACE,         // Stereo width (0=mono, 64=normal, 127=wide)
+    // Page 6: MOD HUB & Output
+    P_MOD_SELECT,    // Selects which mod destination to edit
+    P_MOD_VALUE,     // Value for selected mod destination
+    P_OSC_MIX,       // Bipolar: -64=A, 0=50/50, +63=B
+    P_SPACE,         // Bipolar: -64=mono, 0=normal, +63=wide
     
     P_NUM_PARAMS
+};
+
+// MOD HUB destinations
+enum ModDestination {
+    MOD_LFO_RATE = 0,
+    MOD_LFO_SHAPE,
+    MOD_LFO_TO_MORPH,
+    MOD_LFO_TO_FILTER,
+    MOD_VEL_TO_FILTER,
+    MOD_KEY_TRACK,
+    MOD_OSC_B_DETUNE,
+    MOD_PB_RANGE,
+    MOD_NUM_DESTINATIONS
 };
 
 // Filter type names
@@ -82,24 +98,24 @@ static const char* s_filter_names[] = {
     "BP12"
 };
 
-// PPG Bank names for display
+// PPG Bank names for display (shortened for display)
 static const char* ppg_bank_names[] = {
-    "UPPER_WT",   // 0:  waves 0-15
-    "RESONANT1",  // 1:  waves 16-31
-    "RESONANT2",  // 2:  waves 32-47
-    "MELLOW",     // 3:  waves 48-63
-    "BRIGHT",     // 4:  waves 64-79
-    "HARSH",      // 5:  waves 80-95
-    "CLIPPER",    // 6:  waves 96-111
-    "SYNC",       // 7:  waves 112-127
-    "PWM",        // 8:  waves 128-143
-    "VOCAL1",     // 9:  waves 144-159
-    "VOCAL2",     // 10: waves 160-175
-    "ORGAN",      // 11: waves 176-191
-    "BELL",       // 12: waves 192-207
-    "ALIEN",      // 13: waves 208-223
-    "NOISE",      // 14: waves 224-239
-    "SPECIAL"     // 15: waves 240-255
+    "UPPER",    // 0:  waves 0-15
+    "RESNT1",   // 1:  waves 16-31
+    "RESNT2",   // 2:  waves 32-47
+    "MELLOW",   // 3:  waves 48-63
+    "BRIGHT",   // 4:  waves 64-79
+    "HARSH",    // 5:  waves 80-95
+    "CLIPPR",   // 6:  waves 96-111
+    "SYNC",     // 7:  waves 112-127
+    "PWM",      // 8:  waves 128-143
+    "VOCAL1",   // 9:  waves 144-159
+    "VOCAL2",   // 10: waves 160-175
+    "ORGAN",    // 11: waves 176-191
+    "BELL",     // 12: waves 192-207
+    "ALIEN",    // 13: waves 208-223
+    "NOISE",    // 14: waves 224-239
+    "SPECAL"    // 15: waves 240-255
 };
 
 // PPG oscillator mode names
@@ -108,6 +124,39 @@ static const char* ppg_mode_names[] = {
     "LoFi",   // INTERP_1D - sample interpolation only (stepped waves)
     "Raw"     // NO_INTERP - no interpolation (authentic PPG crunch)
 };
+
+// MOD HUB destination names
+static const char* mod_dest_names[] = {
+    "LFO SPD",   // 0: LFO Rate
+    "LFO SHP",   // 1: LFO Shape
+    "LFO>MRP",   // 2: LFO to Morph
+    "LFO>FLT",   // 3: LFO to Filter
+    "VEL>FLT",   // 4: Velocity to Filter
+    "KEY TRK",   // 5: Filter Key Track
+    "B TUNE",    // 6: Osc B Detune
+    "PB RNG"     // 7: Pitch Bend Range
+};
+
+// LFO shape names
+static const char* lfo_shape_names[] = {
+    "Sine",
+    "Tri",
+    "Saw+",
+    "Saw-",
+    "Square",
+    "S&H"
+};
+
+// Pitch bend range names
+static const char* pb_range_names[] = {
+    "+/-2",
+    "+/-7",
+    "+/-12",
+    "+/-24"
+};
+
+// Pitch bend semitone values
+static const float pb_semitones[] = {2.0f, 7.0f, 12.0f, 24.0f};
 
 // Maximum frames we'll ever process at once (drumlogue uses 64 typically)
 static constexpr uint32_t kMaxFrames = 64;
@@ -185,10 +234,16 @@ public:
         // Initialize global LFO
         lfo_.Init(sample_rate_);
         
+        // Initialize parameter smoothing
+        cutoff_smooth_.Init(1.0f, 0.005f);   // Slower for filter
+        osc_mix_smooth_.Init(0.5f, 0.01f);   // Medium for crossfade
+        space_smooth_.Init(0.0f, 0.01f);     // Medium for stereo
+        
         // Initialize state
         pitch_bend_ = 0.0f;
         pressure_ = 0.0f;
         voice_counter_ = 0;
+        params_dirty_ = 0xFFFFFFFF;  // Mark all params dirty initially
         
         // Clear intermediate buffers
         vapo2::neon::ClearBuffer(mix_buffer_, kMaxFrames);
@@ -199,8 +254,8 @@ public:
         }
         
         // Set some sensible defaults (matching header.c)
-        params_[P_OSC_MODE] = 2;  // Raw PPG mode by default
-        params_[P_OSC_MIX] = 64;  // 50% mix
+        params_[P_OSC_MODE] = 0;  // HiFi PPG mode by default
+        params_[P_OSC_MIX] = 0;   // Bipolar 0 = 50% mix
         params_[P_FILTER_CUTOFF] = 127;
         params_[P_AMP_ATTACK] = 5;
         params_[P_AMP_DECAY] = 40;
@@ -211,8 +266,17 @@ public:
         params_[P_FILT_SUSTAIN] = 40;
         params_[P_FILT_RELEASE] = 40;
         params_[P_FILTER_ENV] = 32;  // Center point for bipolar
-        params_[P_LFO_RATE] = 40;
-        params_[P_SPACE] = 64;  // Default to normal stereo spread
+        params_[P_SPACE] = 0;    // Bipolar 0 = normal stereo spread
+        
+        // Initialize MOD HUB values
+        mod_values_[MOD_LFO_RATE] = 40;      // Default LFO speed
+        mod_values_[MOD_LFO_SHAPE] = 0;      // Sine
+        mod_values_[MOD_LFO_TO_MORPH] = 0;   // No modulation
+        mod_values_[MOD_LFO_TO_FILTER] = 0;  // No modulation
+        mod_values_[MOD_VEL_TO_FILTER] = 0;  // No velocity to filter
+        mod_values_[MOD_KEY_TRACK] = 0;      // No key tracking
+        mod_values_[MOD_OSC_B_DETUNE] = 0;   // No detune
+        mod_values_[MOD_PB_RANGE] = 0;       // ±2 semitones
         
         preset_idx_ = 0;
         
@@ -239,21 +303,34 @@ public:
         // Clear mix buffer
         vapo2::neon::ClearBuffer(mix_buffer_, frames);
         
+        // === Read MOD HUB values ===
+        const int32_t lfo_rate = mod_values_[MOD_LFO_RATE];
+        const int32_t lfo_shape = mod_values_[MOD_LFO_SHAPE];
+        const float lfo_to_morph = mod_values_[MOD_LFO_TO_MORPH] / 64.0f;
+        const float lfo_to_filter = mod_values_[MOD_LFO_TO_FILTER] / 64.0f;
+        const float vel_to_filter = (mod_values_[MOD_VEL_TO_FILTER] + 64) / 127.0f;  // 0-1
+        const float key_track = (mod_values_[MOD_KEY_TRACK] + 64) / 127.0f;  // 0-1
+        const float osc_b_detune = mod_values_[MOD_OSC_B_DETUNE] / 100.0f;  // cents
+        const int pb_range_idx = mod_values_[MOD_PB_RANGE] & 3;
+        const float pb_range = pb_semitones[pb_range_idx];
+        
+        // === Update smoothed parameters ===
+        cutoff_smooth_.SetTarget(params_[P_FILTER_CUTOFF] / 127.0f);
+        osc_mix_smooth_.SetTarget((params_[P_OSC_MIX] + 64) / 127.0f);  // Bipolar to 0-1
+        space_smooth_.SetTarget((params_[P_SPACE] + 64) / 127.0f * 1.5f);  // Bipolar to 0-1.5
+        
         // Calculate derived parameters (global)
         const float osc_a_morph = params_[P_OSC_A_MORPH] / 127.0f;
         const float osc_b_morph = params_[P_OSC_B_MORPH] / 127.0f;
-        const float osc_mix = params_[P_OSC_MIX] / 127.0f;
         
-        const float cutoff_base = params_[P_FILTER_CUTOFF] / 127.0f;
         const float resonance = params_[P_FILTER_RESO] / 127.0f;
         const float filter_env_amt = params_[P_FILTER_ENV] / 64.0f;
-        const float lfo_to_morph = params_[P_LFO_TO_MORPH] / 64.0f;
         
         const float osc_a_octave = static_cast<float>(params_[P_OSC_A_OCT]);
         const float osc_a_tune = params_[P_OSC_A_TUNE] / 100.0f;
         const float osc_b_octave = static_cast<float>(params_[P_OSC_B_OCT]);
         
-        // Get current banks and check for reload
+        // Get current banks and check for reload (dirty flag check)
         const int bank_a = params_[P_OSC_A_BANK];
         const int bank_b = params_[P_OSC_B_BANK];
         
@@ -271,31 +348,53 @@ public:
             current_bank_b_ = bank_b;
         }
         
-        // Set PPG oscillator mode for all voices
-        const auto ppg_mode = static_cast<common::PpgMode>(params_[P_OSC_MODE]);
-        for (uint32_t v = 0; v < kNumVoices; v++) {
-            voices_[v].osc_a.SetMode(ppg_mode);
-            voices_[v].osc_b.SetMode(ppg_mode);
+        // === Update parameters only when dirty ===
+        
+        // PPG oscillator mode
+        if (params_dirty_ & (1u << P_OSC_MODE)) {
+            const auto ppg_mode = static_cast<common::PpgMode>(params_[P_OSC_MODE]);
+            for (uint32_t v = 0; v < kNumVoices; v++) {
+                voices_[v].osc_a.SetMode(ppg_mode);
+                voices_[v].osc_b.SetMode(ppg_mode);
+            }
         }
         
-        // Update envelope parameters for all voices
-        for (uint32_t v = 0; v < kNumVoices; v++) {
-            voices_[v].amp_env.SetAttack(params_[P_AMP_ATTACK]);
-            voices_[v].amp_env.SetDecay(params_[P_AMP_DECAY]);
-            voices_[v].amp_env.SetSustain(params_[P_AMP_SUSTAIN] / 127.0f);
-            voices_[v].amp_env.SetRelease(params_[P_AMP_RELEASE]);
-            
-            voices_[v].filter_env.SetAttack(params_[P_FILT_ATTACK]);
-            voices_[v].filter_env.SetDecay(params_[P_FILT_DECAY]);
-            voices_[v].filter_env.SetSustain(params_[P_FILT_SUSTAIN] / 127.0f);
-            voices_[v].filter_env.SetRelease(params_[P_FILT_RELEASE]);
+        // Envelope parameters (check dirty flags for any envelope param)
+        const uint32_t amp_env_mask = (1u << P_AMP_ATTACK) | (1u << P_AMP_DECAY) | 
+                                       (1u << P_AMP_SUSTAIN) | (1u << P_AMP_RELEASE);
+        if (params_dirty_ & amp_env_mask) {
+            for (uint32_t v = 0; v < kNumVoices; v++) {
+                voices_[v].amp_env.SetAttack(params_[P_AMP_ATTACK]);
+                voices_[v].amp_env.SetDecay(params_[P_AMP_DECAY]);
+                voices_[v].amp_env.SetSustain(params_[P_AMP_SUSTAIN] / 127.0f);
+                voices_[v].amp_env.SetRelease(params_[P_AMP_RELEASE]);
+            }
         }
         
-        // Update LFO rate
-        lfo_.SetRate(params_[P_LFO_RATE]);
+        const uint32_t filt_env_mask = (1u << P_FILT_ATTACK) | (1u << P_FILT_DECAY) | 
+                                        (1u << P_FILT_SUSTAIN) | (1u << P_FILT_RELEASE);
+        if (params_dirty_ & filt_env_mask) {
+            for (uint32_t v = 0; v < kNumVoices; v++) {
+                voices_[v].filter_env.SetAttack(params_[P_FILT_ATTACK]);
+                voices_[v].filter_env.SetDecay(params_[P_FILT_DECAY]);
+                voices_[v].filter_env.SetSustain(params_[P_FILT_SUSTAIN] / 127.0f);
+                voices_[v].filter_env.SetRelease(params_[P_FILT_RELEASE]);
+            }
+        }
+        
+        // LFO rate and shape (from MOD HUB)
+        lfo_.SetRate(lfo_rate);
+        lfo_.SetShape(static_cast<LFOShape>(lfo_shape & 5));  // Clamp to valid shapes
+        
+        // Clear dirty flags
+        params_dirty_ = 0;
         
         // Process each sample
         for (uint32_t i = 0; i < frames; i++) {
+            // Get smoothed values for this sample
+            const float cutoff_base = cutoff_smooth_.Process();
+            const float osc_mix = osc_mix_smooth_.Process();
+            
             // Get global LFO value (-1 to +1)
             const float lfo_val = lfo_.Process();
             
@@ -317,10 +416,10 @@ public:
                 // Increment age for voice stealing
                 voice.age++;
                 
-                // Calculate frequency for this voice
-                const float base_note = static_cast<float>(voice.note) + pitch_bend_ * 2.0f;
+                // Calculate frequency for this voice with configurable pitch bend range
+                const float base_note = static_cast<float>(voice.note) + pitch_bend_ * pb_range;
                 const float freq_a = 440.0f * powf(2.0f, (base_note - 69.0f + osc_a_octave * 12.0f + osc_a_tune) / 12.0f);
-                const float freq_b = 440.0f * powf(2.0f, (base_note - 69.0f + osc_b_octave * 12.0f) / 12.0f);
+                const float freq_b = 440.0f * powf(2.0f, (base_note - 69.0f + osc_b_octave * 12.0f + osc_b_detune) / 12.0f);
                 
                 // Set oscillator frequencies and wave positions
                 voice.osc_a.SetFrequency(freq_a);
@@ -339,8 +438,12 @@ public:
                 const float amp_env_val = voice.amp_env.Process(voice.gate);
                 const float filt_env_val = voice.filter_env.Process(voice.gate);
                 
-                // Calculate filter cutoff with envelope
-                float cutoff = cutoff_base + filt_env_val * filter_env_amt;
+                // Calculate filter cutoff with envelope, LFO, velocity, and key tracking
+                float cutoff = cutoff_base;
+                cutoff += filt_env_val * filter_env_amt;
+                cutoff += lfo_val * lfo_to_filter * 0.5f;  // LFO to filter
+                cutoff += voice.velocity * vel_to_filter * 0.5f;  // Velocity to filter
+                cutoff += (voice.note - 60) / 60.0f * key_track;  // Key tracking (C4 = center)
                 cutoff = fminf(1.0f, fmaxf(0.0f, cutoff));
                 
                 // Apply filter
@@ -362,8 +465,8 @@ public:
         // Sanitize (remove NaN/Inf) and soft clamp
         vapo2::neon::SanitizeAndClamp(mix_buffer_, 1.0f, frames);
         
-        // Apply stereo widening
-        const float space = params_[P_SPACE] / 127.0f * 1.5f;
+        // Get smoothed stereo width
+        const float space = space_smooth_.GetValue();
         stereo_widener_.SetWidth(space);
         
         // Create stereo output from mono with width
@@ -409,12 +512,29 @@ public:
     }
     
     void SetParameter(uint8_t id, int32_t value) {
-        if (id < P_NUM_PARAMS) {
-            params_[id] = value;
+        if (id == P_MOD_VALUE) {
+            // Route MOD_VALUE to the currently selected mod destination
+            int sel = params_[P_MOD_SELECT];
+            if (sel >= 0 && sel < MOD_NUM_DESTINATIONS) {
+                mod_values_[sel] = value;
+            }
+        } else if (id < P_NUM_PARAMS) {
+            if (params_[id] != value) {
+                params_[id] = value;
+                params_dirty_ |= (1u << id);
+            }
         }
     }
     
     int32_t GetParameter(uint8_t id) const {
+        if (id == P_MOD_VALUE) {
+            // Return the value for the currently selected mod destination
+            int sel = params_[P_MOD_SELECT];
+            if (sel >= 0 && sel < MOD_NUM_DESTINATIONS) {
+                return mod_values_[sel];
+            }
+            return 0;
+        }
         if (id < P_NUM_PARAMS) {
             return params_[id];
         }
@@ -439,6 +559,29 @@ public:
                     return s_filter_names[value];
                 }
                 break;
+            case P_MOD_SELECT:
+                if (value >= 0 && value < MOD_NUM_DESTINATIONS) {
+                    return mod_dest_names[value];
+                }
+                break;
+            case P_MOD_VALUE: {
+                // Return string based on currently selected mod destination
+                int sel = params_[P_MOD_SELECT];
+                switch (sel) {
+                    case MOD_LFO_SHAPE:
+                        if (value >= 0 && value < 6) {
+                            return lfo_shape_names[value];
+                        }
+                        break;
+                    case MOD_PB_RANGE:
+                        if (value >= 0 && value < 4) {
+                            return pb_range_names[value];
+                        }
+                        break;
+                    // Other destinations show numeric value (return nullptr)
+                }
+                break;
+            }
         }
         return nullptr;
     }
@@ -590,6 +733,11 @@ private:
     LFO lfo_;
     common::StereoWidener stereo_widener_;
     
+    // Parameter smoothing
+    SmoothedValue cutoff_smooth_;
+    SmoothedValue osc_mix_smooth_;
+    SmoothedValue space_smooth_;
+    
     // NEON-aligned intermediate buffer for mixing
     float mix_buffer_[kMaxFrames] __attribute__((aligned(16)));
     
@@ -598,8 +746,13 @@ private:
     float pressure_;
     uint32_t tempo_;
     uint32_t voice_counter_;  // For round-robin allocation
+    uint32_t params_dirty_;   // Bitmask of changed parameters
     
     // Parameters
     int32_t params_[P_NUM_PARAMS];
+    
+    // MOD HUB values (stored separately from main params)
+    int32_t mod_values_[MOD_NUM_DESTINATIONS];
+    
     uint8_t preset_idx_;
 };

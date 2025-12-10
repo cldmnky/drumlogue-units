@@ -16,9 +16,9 @@ const __unit_header unit_header_t unit_header = {
     .api = UNIT_API_VERSION,
     .dev_id = 0x434C444DU,    // "CLDM" - developer ID
     .unit_id = 0x00000003U,   // Unique unit ID (3 = vapo2)
-    .version = 0x00010000U,   // v1.0.0
+    .version = 0x00010100U,   // v1.1.0 - MOD HUB update
     .name = "Vapo2",          // Display name (max 13 chars)
-    .num_presets = 8,         // Number of factory presets
+    .num_presets = 0,         // Presets disabled (not implemented)
     .num_params = 24,         // 6 pages × 4 parameters
     .params = {
         // Format: min, max, center, default, type, fractional, frac_mode, reserved, name
@@ -40,8 +40,8 @@ const __unit_header unit_header_t unit_header = {
         {0, 127, 0, 0, k_unit_param_type_none, 0, 0, 0, {"B MORPH"}},
         // OSC B OCTAVE: Octave offset relative to A
         {-3, 3, 0, 0, k_unit_param_type_none, 0, 0, 0, {"B OCT"}},
-        // OSC MODE: PPG interpolation mode (0=HiFi, 1=LoFi, 2=Raw)
-        {0, 2, 0, 2, k_unit_param_type_strings, 0, 0, 0, {"OSC MOD"}},
+        // OSC MODE: PPG interpolation mode (0=HiFi, 1=LoFi, 2=Raw) - default HiFi
+        {0, 2, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"OSC MOD"}},
 
         // ==================== Page 3: Filter ====================
         // CUTOFF: Filter cutoff frequency
@@ -73,14 +73,14 @@ const __unit_header unit_header_t unit_header = {
         // F.RELEASE: Filter envelope release time
         {0, 127, 0, 40, k_unit_param_type_none, 0, 0, 0, {"F.REL"}},
 
-        // ==================== Page 6: Modulation & Output ====================
-        // LFO RATE: LFO speed
-        {0, 127, 0, 40, k_unit_param_type_none, 0, 0, 0, {"LFO RT"}},
-        // LFO to MORPH: LFO modulation of morph position
-        {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"LFO>MRP"}},
-        // OSC MIX: Balance between Osc A and B (0=A, 127=B)
-        {0, 127, 64, 0, k_unit_param_type_none, 0, 0, 0, {"OSC MIX"}},
-        // SPACE: Stereo width (0=mono, 64=normal stereo, 127=wide)
-        {0, 127, 0, 64, k_unit_param_type_none, 0, 0, 0, {"SPACE"}},
+        // ==================== Page 6: MOD HUB & Output ====================
+        // MOD SELECT: Choose modulation destination (0-7)
+        {0, 7, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"MOD SEL"}},
+        // MOD VALUE: Value for selected destination
+        {-64, 63, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"MOD VAL"}},
+        // OSC MIX: Balance between Osc A and B (bipolar: -64=A, 0=50/50, +63=B)
+        {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"OSC MIX"}},
+        // SPACE: Stereo width (bipolar: -64=mono, 0=normal, +63=wide)
+        {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"SPACE"}},
     }
 };
