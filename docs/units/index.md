@@ -26,8 +26,18 @@ Browse all available drumlogue units. Each unit can be downloaded and installed 
     <div class="unit-info">
       <h3>Elementish Synth</h3>
       <span class="unit-type-badge synth">Synthesizer</span>
-      <span class="unit-version">v1.0.0</span>
+      <span class="unit-version">v1.2.0</span>
       <p>Modal synthesis voice combining bow, blow, and strike exciters with versatile resonator models for rich, expressive timbres. Based on Mutable Instruments Elements.</p>
+    </div>
+  </a>
+  
+  <a href="{{ site.baseurl }}/units/pepege-synth/" class="unit-list-item">
+    <div class="unit-icon">🌊</div>
+    <div class="unit-info">
+      <h3>Pepege-Synth</h3>
+      <span class="unit-type-badge synth">Synthesizer</span>
+      <span class="unit-version">v1.0.0</span>
+      <p>2-voice polyphonic PPG wavetable synthesizer with dual oscillators, comprehensive modulation, and authentic 8-bit character. Inspired by VAST Dynamics Vaporizer2.</p>
     </div>
   </a>
 </div>
