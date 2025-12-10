@@ -447,7 +447,7 @@ float DrupiterSynth::GenerateNoise() {
 
 float DrupiterSynth::ParameterToEnvelopeTime(uint8_t value) {
     // Quadratic scaling for envelope times (better control at low values)
-    // 0 = 1ms (instant), 32 = ~320ms, 64 = ~1.3s, 127 = 5s
+    // 0 = 1ms, 32 = ~319ms, 64 = ~1.28s, 127 = 5s
     float normalized = value / 127.0f;
     return 0.001f + normalized * normalized * 4.999f;
 }
