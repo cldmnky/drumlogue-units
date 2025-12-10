@@ -304,40 +304,36 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
         
         // VCF Envelope
         case PARAM_VCF_ATTACK:
-            // Scale to 0-5 seconds with exponential curve for better control
-            // 0 = 1ms, 64 = ~100ms, 127 = 5s
-            env_vcf_->SetAttack(0.001f + (value / 127.0f) * (value / 127.0f) * 4.999f);
+            env_vcf_->SetAttack(ParameterToEnvelopeTime(value));
             break;
         case PARAM_VCF_DECAY:
-            env_vcf_->SetDecay(0.001f + (value / 127.0f) * (value / 127.0f) * 4.999f);
+            env_vcf_->SetDecay(ParameterToEnvelopeTime(value));
             break;
         case PARAM_VCF_SUSTAIN:
             env_vcf_->SetSustain(value / 127.0f);
             break;
         case PARAM_VCF_RELEASE:
-            env_vcf_->SetRelease(0.001f + (value / 127.0f) * (value / 127.0f) * 4.999f);
+            env_vcf_->SetRelease(ParameterToEnvelopeTime(value));
             break;
         
         // VCA Envelope
         case PARAM_VCA_ATTACK:
-            // Scale to 0-5 seconds with exponential curve
-            env_vca_->SetAttack(0.001f + (value / 127.0f) * (value / 127.0f) * 4.999f);
+            env_vca_->SetAttack(ParameterToEnvelopeTime(value));
             break;
         case PARAM_VCA_DECAY:
-            env_vca_->SetDecay(0.001f + (value / 127.0f) * (value / 127.0f) * 4.999f);
+            env_vca_->SetDecay(ParameterToEnvelopeTime(value));
             break;
         case PARAM_VCA_SUSTAIN:
             env_vca_->SetSustain(value / 127.0f);
             break;
         case PARAM_VCA_RELEASE:
-            env_vca_->SetRelease(0.001f + (value / 127.0f) * (value / 127.0f) * 4.999f);
+            env_vca_->SetRelease(ParameterToEnvelopeTime(value));
             break;
         
         // LFO
         case PARAM_LFO_RATE:
-            // Exponential scaling for better feel: 0.1Hz to 20Hz (reduced from 50Hz)
-            // 0 = 0.1Hz, 64 = ~2Hz, 127 = 20Hz
-            lfo_->SetFrequency(0.1f + (value / 127.0f) * (value / 127.0f) * 19.9f);
+            // Exponential scaling: 0.1Hz to 20Hz
+            lfo_->SetFrequency(ParameterToExponentialFreq(value, 0.1f, 20.0f));
             break;
         case PARAM_LFO_WAVE:
             lfo_->SetWaveform(static_cast<dsp::JupiterLFO::Waveform>(value & 0x03));
@@ -447,6 +443,19 @@ float DrupiterSynth::GenerateNoise() {
     // Simple white noise generator
     noise_seed_ = (noise_seed_ * 1103515245 + 12345) & 0x7FFFFFFF;
     return (static_cast<float>(noise_seed_) / 0x7FFFFFFF) * 2.0f - 1.0f;
+}
+
+float DrupiterSynth::ParameterToEnvelopeTime(uint8_t value) {
+    // Exponential scaling for envelope times
+    // 0 = 1ms (instant), 64 = ~100ms, 127 = 5s
+    float normalized = value / 127.0f;
+    return 0.001f + normalized * normalized * 4.999f;
+}
+
+float DrupiterSynth::ParameterToExponentialFreq(uint8_t value, float min_freq, float max_freq) {
+    // Exponential scaling for frequency parameters
+    float normalized = value / 127.0f;
+    return min_freq + normalized * normalized * (max_freq - min_freq);
 }
 
 void DrupiterSynth::InitFactoryPresets() {
