@@ -245,14 +245,14 @@ private:
     float GenerateNoise();
     
     /**
-     * @brief Convert parameter value to time with exponential scaling
+     * @brief Convert parameter value to time with quadratic scaling
      * @param value Parameter value 0-127
      * @return Time in seconds (0.001 to 5.0)
      */
     static float ParameterToEnvelopeTime(uint8_t value);
     
     /**
-     * @brief Convert parameter value to frequency with exponential scaling
+     * @brief Convert parameter value to frequency with quadratic scaling
      * @param value Parameter value 0-127
      * @param min_freq Minimum frequency (Hz)
      * @param max_freq Maximum frequency (Hz)
