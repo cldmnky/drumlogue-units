@@ -312,6 +312,189 @@ inline void SoftClampStereo(float* left, float* right, float drive, float gain, 
 } // namespace neon
 } // namespace NEON_DSP_NS
 
+#ifdef USE_NEON
+namespace NEON_DSP_NS {
+namespace osc {
+
+/**
+ * @brief Mix two oscillator outputs with a blend factor (NEON)
+ * 
+ * Computes: output = osc1 + (osc2 - osc1) * blend
+ *
+ * @param osc1 First oscillator buffer
+ * @param osc2 Second oscillator buffer
+ * @param output Output buffer
+ * @param blend Blend factor (0.0 = osc1, 1.0 = osc2)
+ * @param frames Number of samples
+ */
+inline void BlendOscillators(const float* osc1, const float* osc2, 
+                             float* output, float blend, uint32_t frames) {
+    float32x4_t blend_vec = vdupq_n_f32(blend);
+    uint32_t i = 0;
+    for (; i + 4 <= frames; i += 4) {
+        float32x4_t a = vld1q_f32(&osc1[i]);
+        float32x4_t b = vld1q_f32(&osc2[i]);
+        // output = a + (b - a) * blend
+        float32x4_t result = vmlaq_f32(a, vsubq_f32(b, a), blend_vec);
+        vst1q_f32(&output[i], result);
+    }
+    for (; i < frames; ++i) {
+        output[i] = osc1[i] + (osc2[i] - osc1[i]) * blend;
+    }
+}
+
+/**
+ * @brief Apply pitch modulation to a frequency buffer
+ * 
+ * Computes: freq_out = freq * 2^(semitones/12)
+ * Approximation using polynomial for 2^x in small range
+ *
+ * @param freq Base frequency
+ * @param mod_buffer Modulation in semitones
+ * @param freq_out Output frequency buffer
+ * @param frames Number of samples
+ */
+inline void ApplyPitchMod(float freq, const float* mod_buffer, 
+                          float* freq_out, uint32_t frames) {
+    // Approximation: 2^(x/12) ≈ 1 + 0.05776 * x for small x
+    // Better: use exp2f per sample for accuracy
+    const float k_semitone = 0.0577622650466621f;  // ln(2)/12
+    float32x4_t freq_vec = vdupq_n_f32(freq);
+    float32x4_t k_vec = vdupq_n_f32(k_semitone);
+    float32x4_t one_vec = vdupq_n_f32(1.0f);
+    
+    uint32_t i = 0;
+    for (; i + 4 <= frames; i += 4) {
+        float32x4_t mod = vld1q_f32(&mod_buffer[i]);
+        // Approximate 2^(mod/12) ≈ 1 + k * mod + 0.5 * k^2 * mod^2
+        float32x4_t kmod = vmulq_f32(k_vec, mod);
+        float32x4_t scale = vmlaq_f32(one_vec, kmod, vmlaq_f32(one_vec, kmod, vdupq_n_f32(0.5f)));
+        vst1q_f32(&freq_out[i], vmulq_f32(freq_vec, scale));
+    }
+    for (; i < frames; ++i) {
+        freq_out[i] = freq * (1.0f + k_semitone * mod_buffer[i] * 
+                              (1.0f + 0.5f * k_semitone * mod_buffer[i]));
+    }
+}
+
+/**
+ * @brief Mix oscillator into output with envelope (NEON)
+ * 
+ * Computes: output += osc * envelope * gain
+ *
+ * @param osc Oscillator buffer
+ * @param envelope Envelope buffer
+ * @param output Output buffer (accumulated)
+ * @param gain Overall gain
+ * @param frames Number of samples
+ */
+inline void MixOscWithEnvelope(const float* osc, const float* envelope,
+                               float* output, float gain, uint32_t frames) {
+    float32x4_t gain_vec = vdupq_n_f32(gain);
+    uint32_t i = 0;
+    for (; i + 4 <= frames; i += 4) {
+        float32x4_t o = vld1q_f32(&osc[i]);
+        float32x4_t e = vld1q_f32(&envelope[i]);
+        float32x4_t out = vld1q_f32(&output[i]);
+        // out += osc * env * gain
+        out = vmlaq_f32(out, vmulq_f32(o, e), gain_vec);
+        vst1q_f32(&output[i], out);
+    }
+    for (; i < frames; ++i) {
+        output[i] += osc[i] * envelope[i] * gain;
+    }
+}
+
+/**
+ * @brief Apply DC blocking filter to oscillator output (NEON batch)
+ * 
+ * Simple one-pole DC blocker: y[n] = x[n] - x[n-1] + R * y[n-1]
+ *
+ * @param buffer Input/output buffer
+ * @param frames Number of samples
+ * @param state DC blocker state (x_prev, y_prev)
+ * @param R Feedback coefficient (typically 0.995-0.999)
+ */
+inline void DCBlock(float* buffer, uint32_t frames, float state[2], float R = 0.995f) {
+    float x_prev = state[0];
+    float y_prev = state[1];
+    
+    for (uint32_t i = 0; i < frames; ++i) {
+        float x = buffer[i];
+        float y = x - x_prev + R * y_prev;
+        buffer[i] = y;
+        x_prev = x;
+        y_prev = y;
+    }
+    
+    state[0] = x_prev;
+    state[1] = y_prev;
+}
+
+/**
+ * @brief Generate a ramp for smooth parameter changes (NEON)
+ *
+ * @param output Output buffer
+ * @param start_val Starting value
+ * @param end_val Ending value
+ * @param frames Number of samples
+ */
+inline void GenerateRamp(float* output, float start_val, float end_val, uint32_t frames) {
+    if (frames == 0) return;
+    
+    float delta = (end_val - start_val) / static_cast<float>(frames);
+    float32x4_t val = {start_val, start_val + delta, start_val + 2*delta, start_val + 3*delta};
+    float32x4_t delta_x4 = vdupq_n_f32(4.0f * delta);
+    
+    uint32_t i = 0;
+    for (; i + 4 <= frames; i += 4) {
+        vst1q_f32(&output[i], val);
+        val = vaddq_f32(val, delta_x4);
+    }
+    
+    float current = start_val + static_cast<float>(i) * delta;
+    for (; i < frames; ++i) {
+        output[i] = current;
+        current += delta;
+    }
+}
+
+/**
+ * @brief Apply waveshaping using fast tanh approximation (NEON)
+ *
+ * @param buffer Input/output buffer
+ * @param drive Pre-gain before tanh
+ * @param frames Number of samples
+ */
+inline void WaveshapeTanh(float* buffer, float drive, uint32_t frames) {
+    // Use FastTanh4 from neon namespace
+    float32x4_t drive_vec = vdupq_n_f32(drive);
+    
+    uint32_t i = 0;
+    for (; i + 4 <= frames; i += 4) {
+        float32x4_t s = vld1q_f32(&buffer[i]);
+        s = vmulq_f32(s, drive_vec);
+        s = NEON_DSP_NS::neon::FastTanh4(s);
+        vst1q_f32(&buffer[i], s);
+    }
+    
+    // Scalar fallback
+    for (; i < frames; ++i) {
+        float v = buffer[i] * drive;
+        if (v > 4.0f) v = 1.0f;
+        else if (v < -4.0f) v = -1.0f;
+        else {
+            float v2 = v * v;
+            v = v * (27.0f + v2) / (27.0f + 9.0f * v2);
+        }
+        buffer[i] = v;
+    }
+}
+
+} // namespace osc
+} // namespace NEON_DSP_NS
+#endif // USE_NEON
+
 // NOTE: NEON_DSP_NS intentionally not undefined here.
 // The including file is responsible for defining and undefining it.
 // See drumlogue/clouds-revfx/dsp/neon_dsp.h for the pattern.
