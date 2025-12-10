@@ -12,6 +12,9 @@
 #include "unit.h"
 #include "pepege_synth.h"
 
+// C++14 requires out-of-class definitions for static constexpr members that are ODR-used
+constexpr PepegeSynth::Preset PepegeSynth::kPresets[];
+
 static PepegeSynth s_synth;
 static unit_runtime_desc_t s_runtime_desc;
 
@@ -115,6 +118,6 @@ __unit_callback uint8_t unit_get_preset_index() {
     return s_synth.GetPresetIndex();
 }
 
-__unit_callback const uint8_t* unit_get_preset_data(uint8_t idx) {
-    return s_synth.GetPresetData(idx);
+__unit_callback const char* unit_get_preset_name(uint8_t idx) {
+    return s_synth.GetPresetName(idx);
 }

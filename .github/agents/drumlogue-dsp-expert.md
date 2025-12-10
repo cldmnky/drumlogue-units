@@ -145,6 +145,31 @@ Required implementations:
 - Use desktop test harnesses for Mutable code
 - Test parameter changes on hardware for UI feedback
 
+### Troubleshooting "Error Loading Unit"
+When a unit fails to load on hardware (especially early in loading), check for undefined symbols:
+
+```bash
+# Check dynamic symbol table for undefined (*UND*) symbols
+objdump -T path/to/unit.drmlgunit | grep "UND"
+```
+
+**Common causes:**
+1. **Undefined `static constexpr` class members** - C++14 requires out-of-class definitions for `static constexpr` members that are ODR-used. Add definition in `.cc` file:
+   ```cpp
+   // In unit.cc after includes
+   constexpr ClassName::MemberType ClassName::kMemberName[];
+   ```
+
+2. **Missing library functions** - Some `*UND*` symbols are expected (e.g., `sinf`, `__aeabi_uidiv` from GLIBC/GCC runtime). Only project-specific undefined symbols indicate problems.
+
+3. **Symbol naming** - Look for mangled C++ names like `_ZN...` that are undefined - demangle with `c++filt` if needed.
+
+**Compare with working units:**
+```bash
+# Check a working unit for reference
+objdump -T drumlogue/elementish-synth/elementish_synth.drmlgunit | grep "UND"
+```
+
 ## Important Constraints
 
 ### Naming & ASCII

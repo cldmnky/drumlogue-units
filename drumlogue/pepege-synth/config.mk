@@ -2,7 +2,7 @@
 # Project Configuration
 #
 
-PROJECT := pepege-synth
+PROJECT := pepege_synth
 PROJECT_TYPE := synth
 
 ##############################################################################

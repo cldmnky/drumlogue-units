@@ -13,6 +13,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdio>
 #include <cmath>
 
 #include "unit.h"
@@ -395,7 +396,7 @@ public:
         
         // Process each sample
         for (uint32_t i = 0; i < frames; i++) {
-            // Get smoothed values for this sample
+            // Get smoothed parameter values
             const float cutoff_base = cutoff_smooth_.Process();
             const float osc_mix = osc_mix_smooth_.Process();
             
@@ -420,7 +421,7 @@ public:
                 // Increment age for voice stealing
                 voice.age++;
                 
-                // Calculate frequency for this voice with configurable pitch bend range
+                // Calculate frequency with pitch bend
                 const float base_note = static_cast<float>(voice.note) + pitch_bend_ * pb_range;
                 const float freq_a = 440.0f * powf(2.0f, (base_note - 69.0f + osc_a_octave * 12.0f + osc_a_tune) / 12.0f);
                 const float freq_b = 440.0f * powf(2.0f, (base_note - 69.0f + osc_b_octave * 12.0f + osc_b_detune) / 12.0f);
@@ -469,7 +470,11 @@ public:
         // Sanitize (remove NaN/Inf) and soft clamp
         pepege::neon::SanitizeAndClamp(mix_buffer_, 1.0f, frames);
         
-        // Get smoothed stereo width
+        // Process smoothed stereo width (call Process() to actually update the value)
+        // Process multiple times to catch up since we're not doing per-sample smoothing
+        for (uint32_t i = 0; i < frames; ++i) {
+            space_smooth_.Process();
+        }
         const float space = space_smooth_.GetValue();
         stereo_widener_.SetWidth(space);
         
@@ -573,11 +578,36 @@ public:
                 // Value is 0-127 range (common for all destinations)
                 int sel = params_[P_MOD_SELECT];
                 switch (sel) {
+                    case MOD_LFO_RATE: {
+                        // Show rate value directly (0-127)
+                        snprintf(mod_value_str_, sizeof(mod_value_str_), "%d", value);
+                        return mod_value_str_;
+                    }
                     case MOD_LFO_SHAPE: {
                         // Map 0-127 to 0-5 for shape index
                         int shape = value * 6 / 128;
                         if (shape > 5) shape = 5;
                         return lfo_shape_names[shape];
+                    }
+                    case MOD_LFO_TO_MORPH:
+                    case MOD_LFO_TO_FILTER: {
+                        // Bipolar: 64 = center (0%), show signed percentage
+                        int pct = (value - 64) * 100 / 64;
+                        snprintf(mod_value_str_, sizeof(mod_value_str_), "%+d%%", pct);
+                        return mod_value_str_;
+                    }
+                    case MOD_VEL_TO_FILTER:
+                    case MOD_KEY_TRACK: {
+                        // Unipolar: 0-127 as percentage
+                        int pct = value * 100 / 127;
+                        snprintf(mod_value_str_, sizeof(mod_value_str_), "%d%%", pct);
+                        return mod_value_str_;
+                    }
+                    case MOD_OSC_B_DETUNE: {
+                        // Bipolar: 64 = center (0 cents), show signed cents
+                        int cents = (value - 64) / 2;  // -32 to +31 cents
+                        snprintf(mod_value_str_, sizeof(mod_value_str_), "%+dc", cents);
+                        return mod_value_str_;
                     }
                     case MOD_PB_RANGE: {
                         // Map 0-127 to 0-3 for range index
@@ -585,7 +615,6 @@ public:
                         if (range > 3) range = 3;
                         return pb_range_names[range];
                     }
-                    // Other destinations show numeric value (return nullptr)
                 }
                 break;
             }
@@ -725,9 +754,17 @@ public:
         return preset_idx_;
     }
     
-    const uint8_t* GetPresetData(uint8_t idx) const {
+    static const char* GetPresetName(uint8_t idx) {
+        static const char* names[] = {
+            "Glass Keys",
+            "Dust Pad",
+            "Sync Bass",
+            "Noise Sweep",
+            "Pluck",
+            "PWM Lead"
+        };
         if (idx >= kNumPresets) return nullptr;
-        return reinterpret_cast<const uint8_t*>(&kPresets[idx]);
+        return names[idx];
     }
     
 private:
@@ -769,6 +806,9 @@ private:
     
     // NEON-aligned intermediate buffer for mixing
     float mix_buffer_[kMaxFrames] __attribute__((aligned(16)));
+    
+    // Buffer for MOD VALUE display string
+    mutable char mod_value_str_[8];
     
     // Global state
     float pitch_bend_;
