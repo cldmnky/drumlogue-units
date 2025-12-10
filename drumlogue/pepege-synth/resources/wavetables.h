@@ -1,6 +1,6 @@
 /**
  * @file wavetables.h
- * @brief Pre-computed wavetable data for Vapo2
+ * @brief Pre-computed wavetable data for Pepege
  *
  * Generated from PPG Wave 2.2 waveform data.
  * Original PPG waves: 64 samples, 8-bit unsigned

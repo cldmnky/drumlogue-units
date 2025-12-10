@@ -1,4 +1,4 @@
-# Vapo2 - 4-Voice Polyphonic PPG Wavetable Synthesizer
+# Pepege-Synth - 4-Voice Polyphonic PPG Wavetable Synthesizer
 
 A **4-voice polyphonic** wavetable synthesizer for the Korg drumlogue, featuring authentic **PPG Wave 2.2/2.3** wavetables with 256 classic 8-bit waveforms across 16 banks.
 
@@ -124,17 +124,17 @@ A **4-voice polyphonic** wavetable synthesizer for the Korg drumlogue, featuring
 ## Building
 
 ```bash
-./build.sh vapo2
+./build.sh pepege-synth
 ```
 
-The build produces `vapo2.drmlgunit` (~30KB) which can be copied to the drumlogue via USB.
+The build produces `pepege-synth.drmlgunit` (~30KB) which can be copied to the drumlogue via USB.
 
 ## Installation
 
 1. Connect drumlogue to computer via USB
-2. Copy `vapo2.drmlgunit` to `Units/Synth/` folder
+2. Copy `pepege-synth.drmlgunit` to `Units/Synth/` folder
 3. Eject and disconnect
-4. Select Vapo2 from the synth menu
+4. Select Pepege-Synth from the synth menu
 
 ## Credits
 

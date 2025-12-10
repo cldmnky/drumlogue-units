@@ -1,6 +1,6 @@
 /**
- * @file vapo2_synth.h
- * @brief Main synth wrapper for Vapo2 wavetable synthesizer
+ * @file pepege_synth_mono.h
+ * @brief Main synth wrapper for Pepege wavetable synthesizer
  *
  * Coordinates oscillators, envelopes, filter, and LFO.
  * Uses PPG Wave style oscillators for authentic 8-bit character.
@@ -25,11 +25,11 @@
 #endif
 
 // Common DSP utilities (includes NEON helpers when USE_NEON defined)
-#define NEON_DSP_NS vapo2
+#define NEON_DSP_NS pepege
 #include "../common/neon_dsp.h"
 
 // Parameter indices (matching header.c order)
-enum Vapo2Params {
+enum PepegeParams {
     // Page 1: Oscillator A
     P_OSC_A_BANK = 0,
     P_OSC_A_MORPH,
@@ -107,10 +107,10 @@ static const char* ppg_mode_names[] = {
 // Maximum frames we'll ever process at once (drumlogue uses 64 typically)
 static constexpr uint32_t kMaxFrames = 64;
 
-class Vapo2Synth {
+class PepegeSynth {
 public:
-    Vapo2Synth() {}
-    ~Vapo2Synth() {}
+    PepegeSynth() {}
+    ~PepegeSynth() {}
     
     int8_t Init(const unit_runtime_desc_t* desc) {
         sample_rate_ = static_cast<float>(desc->samplerate);
@@ -138,7 +138,7 @@ public:
         pressure_ = 0.0f;
         
         // Clear intermediate buffer
-        vapo2::neon::ClearBuffer(mono_buffer_, kMaxFrames);
+        pepege::neon::ClearBuffer(mono_buffer_, kMaxFrames);
         
         // Default parameters
         for (int i = 0; i < P_NUM_PARAMS; i++) {
@@ -290,10 +290,10 @@ public:
         // === NEON-optimized output stage ===
         
         // Apply velocity gain using NEON
-        vapo2::neon::ApplyGain(mono_buffer_, velocity_, frames);
+        pepege::neon::ApplyGain(mono_buffer_, velocity_, frames);
         
         // Sanitize (remove NaN/Inf) and soft clamp to prevent harsh clipping
-        vapo2::neon::SanitizeAndClamp(mono_buffer_, 1.0f, frames);
+        pepege::neon::SanitizeAndClamp(mono_buffer_, 1.0f, frames);
         
         // Apply stereo widening
         // SPACE: 0=mono, 64=normal stereo, 127=wide
@@ -349,7 +349,7 @@ public:
 #endif
         
         // Interleave to stereo output using NEON
-        vapo2::neon::InterleaveStereo(left_buf, right_buf, out, frames);
+        pepege::neon::InterleaveStereo(left_buf, right_buf, out, frames);
     }
     
     void SetParameter(uint8_t id, int32_t value) {

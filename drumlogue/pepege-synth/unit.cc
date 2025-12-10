@@ -1,6 +1,6 @@
 /**
  * @file unit.cc
- * @brief drumlogue SDK unit interface for Vapo2 wavetable synth
+ * @brief drumlogue SDK unit interface for Pepege wavetable synth
  *
  * Inspired by VAST Dynamics Vaporizer2
  * Using wavetable techniques from Mutable Instruments Plaits
@@ -10,9 +10,9 @@
 #include <cstdint>
 
 #include "unit.h"
-#include "vapo2_synth.h"
+#include "pepege_synth.h"
 
-static Vapo2Synth s_synth;
+static PepegeSynth s_synth;
 static unit_runtime_desc_t s_runtime_desc;
 
 // ---- Callback entry points ------------------------------------------------

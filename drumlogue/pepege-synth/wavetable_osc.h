@@ -1,6 +1,6 @@
 /**
  * @file wavetable_osc.h
- * @brief Wavetable oscillator wrapper for Vapo2
+ * @brief Wavetable oscillator wrapper for Pepege
  *
  * Provides two oscillator implementations:
  * 1. WavetableOsc - Uses integrated wavetable synthesis with anti-aliasing
@@ -98,7 +98,7 @@ private:
 };
 
 /**
- * @brief PPG Wave style oscillator for Vapo2
+ * @brief PPG Wave style oscillator for Pepege
  *
  * Provides the classic PPG Wave 2.2/2.3 sound with:
  * - 8-bit waveforms with antisymmetric mirroring

@@ -1,14 +1,14 @@
-# Vapo2 UI/UX Review
+# Pepege-Synth UI/UX Review
 
 **Date**: December 10, 2025  
 **Reviewer**: Code Review  
-**Version**: 1.0.0 (feature/vapo2)
+**Version**: 1.1.2 (feature/pepege-synth)
 
 ---
 
 ## Executive Summary
 
-Overall, Vapo2 has a solid parameter layout with good organization across 6 pages. However, there are several inconsistencies and potential improvements that would enhance the end-user experience on the drumlogue hardware.
+Overall, Pepege-Synth has a solid parameter layout with good organization across 6 pages. However, there are several inconsistencies and potential improvements that would enhance the end-user experience on the drumlogue hardware.
 
 ---
 
@@ -35,7 +35,7 @@ Overall, Vapo2 has a solid parameter layout with good organization across 6 page
 {0, 2, 0, 2, k_unit_param_type_strings, 0, 0, 0, {"OSC MOD"}},
 ```
 
-**vapo2_synth.h**: Also defaults to `2` ✓
+**pepege_synth.h**: Also defaults to `2` ✓
 
 **Issue**: Raw mode is the harshest, most aliased mode. New users may find this unpleasant. Consider defaulting to `0` (HiFi) for a more accessible first impression.
 
@@ -76,7 +76,7 @@ Envelope parameters (ATTACK, DECAY, RELEASE) show raw 0-127 values. Users have n
 
 ---
 
-## Parameter Handling Analysis (vapo2_synth.h)
+## Parameter Handling Analysis (pepege_synth.h)
 
 ### ✅ Strengths
 
@@ -269,7 +269,7 @@ Current mode names are good ("HiFi", "LoFi", "Raw" - all 4 chars or less).
 
 ### Positive
 
-- Clean separation between header.c (metadata) and vapo2_synth.h (logic)
+- Clean separation between header.c (metadata) and pepege_synth.h (logic)
 - Good use of enum for parameter indices
 - Consistent parameter naming convention
 - Voice allocation is well-implemented
@@ -284,7 +284,7 @@ Current mode names are good ("HiFi", "LoFi", "Raw" - all 4 chars or less).
 
 ## Conclusion
 
-Vapo2 is musically functional and the parameter layout is reasonable for a drumlogue unit. The main issues are:
+Pepege-Synth is musically functional and the parameter layout is reasonable for a drumlogue unit. The main issues are:
 
 1. **Parameter center/default mismatches** that will confuse users with encoder detents
 2. **Lack of parameter smoothing** causing audible artifacts
@@ -480,7 +480,7 @@ This plan addresses all high-priority fixes plus the MOD HUB feature. Changes ar
 {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"SPACE"}},
 ```
 
-**vapo2_synth.h:**
+**pepege_synth.h:**
 
 ```cpp
 // OSC MIX calculation
@@ -502,7 +502,7 @@ const float space = (params_[P_SPACE] + 64) / 127.0f * 1.5f;  // -64..+63 → 0.
 
 #### Add SmoothedValue Helper Class
 
-Create `drumlogue/vapo2/smoothed_value.h`:
+Create `drumlogue/pepege-synth/smoothed_value.h`:
 
 ```cpp
 class SmoothedValue {
@@ -528,7 +528,7 @@ private:
 
 #### Apply to Parameters
 
-In `Vapo2Synth` class:
+In `PepegeSynth` class:
 
 ```cpp
 // Member variables
@@ -594,10 +594,10 @@ params_dirty_ = 0;
 
 #### 4.1 Update Parameter Enum
 
-**vapo2_synth.h:**
+**pepege_synth.h:**
 
 ```cpp
-enum Vapo2Params {
+enum PepegeParams {
     // Pages 1-5 unchanged...
     
     // Page 6: MOD HUB & Output
@@ -788,27 +788,27 @@ static const char* ppg_bank_names[] = {
 
 | Phase | Task | File(s) | Priority | Status |
 |-------|------|---------|----------|--------|
-| 1.1 | Convert OSC MIX to -64..+63 | header.c, vapo2_synth.h | HIGH | ✅ Done |
-| 1.2 | Convert SPACE to -64..+63 | header.c, vapo2_synth.h | HIGH | ✅ Done |
+| 1.1 | Convert OSC MIX to -64..+63 | header.c, pepege_synth.h | HIGH | ✅ Done |
+| 1.2 | Convert SPACE to -64..+63 | header.c, pepege_synth.h | HIGH | ✅ Done |
 | 2.1 | Create SmoothedValue class | smoothed_value.h (new) | HIGH | ✅ Done |
-| 2.2 | Apply smoothing to cutoff | vapo2_synth.h | HIGH | ✅ Done |
-| 2.3 | Apply smoothing to OSC MIX | vapo2_synth.h | HIGH | ✅ Done |
-| 2.4 | Apply smoothing to SPACE | vapo2_synth.h | HIGH | ✅ Done |
-| 3.1 | Add dirty flags mechanism | vapo2_synth.h | MEDIUM | ✅ Done |
-| 3.2 | Guard envelope updates | vapo2_synth.h | MEDIUM | ✅ Done |
-| 3.3 | Guard LFO/mode updates | vapo2_synth.h | MEDIUM | ✅ Done |
-| 4.1 | Update param enum for MOD HUB | vapo2_synth.h | HIGH | ✅ Done |
+| 2.2 | Apply smoothing to cutoff | pepege_synth.h | HIGH | ✅ Done |
+| 2.3 | Apply smoothing to OSC MIX | pepege_synth.h | HIGH | ✅ Done |
+| 2.4 | Apply smoothing to SPACE | pepege_synth.h | HIGH | ✅ Done |
+| 3.1 | Add dirty flags mechanism | pepege_synth.h | MEDIUM | ✅ Done |
+| 3.2 | Guard envelope updates | pepege_synth.h | MEDIUM | ✅ Done |
+| 3.3 | Guard LFO/mode updates | pepege_synth.h | MEDIUM | ✅ Done |
+| 4.1 | Update param enum for MOD HUB | pepege_synth.h | HIGH | ✅ Done |
 | 4.2 | Update header.c Page 6 | header.c | HIGH | ✅ Done |
-| 4.3 | Add mod_values_ storage | vapo2_synth.h | HIGH | ✅ Done |
-| 4.4 | Implement SetParameter routing | vapo2_synth.h | HIGH | ✅ Done |
-| 4.5 | Implement GetParameter routing | vapo2_synth.h | HIGH | ✅ Done |
-| 4.6 | Update GetParameterStr | vapo2_synth.h | HIGH | ✅ Done |
-| 4.7 | Use MOD HUB values in Render | vapo2_synth.h | HIGH | ✅ Done |
-| 4.8 | Implement velocity to filter | vapo2_synth.h | MEDIUM | ✅ Done |
-| 4.9 | Implement key tracking | vapo2_synth.h | MEDIUM | ✅ Done |
-| 4.10 | Implement Osc B detune | vapo2_synth.h | MEDIUM | ✅ Done |
-| 4.11 | Implement variable PB range | vapo2_synth.h | LOW | ✅ Done |
-| 5.1 | Shorten bank names | vapo2_synth.h | LOW | ✅ Done |
+| 4.3 | Add mod_values_ storage | pepege_synth.h | HIGH | ✅ Done |
+| 4.4 | Implement SetParameter routing | pepege_synth.h | HIGH | ✅ Done |
+| 4.5 | Implement GetParameter routing | pepege_synth.h | HIGH | ✅ Done |
+| 4.6 | Update GetParameterStr | pepege_synth.h | HIGH | ✅ Done |
+| 4.7 | Use MOD HUB values in Render | pepege_synth.h | HIGH | ✅ Done |
+| 4.8 | Implement velocity to filter | pepege_synth.h | MEDIUM | ✅ Done |
+| 4.9 | Implement key tracking | pepege_synth.h | MEDIUM | ✅ Done |
+| 4.10 | Implement Osc B detune | pepege_synth.h | MEDIUM | ✅ Done |
+| 4.11 | Implement variable PB range | pepege_synth.h | LOW | ✅ Done |
+| 5.1 | Shorten bank names | pepege_synth.h | LOW | ✅ Done |
 | 5.2 | Change OSC MODE default | header.c | LOW | ✅ Done |
 | 5.3 | Disable presets | header.c | LOW | ✅ Done |
 

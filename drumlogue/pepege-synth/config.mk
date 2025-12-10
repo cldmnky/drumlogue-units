@@ -2,7 +2,7 @@
 # Project Configuration
 #
 
-PROJECT := vapo2
+PROJECT := pepege-synth
 PROJECT_TYPE := synth
 
 ##############################################################################
@@ -49,16 +49,16 @@ ULIBS += -lc
 ##############################################################################
 # Macros
 #
-# VAPO2_TABLE_SIZE: Wavetable size (128, 256, or 512)
+# PEPEGE_TABLE_SIZE: Wavetable size (128, 256, or 512)
 #   Default: 256 for good quality/memory balance
 #
-# VAPO2_NUM_BANKS: Number of wavetable banks
+# PEPEGE_NUM_BANKS: Number of wavetable banks
 #   Default: 4
 #
 # USE_NEON: Enable ARM NEON SIMD optimizations
 
-UDEFS = -DVAPO2_TABLE_SIZE=256
-UDEFS += -DVAPO2_NUM_BANKS=4
+UDEFS = -DPEPEGE_TABLE_SIZE=256
+UDEFS += -DPEPEGE_NUM_BANKS=4
 UDEFS += -DUSE_NEON
 
 ##############################################################################

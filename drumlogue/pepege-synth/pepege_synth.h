@@ -1,13 +1,13 @@
 /**
- * @file vapo2_synth.h
- * @brief 4-Voice Polyphonic Vapo2 wavetable synthesizer
+ * @file pepege_synth.h
+ * @brief 4-Voice Polyphonic Pepege wavetable synthesizer
  *
  * Coordinates oscillators, envelopes, filter, and LFO across 4 voices.
  * Uses PPG Wave style oscillators for authentic 8-bit character.
  * 
  * Voice allocation: Round-robin with oldest-note stealing when all voices busy.
  * 
- * v1.1.0: MOD HUB system for expanded modulation routing
+ * v1.1.2: Rename to Pepege-Synth and preserve MOD HUB
  */
 
 #pragma once
@@ -30,14 +30,14 @@
 #endif
 
 // Common DSP utilities (includes NEON helpers when USE_NEON defined)
-#define NEON_DSP_NS vapo2
+#define NEON_DSP_NS pepege
 #include "../common/neon_dsp.h"
 
 // Number of polyphonic voices (2 for CPU headroom)
 static constexpr uint32_t kNumVoices = 2;
 
 // Parameter indices (matching header.c order)
-enum Vapo2Params {
+enum PepegeParams {
     // Page 1: Oscillator A
     P_OSC_A_BANK = 0,
     P_OSC_A_MORPH,
@@ -213,10 +213,10 @@ struct Voice {
     }
 };
 
-class Vapo2Synth {
+class PepegeSynth {
 public:
-    Vapo2Synth() {}
-    ~Vapo2Synth() {}
+    PepegeSynth() {}
+    ~PepegeSynth() {}
     
     int8_t Init(const unit_runtime_desc_t* desc) {
         sample_rate_ = static_cast<float>(desc->samplerate);
@@ -246,7 +246,7 @@ public:
         params_dirty_ = 0xFFFFFFFF;  // Mark all params dirty initially
         
         // Clear intermediate buffers
-        vapo2::neon::ClearBuffer(mix_buffer_, kMaxFrames);
+        pepege::neon::ClearBuffer(mix_buffer_, kMaxFrames);
         
         // Default parameters
         for (int i = 0; i < P_NUM_PARAMS; i++) {
@@ -301,7 +301,7 @@ public:
         if (frames > kMaxFrames) frames = kMaxFrames;
         
         // Clear mix buffer
-        vapo2::neon::ClearBuffer(mix_buffer_, frames);
+        pepege::neon::ClearBuffer(mix_buffer_, frames);
         
         // === Read MOD HUB values (all 0-127 range) ===
         // LFO rate: 0-127 directly for SetRate
@@ -467,7 +467,7 @@ public:
         // === NEON-optimized output stage ===
         
         // Sanitize (remove NaN/Inf) and soft clamp
-        vapo2::neon::SanitizeAndClamp(mix_buffer_, 1.0f, frames);
+        pepege::neon::SanitizeAndClamp(mix_buffer_, 1.0f, frames);
         
         // Get smoothed stereo width
         const float space = space_smooth_.GetValue();
@@ -512,7 +512,7 @@ public:
 #endif
         
         // Interleave to stereo output
-        vapo2::neon::InterleaveStereo(left_buf, right_buf, out, frames);
+        pepege::neon::InterleaveStereo(left_buf, right_buf, out, frames);
     }
     
     void SetParameter(uint8_t id, int32_t value) {

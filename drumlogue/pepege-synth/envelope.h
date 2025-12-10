@@ -1,6 +1,6 @@
 /**
  * @file envelope.h
- * @brief ADSR envelope generator for Vapo2
+ * @brief ADSR envelope generator for Pepege
  *
  * Analog-style exponential curves with configurable attack/decay/release times.
  * Uses true RC-circuit exponential curves like classic analog synthesizers:

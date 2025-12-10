@@ -1,6 +1,6 @@
 /**
  * @file lfo.h
- * @brief Low Frequency Oscillator for Vapo2
+ * @brief Low Frequency Oscillator for Pepege
  *
  * Simple LFO with morphable waveforms for modulation
  */

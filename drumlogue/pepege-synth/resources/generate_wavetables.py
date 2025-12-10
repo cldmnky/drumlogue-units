@@ -3,7 +3,7 @@
 Generate wavetables.h from PPG Wave 2.2 waveform data.
 
 This script parses ppg_data.c and converts the 8-bit, 64-sample PPG waveforms
-into 16-bit, 256-sample wavetables suitable for the Vapo2 synth.
+into 16-bit, 256-sample wavetables suitable for the Pepege synth.
 
 The conversion process:
 1. Parse the raw PPG waveform data (8-bit unsigned, 64 samples)
@@ -192,7 +192,7 @@ def generate_wavetables_h(waveforms: list[np.ndarray], output_path: Path, integr
     
     header = f'''/**
  * @file wavetables.h
- * @brief Pre-computed wavetable data for Vapo2
+ * @brief Pre-computed wavetable data for Pepege
  *
  * Generated from PPG Wave 2.2 waveform data.
  * Original PPG waves: 64 samples, 8-bit unsigned

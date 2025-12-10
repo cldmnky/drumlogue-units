@@ -1,4 +1,4 @@
-# Vapo2 Release Notes
+# Pepege-Synth Release Notes
 
 ## Version 1.0.0 (In Development)
 

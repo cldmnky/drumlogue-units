@@ -1,6 +1,6 @@
 /**
  * @file filter.h
- * @brief State Variable Filter for Vapo2
+ * @brief State Variable Filter for Pepege
  *
  * 12dB/oct multimode filter (LP, HP, BP) with optional 24dB cascade
  */

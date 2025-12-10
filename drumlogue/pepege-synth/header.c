@@ -1,6 +1,6 @@
 /**
  * @file header.c
- * @brief drumlogue SDK unit header for Vapo2 wavetable synth
+ * @brief drumlogue SDK unit header for Pepege wavetable synth
  *
  * Inspired by VAST Dynamics Vaporizer2
  * Using wavetable techniques from Mutable Instruments Plaits
@@ -15,9 +15,9 @@ const __unit_header unit_header_t unit_header = {
     .target = UNIT_TARGET_PLATFORM | k_unit_module_synth,
     .api = UNIT_API_VERSION,
     .dev_id = 0x434C444DU,    // "CLDM" - developer ID
-    .unit_id = 0x00000003U,   // Unique unit ID (3 = vapo2)
-    .version = 0x00010101U,   // v1.1.1 - Presets + LFO morph
-    .name = "Vapo2",          // Display name (max 13 chars)
+    .unit_id = 0x00000003U,   // Unique unit ID (3 = pepege-synth)
+    .version = 0x00010102U,   // v1.1.2 - Rename to Pepege
+    .name = "Pepege",        // Display name (max 13 chars)
     .num_presets = 6,         // Built-in factory presets
     .num_params = 24,         // 6 pages × 4 parameters
     .params = {
