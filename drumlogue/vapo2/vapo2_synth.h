@@ -33,8 +33,8 @@
 #define NEON_DSP_NS vapo2
 #include "../common/neon_dsp.h"
 
-// Number of polyphonic voices
-static constexpr uint32_t kNumVoices = 4;
+// Number of polyphonic voices (2 for CPU headroom)
+static constexpr uint32_t kNumVoices = 2;
 
 // Parameter indices (matching header.c order)
 enum Vapo2Params {
@@ -77,16 +77,16 @@ enum Vapo2Params {
     P_NUM_PARAMS
 };
 
-// MOD HUB destinations
+// MOD HUB destinations (all use -64..+63 bipolar range for SDK compatibility)
 enum ModDestination {
-    MOD_LFO_RATE = 0,
-    MOD_LFO_SHAPE,
-    MOD_LFO_TO_MORPH,
-    MOD_LFO_TO_FILTER,
-    MOD_VEL_TO_FILTER,
-    MOD_KEY_TRACK,
-    MOD_OSC_B_DETUNE,
-    MOD_PB_RANGE,
+    MOD_LFO_RATE = 0,      // -64..+63 maps to 0.05-20Hz (centered ~2Hz)
+    MOD_LFO_SHAPE,         // -64..+63: use lower 3 bits only (0-5 = shapes)
+    MOD_LFO_TO_MORPH,      // -64..+63 bipolar depth
+    MOD_LFO_TO_FILTER,     // -64..+63 bipolar depth
+    MOD_VEL_TO_FILTER,     // -64..+63 (-64=none, +63=full)
+    MOD_KEY_TRACK,         // -64..+63 (-64=none, +63=full)
+    MOD_OSC_B_DETUNE,      // -64..+63 cents
+    MOD_PB_RANGE,          // -64..+63: use lower 2 bits (0-3 = ranges)
     MOD_NUM_DESTINATIONS
 };
 
@@ -268,15 +268,15 @@ public:
         params_[P_FILTER_ENV] = 32;  // Center point for bipolar
         params_[P_SPACE] = 0;    // Bipolar 0 = normal stereo spread
         
-        // Initialize MOD HUB values
-        mod_values_[MOD_LFO_RATE] = 40;      // Default LFO speed
-        mod_values_[MOD_LFO_SHAPE] = 0;      // Sine
-        mod_values_[MOD_LFO_TO_MORPH] = 0;   // No modulation
-        mod_values_[MOD_LFO_TO_FILTER] = 0;  // No modulation
-        mod_values_[MOD_VEL_TO_FILTER] = 0;  // No velocity to filter
-        mod_values_[MOD_KEY_TRACK] = 0;      // No key tracking
-        mod_values_[MOD_OSC_B_DETUNE] = 0;   // No detune
-        mod_values_[MOD_PB_RANGE] = 0;       // ±2 semitones
+        // Initialize MOD HUB values (all 0-127 range, 64 = center for bipolar)
+        mod_values_[MOD_LFO_RATE] = 40;      // LFO speed (0-127)
+        mod_values_[MOD_LFO_SHAPE] = 0;      // Sine (0-5 mapped from 0-127)
+        mod_values_[MOD_LFO_TO_MORPH] = 64;  // No modulation (64 = center)
+        mod_values_[MOD_LFO_TO_FILTER] = 64; // No modulation (64 = center)
+        mod_values_[MOD_VEL_TO_FILTER] = 0;  // No velocity to filter (0-127)
+        mod_values_[MOD_KEY_TRACK] = 0;      // No key tracking (0-127)
+        mod_values_[MOD_OSC_B_DETUNE] = 64;  // No detune (64 = center)
+        mod_values_[MOD_PB_RANGE] = 0;       // ±2 semitones (0-3 mapped from 0-127)
         
         preset_idx_ = 0;
         
@@ -303,15 +303,19 @@ public:
         // Clear mix buffer
         vapo2::neon::ClearBuffer(mix_buffer_, frames);
         
-        // === Read MOD HUB values ===
+        // === Read MOD HUB values (all 0-127 range) ===
+        // LFO rate: 0-127 directly for SetRate
         const int32_t lfo_rate = mod_values_[MOD_LFO_RATE];
-        const int32_t lfo_shape = mod_values_[MOD_LFO_SHAPE];
-        const float lfo_to_morph = mod_values_[MOD_LFO_TO_MORPH] / 64.0f;
-        const float lfo_to_filter = mod_values_[MOD_LFO_TO_FILTER] / 64.0f;
-        const float vel_to_filter = (mod_values_[MOD_VEL_TO_FILTER] + 64) / 127.0f;  // 0-1
-        const float key_track = (mod_values_[MOD_KEY_TRACK] + 64) / 127.0f;  // 0-1
-        const float osc_b_detune = mod_values_[MOD_OSC_B_DETUNE] / 100.0f;  // cents
-        const int pb_range_idx = mod_values_[MOD_PB_RANGE] & 3;
+        // LFO shape: 0-127 maps to 0.0-5.0 for smooth morphing between shapes
+        const float lfo_shape_morph = mod_values_[MOD_LFO_SHAPE] * 5.0f / 127.0f;
+        // Bipolar modulation depths: 0-127, 64 = center (no mod)
+        const float lfo_to_morph = (mod_values_[MOD_LFO_TO_MORPH] - 64) / 64.0f;  // -1 to +1
+        const float lfo_to_filter = (mod_values_[MOD_LFO_TO_FILTER] - 64) / 64.0f;  // -1 to +1
+        const float vel_to_filter = mod_values_[MOD_VEL_TO_FILTER] / 127.0f;  // 0-1
+        const float key_track = mod_values_[MOD_KEY_TRACK] / 127.0f;  // 0-1
+        const float osc_b_detune = (mod_values_[MOD_OSC_B_DETUNE] - 64) * 0.5f;  // -32 to +32 cents
+        // PB range: 0-127 maps to 0-3 (index into pb_semitones)
+        const int pb_range_idx = (mod_values_[MOD_PB_RANGE] * 4 / 128) & 3;
         const float pb_range = pb_semitones[pb_range_idx];
         
         // === Update smoothed parameters ===
@@ -382,9 +386,9 @@ public:
             }
         }
         
-        // LFO rate and shape (from MOD HUB)
+        // LFO rate and shape morph (from MOD HUB)
         lfo_.SetRate(lfo_rate);
-        lfo_.SetShape(static_cast<LFOShape>(lfo_shape & 5));  // Clamp to valid shapes
+        lfo_.SetShapeMorph(lfo_shape_morph);  // Smooth morph between shapes
         
         // Clear dirty flags
         params_dirty_ = 0;
@@ -566,18 +570,21 @@ public:
                 break;
             case P_MOD_VALUE: {
                 // Return string based on currently selected mod destination
+                // Value is 0-127 range (common for all destinations)
                 int sel = params_[P_MOD_SELECT];
                 switch (sel) {
-                    case MOD_LFO_SHAPE:
-                        if (value >= 0 && value < 6) {
-                            return lfo_shape_names[value];
-                        }
-                        break;
-                    case MOD_PB_RANGE:
-                        if (value >= 0 && value < 4) {
-                            return pb_range_names[value];
-                        }
-                        break;
+                    case MOD_LFO_SHAPE: {
+                        // Map 0-127 to 0-5 for shape index
+                        int shape = value * 6 / 128;
+                        if (shape > 5) shape = 5;
+                        return lfo_shape_names[shape];
+                    }
+                    case MOD_PB_RANGE: {
+                        // Map 0-127 to 0-3 for range index
+                        int range = value * 4 / 128;
+                        if (range > 3) range = 3;
+                        return pb_range_names[range];
+                    }
                     // Other destinations show numeric value (return nullptr)
                 }
                 break;

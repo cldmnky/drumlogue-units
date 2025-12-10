@@ -76,8 +76,8 @@ const __unit_header unit_header_t unit_header = {
         // ==================== Page 6: MOD HUB & Output ====================
         // MOD SELECT: Choose modulation destination (0-7)
         {0, 7, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"MOD SEL"}},
-        // MOD VALUE: Value for selected destination
-        {-64, 63, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"MOD VAL"}},
+        // MOD VALUE: Value for selected destination (0-127, interpreted per destination)
+        {0, 127, 0, 64, k_unit_param_type_strings, 0, 0, 0, {"MOD VAL"}},
         // OSC MIX: Balance between Osc A and B (bipolar: -64=A, 0=50/50, +63=B)
         {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"OSC MIX"}},
         // SPACE: Stereo width (bipolar: -64=mono, 0=normal, +63=wide)

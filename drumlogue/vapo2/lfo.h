@@ -2,7 +2,7 @@
  * @file lfo.h
  * @brief Low Frequency Oscillator for Vapo2
  *
- * Simple LFO with multiple waveforms for modulation
+ * Simple LFO with morphable waveforms for modulation
  */
 
 #pragma once
@@ -11,7 +11,7 @@
 #include <cmath>
 
 /**
- * @brief LFO waveform shapes
+ * @brief LFO waveform shapes (for reference/strings)
  */
 enum LFOShape {
     LFO_SINE = 0,
@@ -19,11 +19,12 @@ enum LFOShape {
     LFO_SAW_UP,
     LFO_SAW_DOWN,
     LFO_SQUARE,
-    LFO_SAMPLE_HOLD
+    LFO_SAMPLE_HOLD,
+    LFO_NUM_SHAPES
 };
 
 /**
- * @brief Low Frequency Oscillator
+ * @brief Low Frequency Oscillator with morphable shapes
  */
 class LFO {
 public:
@@ -36,7 +37,7 @@ public:
         
         phase_ = 0.0f;
         phase_inc_ = 0.001f;
-        shape_ = LFO_SINE;
+        shape_morph_ = 0.0f;
         
         // For sample & hold
         sh_value_ = 0.0f;
@@ -66,14 +67,17 @@ public:
     }
     
     /**
-     * @brief Set LFO shape
+     * @brief Set LFO shape morph position (0.0 to 5.0)
+     * 
+     * Smoothly morphs between shapes:
+     * 0.0 = Sine, 1.0 = Triangle, 2.0 = Saw Up, 3.0 = Saw Down, 4.0 = Square, 5.0 = S&H
      */
-    void SetShape(LFOShape shape) {
-        shape_ = shape;
+    void SetShapeMorph(float morph) {
+        shape_morph_ = morph;
     }
     
     /**
-     * @brief Process one sample
+     * @brief Process one sample with shape morphing
      * @return LFO value (-1.0 to +1.0)
      */
     float Process() {
@@ -82,51 +86,22 @@ public:
         phase_ += phase_inc_;
         if (phase_ >= 1.0f) {
             phase_ -= 1.0f;
+            // Update S&H on phase wrap
+            sh_value_ = RandomFloat();
         }
         
-        float output = 0.0f;
+        // Calculate shape index and morph amount
+        int shape_a = static_cast<int>(shape_morph_);
+        if (shape_a >= LFO_NUM_SHAPES - 1) shape_a = LFO_NUM_SHAPES - 2;
+        if (shape_a < 0) shape_a = 0;
+        int shape_b = shape_a + 1;
+        float morph_amt = shape_morph_ - static_cast<float>(shape_a);
         
-        switch (shape_) {
-            case LFO_SINE:
-                // Sine approximation using parabola
-                {
-                    float p = phase_ * 2.0f - 1.0f;  // -1 to +1
-                    output = 1.0f - p * p * 2.0f;    // Parabola approximation
-                    // Better sine approximation
-                    output = sinf(phase_ * 6.28318530718f);
-                }
-                break;
-                
-            case LFO_TRIANGLE:
-                if (phase_ < 0.5f) {
-                    output = phase_ * 4.0f - 1.0f;
-                } else {
-                    output = 3.0f - phase_ * 4.0f;
-                }
-                break;
-                
-            case LFO_SAW_UP:
-                output = phase_ * 2.0f - 1.0f;
-                break;
-                
-            case LFO_SAW_DOWN:
-                output = 1.0f - phase_ * 2.0f;
-                break;
-                
-            case LFO_SQUARE:
-                output = (phase_ < 0.5f) ? 1.0f : -1.0f;
-                break;
-                
-            case LFO_SAMPLE_HOLD:
-                // Update S&H on phase wrap
-                if (phase_ < prev_phase_) {
-                    sh_value_ = RandomFloat();
-                }
-                output = sh_value_;
-                break;
-        }
+        // Get values from both shapes and crossfade
+        float val_a = GetShapeValue(shape_a);
+        float val_b = GetShapeValue(shape_b);
         
-        return output;
+        return val_a + (val_b - val_a) * morph_amt;
     }
     
 private:
@@ -135,7 +110,7 @@ private:
     
     float phase_;
     float phase_inc_;
-    LFOShape shape_;
+    float shape_morph_;
     
     // Sample & hold state
     float sh_value_;
@@ -143,6 +118,38 @@ private:
     
     // Simple noise generator state
     uint32_t noise_state_;
+    
+    /**
+     * @brief Get output value for a specific shape
+     */
+    float GetShapeValue(int shape) const {
+        switch (shape) {
+            case LFO_SINE:
+                return sinf(phase_ * 6.28318530718f);
+                
+            case LFO_TRIANGLE:
+                if (phase_ < 0.5f) {
+                    return phase_ * 4.0f - 1.0f;
+                } else {
+                    return 3.0f - phase_ * 4.0f;
+                }
+                
+            case LFO_SAW_UP:
+                return phase_ * 2.0f - 1.0f;
+                
+            case LFO_SAW_DOWN:
+                return 1.0f - phase_ * 2.0f;
+                
+            case LFO_SQUARE:
+                return (phase_ < 0.5f) ? 1.0f : -1.0f;
+                
+            case LFO_SAMPLE_HOLD:
+                return sh_value_;
+                
+            default:
+                return 0.0f;
+        }
+    }
     
     /**
      * @brief Simple random float (-1 to +1)
