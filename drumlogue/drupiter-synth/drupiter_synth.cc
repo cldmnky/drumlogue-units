@@ -332,7 +332,7 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
         
         // LFO
         case PARAM_LFO_RATE:
-            // Exponential scaling: 0.1Hz to 20Hz
+            // Quadratic scaling: 0.1Hz to 20Hz (better control at low rates)
             lfo_->SetFrequency(ParameterToExponentialFreq(value, 0.1f, 20.0f));
             break;
         case PARAM_LFO_WAVE:
@@ -446,14 +446,14 @@ float DrupiterSynth::GenerateNoise() {
 }
 
 float DrupiterSynth::ParameterToEnvelopeTime(uint8_t value) {
-    // Exponential scaling for envelope times
+    // Quadratic scaling for envelope times (better control at low values)
     // 0 = 1ms (instant), 32 = ~320ms, 64 = ~1.3s, 127 = 5s
     float normalized = value / 127.0f;
     return 0.001f + normalized * normalized * 4.999f;
 }
 
 float DrupiterSynth::ParameterToExponentialFreq(uint8_t value, float min_freq, float max_freq) {
-    // Exponential scaling for frequency parameters
+    // Quadratic scaling for frequency parameters
     float normalized = value / 127.0f;
     return min_freq + normalized * normalized * (max_freq - min_freq);
 }

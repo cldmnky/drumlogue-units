@@ -3,7 +3,7 @@
  * @brief ADSR Envelope Generator implementation
  *
  * Based on Bristol envelope.c
- * Classic ADSR envelope with exponential curves
+ * Classic ADSR envelope with linear segments and quadratic parameter scaling
  */
 
 #include "jupiter_env.h"
