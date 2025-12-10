@@ -77,7 +77,7 @@ enum Vapo2Params {
     P_NUM_PARAMS
 };
 
-// MOD HUB destinations (all use -64..+63 bipolar range for SDK compatibility)
+// MOD HUB destinations (all use 0-127 range; bipolar ones center at 64)
 enum ModDestination {
     MOD_LFO_RATE = 0,      // -64..+63 maps to 0.05-20Hz (centered ~2Hz)
     MOD_LFO_SHAPE,         // -64..+63: use lower 3 bits only (0-5 = shapes)
@@ -696,7 +696,29 @@ public:
     }
     
     void LoadPreset(uint8_t idx) {
+        if (idx >= kNumPresets) return;
         preset_idx_ = idx;
+
+        const Preset& p = kPresets[idx];
+
+        // Copy params
+        for (int i = 0; i < P_NUM_PARAMS; i++) {
+            params_[i] = p.params[i];
+        }
+
+        // Copy MOD HUB values
+        for (int i = 0; i < MOD_NUM_DESTINATIONS; i++) {
+            mod_values_[i] = p.mod[i];
+        }
+
+        // Ensure MOD SELECT points to first slot to avoid confusion
+        params_[P_MOD_SELECT] = 0;
+        params_[P_MOD_VALUE] = mod_values_[0];
+
+        // Force reload of wavetables and params
+        current_bank_a_ = -1;
+        current_bank_b_ = -1;
+        params_dirty_ = 0xFFFFFFFF;
     }
     
     uint8_t GetPresetIndex() const {
@@ -704,8 +726,8 @@ public:
     }
     
     const uint8_t* GetPresetData(uint8_t idx) const {
-        (void)idx;
-        return nullptr;
+        if (idx >= kNumPresets) return nullptr;
+        return reinterpret_cast<const uint8_t*>(&kPresets[idx]);
     }
     
 private:
@@ -754,6 +776,108 @@ private:
     uint32_t tempo_;
     uint32_t voice_counter_;  // For round-robin allocation
     uint32_t params_dirty_;   // Bitmask of changed parameters
+
+    // Factory presets
+    struct Preset {
+        int8_t params[P_NUM_PARAMS];
+        int8_t mod[MOD_NUM_DESTINATIONS];
+    };
+    
+    static constexpr uint8_t kNumPresets = 6;
+    
+    // Presets are voiced for the PPG-style banks
+    static constexpr Preset kPresets[kNumPresets] = {
+        // 0: Glass Keys
+        {
+            {
+                /*A BANK*/4, /*A MORPH*/96, /*A OCT*/0, /*A TUNE*/0,
+                /*B BANK*/9, /*B MORPH*/64, /*B OCT*/0, /*MODE*/0,
+                /*CUTOFF*/96, /*RESO*/30, /*FLT ENV*/20, /*FLT TYP*/1,
+                /*ATTACK*/5, /*DECAY*/60, /*SUST*/100, /*REL*/50,
+                /*F.ATK*/10, /*F.DCY*/60, /*F.SUS*/50, /*F.REL*/60,
+                /*MOD SEL*/0, /*MOD VAL*/64, /*OSC MIX*/16, /*SPACE*/10
+            },
+            {
+                /*LFO RT*/45, /*LFO SHP*/0, /*LFO>MOR*/80, /*LFO>FLT*/64,
+                /*VEL>F*/40, /*KEYTRK*/80, /*DETUNE*/64, /*PB RNG*/32
+            }
+        },
+        // 1: Dust Pad
+        {
+            {
+                3, 100, -1, 0,
+                12, 90, 0, 0,
+                70, 25, 50, 0,
+                40, 90, 100, 80,
+                30, 80, 80, 70,
+                0, 64, 0, 40
+            },
+            {
+                30, 0, 90, 70,
+                20, 90, 64, 32
+            }
+        },
+        // 2: Sync Bass
+        {
+            {
+                7, 80, -1, -5,
+                6, 70, -1, 2,
+                60, 70, 40, 1,
+                2, 50, 70, 25,
+                5, 70, 40, 40,
+                0, 64, -20, -20
+            },
+            {
+                60, 100, 40, 30,
+                30, 70, 80, 96
+            }
+        },
+        // 3: Noise Sweep FX
+        {
+            {
+                14, 64, 0, 0,
+                6, 32, 0, 1,
+                90, 20, 50, 2,
+                0, 70, 80, 40,
+                0, 90, 20, 50,
+                0, 64, -10, 50
+            },
+            {
+                20, 120, 90, 90,
+                10, 0, 64, 64
+            }
+        },
+        // 4: Pluck
+        {
+            {
+                5, 40, 0, 0,
+                12, 50, 0, 0,
+                90, 20, 50, 1,
+                2, 40, 80, 25,
+                2, 60, 30, 30,
+                0, 64, -10, 15
+            },
+            {
+                80, 0, 50, 30,
+                60, 70, 70, 32
+            }
+        },
+        // 5: PWM Lead
+        {
+            {
+                8, 90, 1, 6,
+                8, 60, 0, 0,
+                100, 20, 30, 0,
+                5, 70, 100, 60,
+                20, 60, 50, 50,
+                0, 64, 10, 30
+            },
+            {
+                55, 64, 80, 40,
+                50, 80, 90, 64
+            }
+        }
+    };
     
     // Parameters
     int32_t params_[P_NUM_PARAMS];
