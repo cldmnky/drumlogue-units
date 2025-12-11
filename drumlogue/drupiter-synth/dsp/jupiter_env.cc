@@ -3,7 +3,7 @@
  * @brief ADSR Envelope Generator implementation
  *
  * Based on Bristol envelope.c
- * Four-stage envelope with linear segments (simplified from exponential)
+ * Linear ADSR segments with quadratic parameter-to-time mapping
  */
 
 #include "jupiter_env.h"

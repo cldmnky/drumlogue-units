@@ -251,20 +251,52 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
     
     // Update DSP components based on parameter changes
     switch (id) {
-        // DCO parameters
+        // DCO1 parameters
+        case PARAM_DCO1_OCTAVE:
+            // Octave changes affect frequency, will be applied in next Render()
+            break;
         case PARAM_DCO1_WAVE:
             dco1_->SetWaveform(static_cast<dsp::JupiterDCO::Waveform>(value & 0x03));
             break;
         case PARAM_DCO1_PW:
             dco1_->SetPulseWidth(value / 127.0f);
             break;
+        case PARAM_DCO1_LEVEL:
+            // Level is smoothed in Render(), but set target immediately
+            if (dco1_level_smooth_) {
+                dco1_level_smooth_->SetTarget(value / 127.0f);
+            }
+            break;
+        
+        // DCO2 parameters
+        case PARAM_DCO2_OCTAVE:
+            // Octave changes affect frequency, will be applied in next Render()
+            break;
         case PARAM_DCO2_WAVE:
             dco2_->SetWaveform(static_cast<dsp::JupiterDCO::Waveform>(value & 0x03));
             break;
+        case PARAM_DCO2_DETUNE:
+            // Detune is applied in Render()
+            break;
+        case PARAM_DCO2_LEVEL:
+            // Level is smoothed in Render(), but set target immediately
+            if (dco2_level_smooth_) {
+                dco2_level_smooth_->SetTarget(value / 127.0f);
+            }
+            break;
         
         // VCF parameters
+        case PARAM_VCF_CUTOFF:
+            // Cutoff is smoothed in Render()
+            if (cutoff_smooth_) {
+                cutoff_smooth_->SetTarget(value / 127.0f);
+            }
+            break;
         case PARAM_VCF_RESONANCE:
             vcf_->SetResonance(value / 127.0f);
+            break;
+        case PARAM_VCF_ENV_AMT:
+            // Envelope amount is applied in Render()
             break;
         case PARAM_VCF_TYPE:
             vcf_->SetMode(static_cast<dsp::JupiterVCF::Mode>(value & 0x03));
@@ -272,38 +304,42 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
         
         // VCF Envelope
         case PARAM_VCF_ATTACK:
-            env_vcf_->SetAttack(value / 127.0f * 5.0f);  // 0-5 seconds
+            env_vcf_->SetAttack(ParameterToEnvelopeTime(value));
             break;
         case PARAM_VCF_DECAY:
-            env_vcf_->SetDecay(value / 127.0f * 5.0f);
+            env_vcf_->SetDecay(ParameterToEnvelopeTime(value));
             break;
         case PARAM_VCF_SUSTAIN:
             env_vcf_->SetSustain(value / 127.0f);
             break;
         case PARAM_VCF_RELEASE:
-            env_vcf_->SetRelease(value / 127.0f * 5.0f);
+            env_vcf_->SetRelease(ParameterToEnvelopeTime(value));
             break;
         
         // VCA Envelope
         case PARAM_VCA_ATTACK:
-            env_vca_->SetAttack(value / 127.0f * 5.0f);
+            env_vca_->SetAttack(ParameterToEnvelopeTime(value));
             break;
         case PARAM_VCA_DECAY:
-            env_vca_->SetDecay(value / 127.0f * 5.0f);
+            env_vca_->SetDecay(ParameterToEnvelopeTime(value));
             break;
         case PARAM_VCA_SUSTAIN:
             env_vca_->SetSustain(value / 127.0f);
             break;
         case PARAM_VCA_RELEASE:
-            env_vca_->SetRelease(value / 127.0f * 5.0f);
+            env_vca_->SetRelease(ParameterToEnvelopeTime(value));
             break;
         
         // LFO
         case PARAM_LFO_RATE:
-            lfo_->SetFrequency(0.1f + (value / 127.0f) * 49.9f);  // 0.1-50 Hz
+            // Quadratic scaling: 0.1Hz to 20Hz (better control at low rates)
+            lfo_->SetFrequency(ParameterToExponentialFreq(value, 0.1f, 20.0f));
             break;
         case PARAM_LFO_WAVE:
             lfo_->SetWaveform(static_cast<dsp::JupiterLFO::Waveform>(value & 0x03));
+            break;
+        case PARAM_LFO_VCO_DEPTH:
+            // Stored in preset, applied in Render()
             break;
         case PARAM_LFO_VCF_DEPTH:
             // Stored in preset, applied in Render()
@@ -409,58 +445,185 @@ float DrupiterSynth::GenerateNoise() {
     return (static_cast<float>(noise_seed_) / 0x7FFFFFFF) * 2.0f - 1.0f;
 }
 
+float DrupiterSynth::ParameterToEnvelopeTime(uint8_t value) {
+    // Quadratic scaling for envelope times (better control at low values)
+    // 0 = 1ms, 32 = ~319ms, 64 = ~1.28s, 127 = 5s
+    float normalized = value / 127.0f;
+    return 0.001f + normalized * normalized * 4.999f;
+}
+
+float DrupiterSynth::ParameterToExponentialFreq(uint8_t value, float min_freq, float max_freq) {
+    // Quadratic scaling for frequency parameters
+    float normalized = value / 127.0f;
+    return min_freq + normalized * normalized * (max_freq - min_freq);
+}
+
 void DrupiterSynth::InitFactoryPresets() {
-    // Init preset (already initialized in constructor)
-    factory_presets_[0] = current_preset_;
-    factory_presets_[0].params[PARAM_DCO1_OCTAVE] = 64;  // 8'
-    factory_presets_[0].params[PARAM_DCO1_WAVE] = 1;     // Square
+    // Preset 0: Init - Basic sound
+    memset(&factory_presets_[0], 0, sizeof(Preset));
+    factory_presets_[0].params[PARAM_DCO1_OCTAVE] = 64;      // 8'
+    factory_presets_[0].params[PARAM_DCO1_WAVE] = 1;         // Square
+    factory_presets_[0].params[PARAM_DCO1_PW] = 64;          // 50% pulse width
     factory_presets_[0].params[PARAM_DCO1_LEVEL] = 100;
+    factory_presets_[0].params[PARAM_DCO2_OCTAVE] = 64;      // 8'
+    factory_presets_[0].params[PARAM_DCO2_WAVE] = 0;         // Ramp
+    factory_presets_[0].params[PARAM_DCO2_DETUNE] = 64;      // No detune
+    factory_presets_[0].params[PARAM_DCO2_LEVEL] = 0;        // DCO2 off
     factory_presets_[0].params[PARAM_VCF_CUTOFF] = 100;
-    factory_presets_[0].params[PARAM_VCF_TYPE] = 0;      // LP12
+    factory_presets_[0].params[PARAM_VCF_RESONANCE] = 20;
+    factory_presets_[0].params[PARAM_VCF_ENV_AMT] = 64;      // No envelope mod
+    factory_presets_[0].params[PARAM_VCF_TYPE] = 1;          // LP24
+    factory_presets_[0].params[PARAM_VCF_ATTACK] = 5;
+    factory_presets_[0].params[PARAM_VCF_DECAY] = 40;
+    factory_presets_[0].params[PARAM_VCF_SUSTAIN] = 64;
+    factory_presets_[0].params[PARAM_VCF_RELEASE] = 30;
+    factory_presets_[0].params[PARAM_VCA_ATTACK] = 1;
+    factory_presets_[0].params[PARAM_VCA_DECAY] = 50;
     factory_presets_[0].params[PARAM_VCA_SUSTAIN] = 100;
+    factory_presets_[0].params[PARAM_VCA_RELEASE] = 20;
+    factory_presets_[0].params[PARAM_LFO_RATE] = 40;
+    factory_presets_[0].params[PARAM_LFO_WAVE] = 0;          // Triangle
+    factory_presets_[0].params[PARAM_LFO_VCO_DEPTH] = 0;
+    factory_presets_[0].params[PARAM_LFO_VCF_DEPTH] = 0;
     strcpy(factory_presets_[0].name, "Init");
     
-    // Bass preset
-    factory_presets_[1] = factory_presets_[0];
-    factory_presets_[1].params[PARAM_DCO1_WAVE] = 2;     // Pulse
-    factory_presets_[1].params[PARAM_VCF_CUTOFF] = 60;
-    factory_presets_[1].params[PARAM_VCF_RESONANCE] = 40;
-    factory_presets_[1].params[PARAM_VCF_ENV_AMT] = 90;
-    factory_presets_[1].params[PARAM_VCF_DECAY] = 30;
+    // Preset 1: Bass - Punchy bass with filter envelope
+    memset(&factory_presets_[1], 0, sizeof(Preset));
+    factory_presets_[1].params[PARAM_DCO1_OCTAVE] = 42;      // 16' (lower)
+    factory_presets_[1].params[PARAM_DCO1_WAVE] = 2;         // Pulse
+    factory_presets_[1].params[PARAM_DCO1_PW] = 40;          // Narrow pulse
+    factory_presets_[1].params[PARAM_DCO1_LEVEL] = 127;
+    factory_presets_[1].params[PARAM_DCO2_OCTAVE] = 42;      // 16'
+    factory_presets_[1].params[PARAM_DCO2_WAVE] = 0;         // Ramp
+    factory_presets_[1].params[PARAM_DCO2_DETUNE] = 64;
+    factory_presets_[1].params[PARAM_DCO2_LEVEL] = 0;
+    factory_presets_[1].params[PARAM_VCF_CUTOFF] = 50;
+    factory_presets_[1].params[PARAM_VCF_RESONANCE] = 50;
+    factory_presets_[1].params[PARAM_VCF_ENV_AMT] = 100;     // Strong envelope mod
+    factory_presets_[1].params[PARAM_VCF_TYPE] = 1;          // LP24
+    factory_presets_[1].params[PARAM_VCF_ATTACK] = 0;
+    factory_presets_[1].params[PARAM_VCF_DECAY] = 35;
+    factory_presets_[1].params[PARAM_VCF_SUSTAIN] = 20;
+    factory_presets_[1].params[PARAM_VCF_RELEASE] = 10;
+    factory_presets_[1].params[PARAM_VCA_ATTACK] = 0;
+    factory_presets_[1].params[PARAM_VCA_DECAY] = 40;
+    factory_presets_[1].params[PARAM_VCA_SUSTAIN] = 80;
+    factory_presets_[1].params[PARAM_VCA_RELEASE] = 15;
+    factory_presets_[1].params[PARAM_LFO_RATE] = 30;
+    factory_presets_[1].params[PARAM_LFO_WAVE] = 0;
+    factory_presets_[1].params[PARAM_LFO_VCO_DEPTH] = 0;
+    factory_presets_[1].params[PARAM_LFO_VCF_DEPTH] = 0;
     strcpy(factory_presets_[1].name, "Bass");
     
-    // Lead preset
-    factory_presets_[2] = factory_presets_[0];
-    factory_presets_[2].params[PARAM_DCO1_WAVE] = 0;     // Ramp
-    factory_presets_[2].params[PARAM_VCF_CUTOFF] = 80;
-    factory_presets_[2].params[PARAM_VCF_RESONANCE] = 60;
-    factory_presets_[2].params[PARAM_LFO_VCO_DEPTH] = 20;
+    // Preset 2: Lead - Sharp lead with vibrato
+    memset(&factory_presets_[2], 0, sizeof(Preset));
+    factory_presets_[2].params[PARAM_DCO1_OCTAVE] = 64;      // 8'
+    factory_presets_[2].params[PARAM_DCO1_WAVE] = 0;         // Ramp
+    factory_presets_[2].params[PARAM_DCO1_PW] = 64;
+    factory_presets_[2].params[PARAM_DCO1_LEVEL] = 127;
+    factory_presets_[2].params[PARAM_DCO2_OCTAVE] = 64;
+    factory_presets_[2].params[PARAM_DCO2_WAVE] = 0;
+    factory_presets_[2].params[PARAM_DCO2_DETUNE] = 64;
+    factory_presets_[2].params[PARAM_DCO2_LEVEL] = 0;
+    factory_presets_[2].params[PARAM_VCF_CUTOFF] = 90;
+    factory_presets_[2].params[PARAM_VCF_RESONANCE] = 70;
+    factory_presets_[2].params[PARAM_VCF_ENV_AMT] = 80;
+    factory_presets_[2].params[PARAM_VCF_TYPE] = 1;          // LP24
+    factory_presets_[2].params[PARAM_VCF_ATTACK] = 5;
+    factory_presets_[2].params[PARAM_VCF_DECAY] = 30;
+    factory_presets_[2].params[PARAM_VCF_SUSTAIN] = 60;
+    factory_presets_[2].params[PARAM_VCF_RELEASE] = 25;
+    factory_presets_[2].params[PARAM_VCA_ATTACK] = 2;
+    factory_presets_[2].params[PARAM_VCA_DECAY] = 30;
+    factory_presets_[2].params[PARAM_VCA_SUSTAIN] = 100;
+    factory_presets_[2].params[PARAM_VCA_RELEASE] = 20;
+    factory_presets_[2].params[PARAM_LFO_RATE] = 50;
+    factory_presets_[2].params[PARAM_LFO_WAVE] = 0;          // Triangle
+    factory_presets_[2].params[PARAM_LFO_VCO_DEPTH] = 30;    // Vibrato
+    factory_presets_[2].params[PARAM_LFO_VCF_DEPTH] = 0;
     strcpy(factory_presets_[2].name, "Lead");
     
-    // Pad preset
-    factory_presets_[3] = factory_presets_[0];
-    factory_presets_[3].params[PARAM_DCO1_WAVE] = 0;     // Ramp
-    factory_presets_[3].params[PARAM_DCO2_LEVEL] = 80;
-    factory_presets_[3].params[PARAM_DCO2_DETUNE] = 66;
-    factory_presets_[3].params[PARAM_VCA_ATTACK] = 40;
-    factory_presets_[3].params[PARAM_VCA_RELEASE] = 60;
+    // Preset 3: Pad - Warm pad with detuned oscillators
+    memset(&factory_presets_[3], 0, sizeof(Preset));
+    factory_presets_[3].params[PARAM_DCO1_OCTAVE] = 64;      // 8'
+    factory_presets_[3].params[PARAM_DCO1_WAVE] = 0;         // Ramp
+    factory_presets_[3].params[PARAM_DCO1_PW] = 64;
+    factory_presets_[3].params[PARAM_DCO1_LEVEL] = 100;
+    factory_presets_[3].params[PARAM_DCO2_OCTAVE] = 64;      // 8'
+    factory_presets_[3].params[PARAM_DCO2_WAVE] = 0;         // Ramp
+    factory_presets_[3].params[PARAM_DCO2_DETUNE] = 68;      // Slight detune
+    factory_presets_[3].params[PARAM_DCO2_LEVEL] = 90;
+    factory_presets_[3].params[PARAM_VCF_CUTOFF] = 80;
+    factory_presets_[3].params[PARAM_VCF_RESONANCE] = 25;
+    factory_presets_[3].params[PARAM_VCF_ENV_AMT] = 70;
+    factory_presets_[3].params[PARAM_VCF_TYPE] = 1;          // LP24
+    factory_presets_[3].params[PARAM_VCF_ATTACK] = 45;
+    factory_presets_[3].params[PARAM_VCF_DECAY] = 50;
+    factory_presets_[3].params[PARAM_VCF_SUSTAIN] = 70;
+    factory_presets_[3].params[PARAM_VCF_RELEASE] = 50;
+    factory_presets_[3].params[PARAM_VCA_ATTACK] = 50;
+    factory_presets_[3].params[PARAM_VCA_DECAY] = 50;
+    factory_presets_[3].params[PARAM_VCA_SUSTAIN] = 100;
+    factory_presets_[3].params[PARAM_VCA_RELEASE] = 70;
+    factory_presets_[3].params[PARAM_LFO_RATE] = 35;
+    factory_presets_[3].params[PARAM_LFO_WAVE] = 0;
+    factory_presets_[3].params[PARAM_LFO_VCO_DEPTH] = 10;    // Subtle vibrato
+    factory_presets_[3].params[PARAM_LFO_VCF_DEPTH] = 15;    // Filter movement
     strcpy(factory_presets_[3].name, "Pad");
     
-    // Brass preset
-    factory_presets_[4] = factory_presets_[0];
-    factory_presets_[4].params[PARAM_DCO1_WAVE] = 0;     // Ramp
-    factory_presets_[4].params[PARAM_VCF_CUTOFF] = 70;
-    factory_presets_[4].params[PARAM_VCF_ENV_AMT] = 80;
-    factory_presets_[4].params[PARAM_VCA_ATTACK] = 10;
+    // Preset 4: Brass - Bright brass with slow attack
+    memset(&factory_presets_[4], 0, sizeof(Preset));
+    factory_presets_[4].params[PARAM_DCO1_OCTAVE] = 64;      // 8'
+    factory_presets_[4].params[PARAM_DCO1_WAVE] = 0;         // Ramp
+    factory_presets_[4].params[PARAM_DCO1_PW] = 64;
+    factory_presets_[4].params[PARAM_DCO1_LEVEL] = 127;
+    factory_presets_[4].params[PARAM_DCO2_OCTAVE] = 64;
+    factory_presets_[4].params[PARAM_DCO2_WAVE] = 0;
+    factory_presets_[4].params[PARAM_DCO2_DETUNE] = 64;
+    factory_presets_[4].params[PARAM_DCO2_LEVEL] = 0;
+    factory_presets_[4].params[PARAM_VCF_CUTOFF] = 75;
+    factory_presets_[4].params[PARAM_VCF_RESONANCE] = 30;
+    factory_presets_[4].params[PARAM_VCF_ENV_AMT] = 90;
+    factory_presets_[4].params[PARAM_VCF_TYPE] = 1;          // LP24
+    factory_presets_[4].params[PARAM_VCF_ATTACK] = 15;
+    factory_presets_[4].params[PARAM_VCF_DECAY] = 45;
+    factory_presets_[4].params[PARAM_VCF_SUSTAIN] = 65;
+    factory_presets_[4].params[PARAM_VCF_RELEASE] = 35;
+    factory_presets_[4].params[PARAM_VCA_ATTACK] = 15;
+    factory_presets_[4].params[PARAM_VCA_DECAY] = 45;
+    factory_presets_[4].params[PARAM_VCA_SUSTAIN] = 90;
+    factory_presets_[4].params[PARAM_VCA_RELEASE] = 30;
+    factory_presets_[4].params[PARAM_LFO_RATE] = 40;
+    factory_presets_[4].params[PARAM_LFO_WAVE] = 0;
+    factory_presets_[4].params[PARAM_LFO_VCO_DEPTH] = 0;
+    factory_presets_[4].params[PARAM_LFO_VCF_DEPTH] = 0;
     strcpy(factory_presets_[4].name, "Brass");
     
-    // Strings preset
-    factory_presets_[5] = factory_presets_[0];
-    factory_presets_[5].params[PARAM_DCO1_WAVE] = 0;     // Ramp
-    factory_presets_[5].params[PARAM_DCO2_LEVEL] = 90;
-    factory_presets_[5].params[PARAM_DCO2_DETUNE] = 67;
-    factory_presets_[5].params[PARAM_VCF_CUTOFF] = 90;
-    factory_presets_[5].params[PARAM_VCA_ATTACK] = 50;
-    factory_presets_[5].params[PARAM_VCA_RELEASE] = 70;
+    // Preset 5: Strings - Lush strings with detuned oscillators
+    memset(&factory_presets_[5], 0, sizeof(Preset));
+    factory_presets_[5].params[PARAM_DCO1_OCTAVE] = 64;      // 8'
+    factory_presets_[5].params[PARAM_DCO1_WAVE] = 0;         // Ramp
+    factory_presets_[5].params[PARAM_DCO1_PW] = 64;
+    factory_presets_[5].params[PARAM_DCO1_LEVEL] = 110;
+    factory_presets_[5].params[PARAM_DCO2_OCTAVE] = 64;      // 8'
+    factory_presets_[5].params[PARAM_DCO2_WAVE] = 0;         // Ramp
+    factory_presets_[5].params[PARAM_DCO2_DETUNE] = 70;      // More detune
+    factory_presets_[5].params[PARAM_DCO2_LEVEL] = 100;
+    factory_presets_[5].params[PARAM_VCF_CUTOFF] = 95;
+    factory_presets_[5].params[PARAM_VCF_RESONANCE] = 20;
+    factory_presets_[5].params[PARAM_VCF_ENV_AMT] = 60;
+    factory_presets_[5].params[PARAM_VCF_TYPE] = 1;          // LP24
+    factory_presets_[5].params[PARAM_VCF_ATTACK] = 60;
+    factory_presets_[5].params[PARAM_VCF_DECAY] = 55;
+    factory_presets_[5].params[PARAM_VCF_SUSTAIN] = 75;
+    factory_presets_[5].params[PARAM_VCF_RELEASE] = 60;
+    factory_presets_[5].params[PARAM_VCA_ATTACK] = 65;
+    factory_presets_[5].params[PARAM_VCA_DECAY] = 55;
+    factory_presets_[5].params[PARAM_VCA_SUSTAIN] = 100;
+    factory_presets_[5].params[PARAM_VCA_RELEASE] = 80;
+    factory_presets_[5].params[PARAM_LFO_RATE] = 38;
+    factory_presets_[5].params[PARAM_LFO_WAVE] = 0;
+    factory_presets_[5].params[PARAM_LFO_VCO_DEPTH] = 8;     // Very subtle vibrato
+    factory_presets_[5].params[PARAM_LFO_VCF_DEPTH] = 12;    // Gentle filter movement
     strcpy(factory_presets_[5].name, "Strings");
 }
