@@ -12,6 +12,18 @@
 #include <cmath>
 #include "unit.h"
 
+// NEON SIMD optimizations (Cortex-A7)
+#ifdef USE_NEON
+#include <arm_neon.h>
+#endif
+
+// Common DSP utilities (includes NEON helpers when USE_NEON defined)
+#define NEON_DSP_NS drupiter
+#include "../common/neon_dsp.h"
+
+// Maximum frames per buffer (drumlogue typically uses 64)
+static constexpr uint32_t kMaxFrames = 64;
+
 // Forward declarations of DSP components
 namespace dsp {
     class JupiterDCO;
@@ -212,6 +224,11 @@ private:
     float vcf_env_out_;
     float vca_env_out_;
     float lfo_out_;
+    
+    // NEON-aligned intermediate buffers for block processing
+    alignas(16) float mix_buffer_[kMaxFrames];
+    alignas(16) float left_buffer_[kMaxFrames];
+    alignas(16) float right_buffer_[kMaxFrames];
     
     // Noise generator state
     uint32_t noise_seed_;

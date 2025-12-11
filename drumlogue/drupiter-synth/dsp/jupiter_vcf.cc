@@ -118,28 +118,28 @@ void JupiterVCF::Reset() {
 
 void JupiterVCF::UpdateCoefficients() {
     // Chamberlin filter coefficients
-    // f = 2 * sin(pi * cutoff / samplerate)
-    // q controls resonance feedback
+    // Bristol uses: freqcut = cutoff * 2.0f (direct frequency coefficient)
+    // Standard Chamberlin: f = 2 * sin(pi * cutoff / samplerate)
+    // Both approaches are valid; we use the sin() method for stability
     
     float cutoff_normalized = cutoff_hz_ / sample_rate_;
     
     // Clamp to prevent instability (Nyquist limit with safety margin)
+    // Bristol clamps at VCF_FREQ_MAX which is approximately 0.45
     if (cutoff_normalized > 0.45f) {
         cutoff_normalized = 0.45f;
     }
     
     f_ = 2.0f * sinf(static_cast<float>(M_PI) * cutoff_normalized);
     
-    // Enhanced Q coefficient for Jupiter-8 character
-    // Jupiter-8 resonance goes into self-oscillation at maximum
-    // Map resonance 0-1 to Q 1.0-0.005 (allows near-oscillation)
-    // Use exponential curve for better control in usable range
-    float res_squared = resonance_ * resonance_;
-    q_ = 1.0f - (0.95f * res_squared + 0.05f * resonance_);
+    // Bristol Q coefficient formula: qres = 2.0 - resonance * 1.97
+    // This allows near self-oscillation at maximum resonance
+    // Map resonance 0-1 to qres 2.0-0.03
+    q_ = 2.0f - resonance_ * 1.97f;
     
-    // Prevent complete instability
-    if (q_ < 0.005f) {
-        q_ = 0.005f;
+    // Prevent complete instability while allowing self-oscillation
+    if (q_ < 0.03f) {
+        q_ = 0.03f;
     }
 }
 

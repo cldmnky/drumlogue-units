@@ -108,9 +108,19 @@ float JupiterDCO::GenerateWaveform() {
             return LookupWavetable(square_table_, phase_);
         
         case WAVEFORM_PULSE: {
-            // Variable pulse width
-            float value = (phase_ < pulse_width_) ? 1.0f : -1.0f;
-            return value;
+            // Bristol-style PWM: difference of two phased ramps
+            // This provides better anti-aliasing than a simple threshold
+            float ramp1 = LookupWavetable(ramp_table_, phase_);
+            
+            // Second ramp phase-shifted by pulse width
+            float phase2 = phase_ + pulse_width_;
+            if (phase2 >= 1.0f) {
+                phase2 -= 1.0f;
+            }
+            float ramp2 = LookupWavetable(ramp_table_, phase2);
+            
+            // Difference gives PWM with smoother edges
+            return ramp1 - ramp2;
         }
         
         case WAVEFORM_TRIANGLE:
@@ -135,13 +145,24 @@ void JupiterDCO::InitWavetables() {
     for (int i = 0; i <= kWavetableSize; ++i) {
         float phase = static_cast<float>(i) / kWavetableSize;
         
-        // Ramp/Sawtooth: -1 to +1
+        // Ramp/Sawtooth: -1 to +1 (positive-going)
+        // Bristol uses rear-to-front table to make positive leading edge
         ramp_table_[i] = phase * 2.0f - 1.0f;
         
-        // Square: -1 or +1
-        square_table_[i] = (phase < 0.5f) ? -1.0f : 1.0f;
+        // Square wave with slight decay on plateaus (Bristol style)
+        // This adds warmth by simulating capacitor discharge
+        if (phase < 0.5f) {
+            // First half: start at +1 and decay slightly
+            float decay = 1.0f - (phase * 0.04f);  // ~2% decay per half cycle
+            square_table_[i] = decay;
+        } else {
+            // Second half: start at -1 and decay back toward 0
+            float decay = 1.0f - ((phase - 0.5f) * 0.04f);
+            square_table_[i] = -decay;
+        }
         
-        // Triangle: -1 to +1 to -1
+        // Triangle wave: -1 to +1 to -1
+        // Bristol uses this same approach
         if (phase < 0.5f) {
             triangle_table_[i] = phase * 4.0f - 1.0f;
         } else {

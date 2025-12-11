@@ -140,6 +140,9 @@ void DrupiterSynth::Suspend() {
 }
 
 void DrupiterSynth::Render(float* out, uint32_t frames) {
+    // Limit frames to our buffer size
+    if (frames > kMaxFrames) frames = kMaxFrames;
+    
     // Update smoothed parameter targets (once per buffer for efficiency)
     cutoff_smooth_->SetTarget(current_preset_.params[PARAM_VCF_CUTOFF] / 127.0f);
     dco1_level_smooth_->SetTarget(current_preset_.params[PARAM_DCO1_LEVEL] / 127.0f);
@@ -158,6 +161,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     const float env_amt = (current_preset_.params[PARAM_VCF_ENV_AMT] - 64) / 64.0f;  // -1 to +1
     const float lfo_vcf_depth = current_preset_.params[PARAM_LFO_VCF_DEPTH] / 127.0f;
     
+    // ============ Main DSP loop - render to mix_buffer_ ============
     for (uint32_t i = 0; i < frames; ++i) {
         // Process LFO
         lfo_out_ = lfo_->Process();
@@ -232,14 +236,51 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         
         filtered_ = vcf_->Process(mixed_);
         
-        // Apply VCA with envelope and add small DC offset for denormal protection
-        float output = filtered_ * vca_env_out_ * 0.5f;  // Scale to prevent clipping
-        output += 1.0e-15f;  // Denormal protection
-        
-        // Stereo output (mono for now)
-        out[i * 2] = output;
-        out[i * 2 + 1] = output;
+        // Apply VCA with envelope, store to intermediate buffer
+        mix_buffer_[i] = filtered_ * vca_env_out_ * 0.5f;  // Scale to prevent clipping
     }
+    
+    // ============ NEON-optimized output stage ============
+    
+    // Sanitize buffer (remove NaN/Inf) and apply soft clamp
+    drupiter::neon::SanitizeAndClamp(mix_buffer_, 1.0f, frames);
+    
+#ifdef USE_NEON
+    // NEON-optimized mono to stereo duplication with interleaving
+    // Process 4 samples at a time
+    const float32x4_t dc_offset = vdupq_n_f32(1.0e-15f);  // Denormal protection
+    uint32_t i = 0;
+    
+    for (; i + 4 <= frames; i += 4) {
+        // Load 4 mono samples
+        float32x4_t mono = vld1q_f32(&mix_buffer_[i]);
+        
+        // Add tiny DC offset for denormal protection
+        mono = vaddq_f32(mono, dc_offset);
+        
+        // Duplicate to left and right (mono -> stereo)
+        // Interleave: [m0,m1,m2,m3] -> [m0,m0,m1,m1,m2,m2,m3,m3]
+        float32x4x2_t stereo = vzipq_f32(mono, mono);
+        
+        // Store interleaved stereo output
+        vst1q_f32(&out[i * 2], stereo.val[0]);      // m0,m0,m1,m1
+        vst1q_f32(&out[i * 2 + 4], stereo.val[1]);  // m2,m2,m3,m3
+    }
+    
+    // Scalar fallback for remaining samples
+    for (; i < frames; ++i) {
+        float sample = mix_buffer_[i] + 1.0e-15f;
+        out[i * 2] = sample;
+        out[i * 2 + 1] = sample;
+    }
+#else
+    // Non-NEON fallback
+    for (uint32_t i = 0; i < frames; ++i) {
+        float sample = mix_buffer_[i] + 1.0e-15f;  // Denormal protection
+        out[i * 2] = sample;
+        out[i * 2 + 1] = sample;
+    }
+#endif
 }
 
 void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
