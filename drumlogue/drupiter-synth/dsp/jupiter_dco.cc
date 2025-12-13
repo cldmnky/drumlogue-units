@@ -83,7 +83,8 @@ void JupiterDCO::Init(float sample_rate) {
     sample_rate_ = sample_rate;
     max_freq_hz_ = sample_rate_ * kMaxPhaseIncrement;
     phase_ = 0.0f;
-    phase_inc_ = 0.0f;
+    base_freq_hz_ = 440.0f;
+    phase_inc_ = base_freq_hz_ / sample_rate_;
     fm_amount_ = 0.0f;
     drift_phase_ = 0.0f;
     noise_seed_ = 0x41594E31;
