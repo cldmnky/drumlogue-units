@@ -134,8 +134,10 @@ private:
     static void InitWavetables();
     
     /**
-     * @brief Generate waveform for current phase
-     * @return Waveform value at current phase
+     * @brief Generate waveform for given phase with bandlimiting
+     * @param phase Current phase (0.0-1.0)
+     * @param phase_inc Phase increment per sample (for polyBLEP)
+     * @return Waveform value at given phase
      */
     float GenerateWaveform(float phase, float phase_inc);
     
