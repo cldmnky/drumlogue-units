@@ -63,12 +63,13 @@ JupiterDCO::JupiterDCO()
     , phase_inc_(0.0f)
     , base_freq_hz_(440.0f)
     , max_freq_hz_(sample_rate_ * kMaxPhaseIncrement)
-    , waveform_(WAVEFORM_RAMP)
+    , waveform_(WAVEFORM_SAW)
     , pulse_width_(0.5f)
     , sync_enabled_(false)
     , fm_amount_(0.0f)
     , drift_phase_(0.0f)
     , noise_seed_(0x41594E31)  // "AYN1"
+    , noise_seed2_(0x4A503842) // "JP8B"
     , last_phase_(0.0f)
 {
     if (!tables_initialized_) {
@@ -88,10 +89,13 @@ void JupiterDCO::Init(float sample_rate) {
     fm_amount_ = 0.0f;
     drift_phase_ = 0.0f;
     noise_seed_ = 0x41594E31;
+    noise_seed2_ = 0x4A503842;
 }
 
 void JupiterDCO::SetFrequency(float freq_hz) {
-    float clamped = std::clamp(freq_hz, 0.0f, max_freq_hz_);
+    float clamped = freq_hz;
+    if (clamped < 0.0f) clamped = 0.0f;
+    if (clamped > max_freq_hz_) clamped = max_freq_hz_;
     base_freq_hz_ = clamped;
     phase_inc_ = clamped / sample_rate_;
 }
@@ -162,7 +166,7 @@ float JupiterDCO::GenerateWaveform(float phase, float phase_inc) {
     const float dt = std::min(phase_inc, 1.0f);
     
     switch (waveform_) {
-        case WAVEFORM_RAMP:
+        case WAVEFORM_SAW:
         {
             float value = LookupWavetable(ramp_table_, phase);
             // PolyBLEP corrects discontinuity at wrap for Jupiter-style ramp
@@ -188,6 +192,14 @@ float JupiterDCO::GenerateWaveform(float phase, float phase_inc) {
         
         case WAVEFORM_TRIANGLE:
             return LookupWavetable(triangle_table_, phase);
+
+        case WAVEFORM_SINE:
+            return sinf(phase * 2.0f * static_cast<float>(M_PI));
+
+        case WAVEFORM_NOISE:
+            // Simple white noise (VCO2 on JP-8 has NOISE instead of SQUARE).
+            noise_seed2_ = noise_seed2_ * 1664525u + 1013904223u;
+            return ((noise_seed2_ >> 9) & 0x7FFFFF) / float(0x7FFFFF) * 2.0f - 1.0f;
         
         default:
             return 0.0f;

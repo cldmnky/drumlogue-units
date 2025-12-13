@@ -95,7 +95,7 @@ public:
      * @brief Preset structure
      */
     struct Preset {
-        uint8_t params[PARAM_COUNT];  // Parameter values 0-127
+        uint8_t params[PARAM_COUNT];  // Continuous params are 0-100; discrete params are small enums
         char name[14];                // 13 chars + null terminator
     };
 

@@ -23,6 +23,18 @@ JupiterVCF::JupiterVCF()
     , resonance_(0.0f)
     , mode_(MODE_LP12)
     , kbd_tracking_(0.5f)  // 50% keyboard tracking (Jupiter-8 typical)
+    , ota_s1_(0.0f)
+    , ota_s2_(0.0f)
+    , ota_s3_(0.0f)
+    , ota_s4_(0.0f)
+    , ota_y2_(0.0f)
+    , ota_y4_(0.0f)
+    , ota_a_(0.0f)
+    , ota_res_k_(0.0f)
+    , ota_gain_comp_(1.0f)
+    , ota_drive_(1.25f)
+    , hp_lp_state_(0.0f)
+    , hp_a_(0.0f)
     , lp_(0.0f)
     , bp_(0.0f)
     , hp_(0.0f)
@@ -45,6 +57,11 @@ void JupiterVCF::Init(float sample_rate) {
 void JupiterVCF::SetCutoff(float freq_hz) {
     base_cutoff_hz_ = ClampCutoff(freq_hz);
     cutoff_hz_ = base_cutoff_hz_;
+    UpdateCoefficients();
+}
+
+void JupiterVCF::SetCutoffModulated(float freq_hz) {
+    cutoff_hz_ = ClampCutoff(freq_hz);
     UpdateCoefficients();
 }
 
@@ -73,74 +90,82 @@ void JupiterVCF::ApplyKeyboardTracking(uint8_t note) {
 }
 
 float JupiterVCF::Process(float input) {
-    // 4x oversampling: run filter 4 times with same input
-    // This allows stable operation at higher frequencies
-    // Reference: "The only way around this is to oversample" - EarLevel Engineering
-    
+    // 4x oversampling: improves stability and reduces high-frequency artifacts.
     float output = 0.0f;
-    
+
+    // JP-8 style LP modes: 4-pole OTA cascade (IR3109 family), resonance on LP only.
+    if (mode_ == MODE_LP12 || mode_ == MODE_LP24) {
+        for (int i = 0; i < kOversamplingFactor; ++i) {
+            // Feedback from final stage (previous sample/iteration) - stable with oversampling.
+            float u = input - ota_res_k_ * ota_y4_;
+
+            // Mild OTA-ish saturation on input (helps "Roland" character).
+            // Keep it subtle to avoid obvious distortion.
+            u = tanhf(u * ota_drive_) / tanhf(ota_drive_);
+
+            // 4 cascaded TPT one-pole lowpass stages.
+            // One-pole TPT (Zavalishin): v = (x - s) * a; y = v + s; s = y + v
+            float v1 = (u - ota_s1_) * ota_a_;
+            float y1 = v1 + ota_s1_;
+            ota_s1_ = y1 + v1;
+
+            float v2 = (y1 - ota_s2_) * ota_a_;
+            float y2 = v2 + ota_s2_;
+            ota_s2_ = y2 + v2;
+
+            float v3 = (y2 - ota_s3_) * ota_a_;
+            float y3 = v3 + ota_s3_;
+            ota_s3_ = y3 + v3;
+
+            float v4 = (y3 - ota_s4_) * ota_a_;
+            float y4 = v4 + ota_s4_;
+            ota_s4_ = y4 + v4;
+
+            ota_y2_ = y2;
+            ota_y4_ = y4;
+        }
+
+        output = (mode_ == MODE_LP12) ? ota_y2_ : ota_y4_;
+        return output * ota_gain_comp_;
+    }
+
+    // HP mode: non-resonant 6dB high-pass.
+    if (mode_ == MODE_HP12) {
+        for (int i = 0; i < kOversamplingFactor; ++i) {
+            float v = (input - hp_lp_state_) * hp_a_;
+            float lp = v + hp_lp_state_;
+            hp_lp_state_ = lp + v;
+            output = input - lp;
+        }
+        return output;
+    }
+
+    // BP mode (and any unknown): keep existing Chamberlin SVF.
     for (int i = 0; i < kOversamplingFactor; i++) {
-        // Chamberlin state-variable filter
-        // Using the correct two-integrator topology:
-        // hp = input - lp - q*bp
-        // bp = bp + f*hp
-        // lp = lp + f*bp
-        // where q = 1/Q (damping coefficient, lower = more resonance)
-        
-        // Calculate HP first
         hp_ = input - lp_ - q_ * bp_;
-        
-        // Update BP
         bp_ = bp_ + f_ * hp_;
-        
-        // Update LP
         lp_ = lp_ + f_ * bp_;
-        
-        // Clamp state variables to prevent runaway (stability measure)
+
         if (bp_ > 10.0f) bp_ = 10.0f;
         else if (bp_ < -10.0f) bp_ = -10.0f;
         if (lp_ > 10.0f) lp_ = 10.0f;
         else if (lp_ < -10.0f) lp_ = -10.0f;
     }
-    
-    // Gain compensation for resonance
-    float gain_comp = 1.0f + resonance_ * 0.5f;
-    
-    // Select output based on mode (use final iteration's result)
-    switch (mode_) {
-        case MODE_LP12:
-            output = lp_ * gain_comp;
-            break;
-        
-        case MODE_LP24: {
-            // Second stage for 24dB/oct (cascaded)
-            // Also needs oversampling
-            for (int i = 0; i < kOversamplingFactor; i++) {
-                lp2_ = lp2_ + f_ * bp2_;
-                float hp2 = lp_ - lp2_ - q_ * bp2_;
-                bp2_ = f_ * hp2 + bp2_;
-            }
-            output = lp2_ * gain_comp;
-            break;
-        }
-        
-        case MODE_HP12:
-            output = hp_ * gain_comp;
-            break;
-        
-        case MODE_BP12:
-            output = bp_ * gain_comp * 0.5f;  // BP needs less compensation
-            break;
-        
-        default:
-            output = lp_;
-            break;
-    }
-    
-    return output;
+
+    // For BP, keep compensation modest.
+    const float gain_comp = 1.0f + resonance_ * 0.25f;
+    return bp_ * gain_comp * 0.5f;
 }
 
 void JupiterVCF::Reset() {
+    ota_s1_ = 0.0f;
+    ota_s2_ = 0.0f;
+    ota_s3_ = 0.0f;
+    ota_s4_ = 0.0f;
+    ota_y2_ = 0.0f;
+    ota_y4_ = 0.0f;
+    hp_lp_state_ = 0.0f;
+
     lp_ = 0.0f;
     bp_ = 0.0f;
     hp_ = 0.0f;
@@ -155,27 +180,36 @@ void JupiterVCF::UpdateCoefficients() {
     // This allows stable operation across full audio bandwidth
     
     // Calculate for oversampled rate (48kHz * 4 = 192kHz)
-    float oversampled_rate = sample_rate_ * kOversamplingFactor;
-    float cutoff_normalized = cutoff_hz_ / oversampled_rate;
-    
-    // Clamp to Nyquist limit at oversampled rate
-    // At 192kHz effective rate, can safely reach 21.6kHz (0.45 * 48kHz)
-    if (cutoff_normalized > 0.45f) {
-        cutoff_normalized = 0.45f;
-    }
-    
-    // Calculate f coefficient using oversampled rate
-    // This gives much smaller f values, improving stability
+    const float oversampled_rate = sample_rate_ * kOversamplingFactor;
+
+    // Clamp cutoff for coefficient computation.
+    float fc = cutoff_hz_;
+    const float fc_max = 0.45f * oversampled_rate;
+    if (fc > fc_max) fc = fc_max;
+    if (fc < 20.0f) fc = 20.0f;
+
+    // Coefficients for OTA cascade (TPT 1-pole).
+    // g = tan(pi*fc/fs), a = g/(1+g)
+    const float g = tanf(static_cast<float>(M_PI) * (fc / oversampled_rate));
+    ota_a_ = g / (1.0f + g);
+
+    // Resonance mapping: JP-8 IR3109 implementations are generally less eager to
+    // full self-osc than many modern SVF models. Keep a conservative max.
+    const float r = std::max(0.0f, std::min(resonance_, 1.0f));
+    ota_res_k_ = (r * r) * 3.2f;  // square for finer low-res control
+
+    // Gain compensation ("Q comp") to keep perceived loudness more stable.
+    ota_gain_comp_ = 1.0f + r * 0.6f;
+
+    // High-pass 6dB (non-resonant): share the same cutoff control.
+    hp_a_ = ota_a_;
+
+    // SVF coefficients (used for BP mode only).
+    float cutoff_normalized = fc / oversampled_rate;
+    if (cutoff_normalized > 0.45f) cutoff_normalized = 0.45f;
     f_ = 2.0f * sinf(static_cast<float>(M_PI) * cutoff_normalized);
-    
-    // Damping coefficient: higher = less resonance
-    // Map resonance 0-1 to q 2.0-0.05 (allow more resonance with oversampling)
-    q_ = 2.0f - resonance_ * 1.95f;
-    
-    // Minimum damping to prevent self-oscillation
-    if (q_ < 0.05f) {
-        q_ = 0.05f;
-    }
+    q_ = 2.0f - r * 1.95f;
+    if (q_ < 0.05f) q_ = 0.05f;
 }
 
 float JupiterVCF::ClampCutoff(float freq) const {

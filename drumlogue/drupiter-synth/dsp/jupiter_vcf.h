@@ -58,6 +58,12 @@ public:
      * @param freq_hz Cutoff frequency in Hz (20-20000)
      */
     void SetCutoff(float freq_hz);
+
+    /**
+     * @brief Set modulated cutoff frequency without changing base cutoff
+     * @param freq_hz Cutoff frequency in Hz (20-20000)
+     */
+    void SetCutoffModulated(float freq_hz);
     
     /**
      * @brief Set filter resonance
@@ -102,6 +108,23 @@ private:
     float resonance_;
     Mode mode_;
     float kbd_tracking_;        // Keyboard tracking amount
+
+    // IR3109-style low-pass (Jupiter-8/Juno family): 4 cascaded OTA one-poles.
+    // For JP-8 style LP12/LP24: take output after stage 2 or stage 4.
+    float ota_s1_;
+    float ota_s2_;
+    float ota_s3_;
+    float ota_s4_;
+    float ota_y2_;
+    float ota_y4_;
+    float ota_a_;               // TPT one-pole coefficient (derived from cutoff)
+    float ota_res_k_;           // Resonance feedback gain
+    float ota_gain_comp_;       // Gain compensation vs resonance
+    float ota_drive_;           // Input drive for mild saturation
+
+    // Non-resonant 6dB high-pass (implemented as 1-pole low-pass + subtraction)
+    float hp_lp_state_;
+    float hp_a_;
     
     // Chamberlin state-variable filter states
     float lp_;                  // Low-pass output

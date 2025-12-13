@@ -99,7 +99,7 @@ $ENGINE run --rm --entrypoint "" \
         mkdir -p /workspace/drumlogue/${PROJECT}/build/lst && \
         mkdir -p /workspace/drumlogue/${PROJECT}/build/.dep && \
         ${CMD} && \
-        cp /workspace/drumlogue/${PROJECT}/${ARTIFACT_NAME} /output/
+        if [ "${ACTION}" != "clean" ]; then cp /workspace/drumlogue/${PROJECT}/${ARTIFACT_NAME} /output/; fi
     " || BUILD_EXIT_CODE=$?
 
 if [ $BUILD_EXIT_CODE -ne 0 ]; then

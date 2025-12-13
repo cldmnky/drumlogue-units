@@ -28,10 +28,12 @@ public:
      * @brief Waveform types
      */
     enum Waveform {
-        WAVEFORM_RAMP = 0,      // Sawtooth/Ramp
+        WAVEFORM_SAW = 0,       // Sawtooth
         WAVEFORM_SQUARE = 1,    // Square wave (50% duty)
         WAVEFORM_PULSE = 2,     // Pulse wave (variable width)
-        WAVEFORM_TRIANGLE = 3   // Triangle wave
+        WAVEFORM_TRIANGLE = 3,  // Triangle wave
+        WAVEFORM_SINE = 4,      // Sine wave
+        WAVEFORM_NOISE = 5      // White noise
     };
 
     /**
@@ -115,6 +117,7 @@ private:
     float fm_amount_;          // Current FM modulation
     float drift_phase_;        // Slow analog-style drift phase
     uint32_t noise_seed_;      // For subtle drift noise
+    uint32_t noise_seed2_;     // For noise waveform
     
     float last_phase_;         // For sync detection
     
