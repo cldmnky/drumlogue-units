@@ -16,6 +16,46 @@
 
 namespace dsp {
 
+namespace {
+
+// Keep oscillator safely below Nyquist (0.5) leaving headroom for FM and BLEP.
+// 0.48f = 0.5f - 0.02f guard to absorb modulation overshoot and BLEP ringing.
+constexpr float kMaxPhaseIncrement = 0.48f;
+constexpr float kFmModRange = 1.0f;  // Exponential FM: fm_amount=±1 -> ±1 octave
+
+// PolyBLEP (polynomial band-limited step) to smooth discontinuities.
+// t = current phase [0,1), dt = phase increment (controls transition width).
+inline float PolyBlep(float t, float dt) {
+    if (dt <= 0.0f) {
+        return 0.0f;
+    }
+    if (dt > 1.0f) {  // Should be clamped upstream; keep as safety for bad inputs.
+        dt = 1.0f;
+    }
+    
+    if (t < dt) {
+        t /= dt;
+        return t + t - t * t - 1.0f;
+    }
+    if (t > 1.0f - dt) {
+        t = (t - 1.0f) / dt;
+        return t * t + t + t + 1.0f;
+    }
+    return 0.0f;
+}
+
+inline float WrapPhase(float phase) {
+    while (phase >= 1.0f) {
+        phase -= 1.0f;
+    }
+    while (phase < 0.0f) {
+        phase += 1.0f;
+    }
+    return phase;
+}
+
+}  // namespace
+
 // Static wavetable initialization
 float JupiterDCO::ramp_table_[kWavetableSize + 1];
 float JupiterDCO::square_table_[kWavetableSize + 1];
@@ -27,6 +67,7 @@ JupiterDCO::JupiterDCO()
     , phase_(0.0f)
     , phase_inc_(0.0f)
     , base_freq_hz_(440.0f)
+    , max_freq_hz_(sample_rate_ * kMaxPhaseIncrement)
     , waveform_(WAVEFORM_RAMP)
     , pulse_width_(0.5f)
     , sync_enabled_(false)
@@ -43,14 +84,16 @@ JupiterDCO::~JupiterDCO() {
 
 void JupiterDCO::Init(float sample_rate) {
     sample_rate_ = sample_rate;
+    max_freq_hz_ = sample_rate_ * kMaxPhaseIncrement;
     phase_ = 0.0f;
     phase_inc_ = 0.0f;
     fm_amount_ = 0.0f;
 }
 
 void JupiterDCO::SetFrequency(float freq_hz) {
-    base_freq_hz_ = freq_hz;
-    phase_inc_ = freq_hz / sample_rate_;
+    float clamped = std::clamp(freq_hz, 0.0f, max_freq_hz_);
+    base_freq_hz_ = clamped;
+    phase_inc_ = clamped / sample_rate_;
 }
 
 void JupiterDCO::SetWaveform(Waveform waveform) {
@@ -77,12 +120,18 @@ float JupiterDCO::Process() {
     // Apply FM modulation to phase increment
     float current_phase_inc = phase_inc_;
     if (fm_amount_ != 0.0f) {
-        // FM modulation: ±1 octave range
-        current_phase_inc *= (1.0f + fm_amount_ * 0.5f);
+        // Exponential FM: map fm_amount to octave-scaled multiplier
+        float fm_scale = exp2f(fm_amount_ * kFmModRange);
+        current_phase_inc *= fm_scale;
     }
+    // Protect against aliasing when FM tries to push past Nyquist.
+    current_phase_inc = std::max(0.0f, std::min(current_phase_inc, kMaxPhaseIncrement));
     
     // Store last phase for sync detection
     last_phase_ = phase_;
+    
+    // Generate waveform from current phase (pre-increment)
+    float sample = GenerateWaveform(phase_, current_phase_inc);
     
     // Advance phase
     phase_ += current_phase_inc;
@@ -90,8 +139,7 @@ float JupiterDCO::Process() {
         phase_ -= 1.0f;
     }
     
-    // Generate waveform
-    return GenerateWaveform();
+    return sample;
 }
 
 bool JupiterDCO::DidWrap() const {
@@ -99,32 +147,36 @@ bool JupiterDCO::DidWrap() const {
     return phase_ < last_phase_;
 }
 
-float JupiterDCO::GenerateWaveform() {
+float JupiterDCO::GenerateWaveform(float phase, float phase_inc) {
+    const float dt = std::min(phase_inc, 1.0f);
+    
     switch (waveform_) {
         case WAVEFORM_RAMP:
-            return LookupWavetable(ramp_table_, phase_);
+        {
+            float value = LookupWavetable(ramp_table_, phase);
+            // PolyBLEP corrects discontinuity at wrap for Jupiter-style ramp
+            value -= PolyBlep(phase, dt);
+            return value;
+        }
         
         case WAVEFORM_SQUARE:
-            return LookupWavetable(square_table_, phase_);
+        {
+            float value = LookupWavetable(square_table_, phase);
+            value += PolyBlep(phase, dt);                           // rising edge at 0
+            value -= PolyBlep(WrapPhase(phase + 0.5f), dt);         // falling edge at 0.5
+            return value;
+        }
         
         case WAVEFORM_PULSE: {
-            // Bristol-style PWM: difference of two phased ramps
-            // This provides better anti-aliasing than a simple threshold
-            float ramp1 = LookupWavetable(ramp_table_, phase_);
-            
-            // Second ramp phase-shifted by pulse width
-            float phase2 = phase_ + pulse_width_;
-            if (phase2 >= 1.0f) {
-                phase2 -= 1.0f;
-            }
-            float ramp2 = LookupWavetable(ramp_table_, phase2);
-            
-            // Difference gives PWM with smoother edges
-            return ramp1 - ramp2;
+            // Comparator-style PWM for Jupiter character
+            float value = (phase < pulse_width_) ? 1.0f : -1.0f;
+            value += PolyBlep(phase, dt);                            // rising edge at reset
+            value -= PolyBlep(WrapPhase(phase + (1.0f - pulse_width_)), dt);  // falling edge at PW
+            return value;
         }
         
         case WAVEFORM_TRIANGLE:
-            return LookupWavetable(triangle_table_, phase_);
+            return LookupWavetable(triangle_table_, phase);
         
         default:
             return 0.0f;

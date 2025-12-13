@@ -108,6 +108,7 @@ private:
     float phase_;              // Current phase (0.0-1.0)
     float phase_inc_;          // Phase increment per sample
     float base_freq_hz_;       // Base frequency
+    float max_freq_hz_;        // Cached Nyquist-guarded max frequency
     Waveform waveform_;
     float pulse_width_;        // Pulse width (0.0-1.0)
     bool sync_enabled_;
@@ -134,7 +135,7 @@ private:
      * @brief Generate waveform for current phase
      * @return Waveform value at current phase
      */
-    float GenerateWaveform();
+    float GenerateWaveform(float phase, float phase_inc);
     
     /**
      * @brief Wavetable lookup with linear interpolation
