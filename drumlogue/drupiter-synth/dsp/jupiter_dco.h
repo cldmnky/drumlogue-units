@@ -108,10 +108,13 @@ private:
     float phase_;              // Current phase (0.0-1.0)
     float phase_inc_;          // Phase increment per sample
     float base_freq_hz_;       // Base frequency
+    float max_freq_hz_;        // Cached Nyquist-guarded max frequency
     Waveform waveform_;
     float pulse_width_;        // Pulse width (0.0-1.0)
     bool sync_enabled_;
     float fm_amount_;          // Current FM modulation
+    float drift_phase_;        // Slow analog-style drift phase
+    uint32_t noise_seed_;      // For subtle drift noise
     
     float last_phase_;         // For sync detection
     
@@ -131,10 +134,12 @@ private:
     static void InitWavetables();
     
     /**
-     * @brief Generate waveform for current phase
-     * @return Waveform value at current phase
+     * @brief Generate waveform for given phase with bandlimiting
+     * @param phase Current phase (0.0-1.0)
+     * @param phase_inc Phase increment per sample (for polyBLEP)
+     * @return Waveform value at given phase
      */
-    float GenerateWaveform();
+    float GenerateWaveform(float phase, float phase_inc);
     
     /**
      * @brief Wavetable lookup with linear interpolation
