@@ -18,8 +18,8 @@ namespace dsp {
 
 namespace {
 
-// Keep oscillator safely below Nyquist (0.5) leaving headroom for FM and BLEP.
-// 0.48f = 0.5f - 0.02f guard to absorb modulation overshoot and BLEP ringing.
+// Keep oscillator safely below Nyquist (0.5), leaving headroom for BLEP transition width and processing.
+// 0.48f = 0.5f - 0.02f guard for BLEP ringing and processing headroom (not for modulation overshoot, which is clamped).
 constexpr float kMaxPhaseIncrement = 0.48f;
 constexpr float kFmModRange = 1.0f;  // Exponential FM: fm_amount=±1 -> ±1 octave
 
