@@ -45,13 +45,8 @@ inline float PolyBlep(float t, float dt) {
 }
 
 inline float WrapPhase(float phase) {
-    while (phase >= 1.0f) {
-        phase -= 1.0f;
-    }
-    while (phase < 0.0f) {
-        phase += 1.0f;
-    }
-    return phase;
+    // Efficient wrapping to [0, 1) using floorf
+    return phase - floorf(phase);
 }
 
 }  // namespace
