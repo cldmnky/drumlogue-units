@@ -1,15 +1,4 @@
 {
-	"servers": {
-		"awesome-copilot": {
-			"command": "podman",
-			"args": [
-				"run",
-				"-i",
-				"--rm",
-				"ghcr.io/microsoft/mcp-dotnet-samples/awesome-copilot:latest"
-			],
-			"type": "stdio"
-		}
-	},
-	"inputs": []
+	"inputs": [],
+	"servers": {}
 }

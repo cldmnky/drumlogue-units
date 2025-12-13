@@ -1,0 +1,94 @@
+# Native build of drumlogue units as shared libraries for the presets editor
+# Usage: make -f build-system/Makefile.native UNIT=clouds-revfx
+
+# Repository roots (CURDIR is test/presets-editor when invoked from there)
+REPO_ROOT := $(abspath $(CURDIR)/../..)
+UNIT       ?= clouds-revfx
+UNIT_DIR   := $(REPO_ROOT)/drumlogue/$(UNIT)
+OUTPUT_DIR := $(REPO_ROOT)/test/presets-editor/units
+BUILD_DIR  := $(REPO_ROOT)/test/presets-editor/build
+
+# Toolchain
+CC  ?= clang
+CXX ?= clang++
+
+UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
+
+# Base flags
+CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra -fPIC -DUNIT_HOST_NATIVE -DTEST -D__unit_header= -D__unit_callback= -DATTRIBUTES_H_
+CFLAGS   ?= -std=c11  -O2 -Wall -Wextra -fPIC -DUNIT_HOST_NATIVE -DTEST -D__unit_header= -D__unit_callback= -DATTRIBUTES_H_
+LDFLAGS  ?=
+LDLIBS   ?=
+
+# Platform-specific shared library flags
+ifeq ($(UNAME_S),Darwin)
+  SHARED_FLAG := -dynamiclib
+  OUTPUT_EXT  := .dylib
+else
+  SHARED_FLAG := -shared
+  OUTPUT_EXT  := .so
+  LDLIBS     += -ldl
+endif
+
+# Enable NEON on ARM64 hosts (Apple Silicon / Linux aarch64)
+ifneq (,$(findstring arm64,$(UNAME_M)))
+  CXXFLAGS += -march=armv8-a+simd -D__ARM_NEON
+  CFLAGS   += -march=armv8-a+simd -D__ARM_NEON
+endif
+
+# Discover project configuration
+include $(UNIT_DIR)/config.mk
+
+# Override paths from container layout to local layout
+REPO_EURORACK := $(REPO_ROOT)/eurorack
+REPO_COMMON   := $(REPO_ROOT)/drumlogue/common
+REPO_SDK_INC  := $(REPO_ROOT)/logue-sdk/platform/drumlogue
+
+# Common overrides (handles /workspace and /repo usages)
+EURORACKDIR := $(REPO_EURORACK)
+STMLIBDIR   := $(EURORACKDIR)/stmlib
+COMMON_INC_PATH := $(REPO_COMMON)
+COMMON_SRC_PATH := $(REPO_COMMON)
+
+# Include search paths
+INCLUDES += -I$(REPO_ROOT)/test/presets-editor/shim
+INCLUDES += -I$(UNIT_DIR)
+INCLUDES += -I$(COMMON_INC_PATH)
+INCLUDES += -I$(EURORACKDIR)
+INCLUDES += -I$(STMLIBDIR)
+INCLUDES += -I$(REPO_SDK_INC)/common
+INCLUDES += -I$(REPO_SDK_INC)/inc
+
+# Collect sources and normalize to absolute paths
+ALL_SRCS := $(CSRC) $(CXXSRC) $(COMMON_SRC_PATH)
+
+make_abs = $(foreach f,$(1),$(if $(filter /%,$(f)),$(f),$(UNIT_DIR)/$(f)))
+SRCS := $(call make_abs,$(CSRC) $(CXXSRC))
+
+# Object names are flattened to avoid directory issues
+OBJ_FROM_SRC = $(BUILD_DIR)/$(subst /,_,$(basename $(1))).o
+OBJS := $(foreach s,$(SRCS),$(call OBJ_FROM_SRC,$(s)))
+
+TARGET := $(OUTPUT_DIR)/$(PROJECT)$(OUTPUT_EXT)
+
+.PHONY: all clean dirs
+
+all: dirs $(TARGET)
+	@echo "Built $(TARGET)"
+
+$(TARGET): $(OBJS)
+	$(CXX) $(CXXFLAGS) $(SHARED_FLAG) -o $@ $^ $(LDFLAGS) $(LDLIBS)
+
+# Per-source compile rules (C vs C++)
+define COMPILE_TEMPLATE
+$(call OBJ_FROM_SRC,$(1)): $(1) | dirs
+	$$(if $$(filter %.c,$(1)),$(CC) $(CFLAGS) $(INCLUDES) -c $$< -o $$@,$(CXX) $(CXXFLAGS) $(INCLUDES) -c $$< -o $$@)
+endef
+$(foreach s,$(SRCS),$(eval $(call COMPILE_TEMPLATE,$(s))))
+
+dirs:
+	@mkdir -p $(OUTPUT_DIR) $(BUILD_DIR)
+
+clean:
+	rm -rf $(BUILD_DIR) $(OUTPUT_DIR)/$(PROJECT)$(OUTPUT_EXT)

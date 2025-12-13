@@ -68,3 +68,15 @@ build/
 .DS_Store
 Thumbs.db
 test/elements-synth/elements_synth_test
+
+# UI test artifacts
+test/ui/ui_player
+test/ui/ui_player_arm
+test/ui/*.o
+
+# QEMU test artifacts
+test/qemu-arm/unit_host_arm
+test/qemu-arm/unit_host_native
+test/qemu-arm/*.o
+test/qemu-arm/build/
+test/qemu-arm/fixtures/*.wav

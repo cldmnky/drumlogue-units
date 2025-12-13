@@ -1,0 +1,246 @@
+# Makefile for QEMU ARM unit host using Podman on macOS
+# Provides ARM cross-compilation via Linux container
+
+.PHONY: all clean podman-build podman-test podman-shell check-podman install-podman help
+
+# Container settings
+CONTAINER_IMAGE := ubuntu:22.04
+CONTAINER_NAME := drumlogue-arm-builder
+WORKSPACE_DIR := /workspace
+
+# Check if running on macOS
+UNAME_S := $(shell uname -s)
+ifneq ($(UNAME_S),Darwin)
+    $(warning This Podman-based Makefile is designed for macOS. Use regular Makefile on Linux.)
+endif
+
+# Default target
+all: help
+
+help:
+	@echo "Drumlogue ARM Cross-Compilation with Podman (macOS)"
+	@echo "===================================================="
+	@echo ""
+	@echo "Setup:"
+	@echo "  make install-podman    # Install Podman via Homebrew"
+	@echo "  make check-podman      # Verify Podman installation"
+	@echo ""
+	@echo "Build & Test:"
+	@echo "  make podman-build      # Build ARM unit host in container"
+	@echo "  make podman-test       # Run QEMU ARM tests in container"
+	@echo "  make podman-shell      # Enter container for debugging"
+	@echo ""
+	@echo "Development:"
+	@echo "  make generate-signals  # Create test WAV files"
+	@echo "  make test-unit UNIT=clouds-revfx  # Test specific unit"
+	@echo ""
+	@echo "Cleanup:"
+	@echo "  make clean             # Remove built artifacts"
+
+# Install Podman on macOS
+install-podman:
+	@echo "Installing Podman via Homebrew..."
+	brew install podman qemu libsndfile
+	@echo ""
+	@echo "Initializing Podman machine..."
+	podman machine init --cpus 4 --memory 4096 --disk-size 20
+	podman machine start
+	@echo ""
+	@echo "✓ Podman ready for ARM cross-compilation"
+
+# Check Podman installation
+check-podman:
+	@echo "Checking Podman installation..."
+	@which podman >/dev/null || (echo "❌ Podman not found. Run: make install-podman" && exit 1)
+	@podman info >/dev/null 2>&1 || (echo "❌ Podman not running. Run: podman machine start" && exit 1)
+	@echo "✓ Podman is ready"
+	@echo ""
+	@echo "Podman version:"
+	@podman --version
+	@echo ""
+	@echo "Available space:"
+	@podman system df
+
+# Build ARM unit host using Podman
+podman-build: check-podman
+	@echo "Building ARM unit host in Podman container..."
+	podman run --rm -it \
+		-v "$(PWD):$(WORKSPACE_DIR):Z" \
+		-w $(WORKSPACE_DIR) \
+		$(CONTAINER_IMAGE) \
+		bash -c '\
+		apt-get update -qq && \
+		dpkg --add-architecture armhf && \
+		apt-get update -qq && \
+		apt-get install -y -qq \
+			gcc-arm-linux-gnueabihf \
+			qemu-system-arm \
+			libsndfile1-dev:armhf \
+			libc6-dev:armhf \
+			make \
+			file && \
+		echo "=== Building ARM unit host ===" && \
+		make -f Makefile.arm && \
+		echo "=== Verifying build ===" && \
+		file unit_host_arm && \
+		ls -lah unit_host_arm'
+
+# Test specific unit
+test-unit: check-podman podman-build generate-signals
+	@if [ -z "$(UNIT)" ]; then \
+		echo "Usage: make test-unit UNIT=<unit-name>"; \
+		echo "Example: make test-unit UNIT=clouds-revfx"; \
+		exit 1; \
+	fi
+	@echo "Testing unit: $(UNIT)"
+	@if [ ! -f "../../drumlogue/$(UNIT)/$(shell echo $(UNIT) | tr '-' '_').drmlgunit" ]; then \
+		echo "Building unit $(UNIT)..."; \
+		cd ../.. && ./build.sh $(UNIT); \
+	fi
+	podman run --rm -it \
+		-v "$(PWD):$(WORKSPACE_DIR):Z" \
+		-v "$(PWD)/../..:/repo:Z" \
+		-w $(WORKSPACE_DIR) \
+		$(CONTAINER_IMAGE) \
+		bash -c '\
+		apt-get update -qq && \
+		apt-get install -y -qq gcc-arm-linux-gnueabihf qemu-system-arm libsndfile1-dev make && \
+		echo "=== Testing $(UNIT) with sine wave ===" && \
+		timeout 300 ./run_qemu.sh \
+			/repo/drumlogue/$(UNIT)/$(shell echo $(UNIT) | tr '-' '_').drmlgunit \
+			test_sine_440.wav \
+			output_$(UNIT)_sine.wav \
+			--param-0 50 --param-1 75 --verbose && \
+		echo "=== Testing $(UNIT) with impulse ===" && \
+		timeout 300 ./run_qemu.sh \
+			/repo/drumlogue/$(UNIT)/$(shell echo $(UNIT) | tr '-' '_').drmlgunit \
+			test_impulse.wav \
+			output_$(UNIT)_impulse.wav \
+			--param-0 80 --param-1 60 --verbose && \
+		echo "=== Analysis ===" && \
+		python3 -c "\
+import soundfile as sf; \
+import numpy as np; \
+import os; \
+for test_type in ['sine', 'impulse']: \
+	filename = f'output_$(UNIT)_{test_type}.wav'; \
+	if os.path.exists(filename): \
+		data, sr = sf.read(filename); \
+		duration = len(data) / sr; \
+		max_level = np.max(np.abs(data)); \
+		rms_level = np.sqrt(np.mean(data**2)); \
+		print(f'✓ {filename}: {duration:.2f}s, max={max_level:.3f}, rms={rms_level:.3f}'); \
+		if max_level < 0.001: \
+			print(f'  ⚠ Very quiet output'); \
+		elif max_level > 0.1: \
+			print(f'  ✓ Good signal level'); \
+	else: \
+		print(f'❌ {filename} not found')"
+
+# Run comprehensive test suite
+podman-test: check-podman podman-build generate-signals
+	@echo "Running comprehensive QEMU ARM test suite..."
+	podman run --rm -it \
+		-v "$(PWD):$(WORKSPACE_DIR):Z" \
+		-v "$(PWD)/../..:/repo:Z" \
+		-w $(WORKSPACE_DIR) \
+		$(CONTAINER_IMAGE) \
+		bash -c '\
+		apt-get update -qq && \
+		apt-get install -y -qq \
+			gcc-arm-linux-gnueabihf \
+			qemu-system-arm \
+			libsndfile1-dev \
+			make \
+			python3 \
+			python3-numpy \
+			python3-soundfile \
+			bc && \
+		echo "=== Available units ===" && \
+		ls /repo/drumlogue/*/config.mk | while read f; do \
+			unit=$$(basename $$(dirname $$f)); \
+			if [ -f "/repo/drumlogue/$$unit/$${unit//-/_}.drmlgunit" ]; then \
+				echo "✓ $$unit"; \
+			else \
+				echo "- $$unit (not built)"; \
+			fi; \
+		done && \
+		echo "" && \
+		echo "=== Testing available units ===" && \
+		for unit in clouds-revfx elementish-synth; do \
+			unit_file="/repo/drumlogue/$$unit/$${unit//-/_}.drmlgunit"; \
+			if [ -f "$$unit_file" ]; then \
+				echo "Testing $$unit..."; \
+				timeout 180 ./run_qemu.sh "$$unit_file" test_sine_440.wav "output_$${unit}_test.wav" --param-0 50 >/dev/null 2>&1 && \
+					echo "✓ $$unit: PASS" || echo "❌ $$unit: FAIL"; \
+			fi; \
+		done'
+
+# Enter container shell for debugging
+podman-shell: check-podman
+	@echo "Entering Podman container shell..."
+	@echo "Available commands:"
+	@echo "  make -f Makefile.linux  # Build ARM unit host"
+	@echo "  ./run_qemu.sh <unit> <in> <out>  # Test unit"
+	@echo "  exit  # Return to macOS"
+	@echo ""
+	podman run --rm -it \
+		-v "$(PWD):$(WORKSPACE_DIR):Z" \
+		-v "$(PWD)/../..:/repo:Z" \
+		-w $(WORKSPACE_DIR) \
+		$(CONTAINER_IMAGE) \
+		bash -c '\
+		apt-get update -qq && \
+		apt-get install -y -qq \
+			gcc-arm-linux-gnueabihf \
+			qemu-system-arm \
+			libsndfile1-dev \
+			make \
+			file \
+			vim \
+			python3 \
+			python3-numpy \
+			python3-soundfile && \
+		echo "ARM development environment ready" && \
+		bash'
+
+# Performance comparison
+performance-test: check-podman podman-build generate-signals
+	@echo "Running performance comparison..."
+	@# Test desktop performance
+	@if [ -d "../clouds-revfx" ]; then \
+		echo "Testing desktop performance..."; \
+		cd ../clouds-revfx && make -s >/dev/null 2>&1 && \
+		time ./clouds_revfx_test ../qemu-arm/test_sine_440.wav ../qemu-arm/desktop_output.wav 2>/dev/null || true; \
+	fi
+	@# Test QEMU ARM performance
+	@echo "Testing QEMU ARM performance..."
+	@podman run --rm -it \
+		-v "$(PWD):$(WORKSPACE_DIR):Z" \
+		-v "$(PWD)/../..:/repo:Z" \
+		-w $(WORKSPACE_DIR) \
+		$(CONTAINER_IMAGE) \
+		bash -c '\
+		apt-get update -qq && apt-get install -y -qq gcc-arm-linux-gnueabihf qemu-system-arm libsndfile1-dev make time && \
+		unit_file="/repo/drumlogue/clouds-revfx/clouds_revfx.drmlgunit"; \
+		if [ -f "$$unit_file" ]; then \
+			echo "QEMU ARM performance:"; \
+			time timeout 180 ./run_qemu.sh "$$unit_file" test_sine_440.wav qemu_output.wav --param-0 50 >/dev/null 2>&1 || echo "Timeout/error"; \
+		fi'
+
+# Clean up generated files
+clean:
+	rm -f unit_host_arm run_qemu.sh
+	rm -f test_*.wav output_*.wav desktop_output.wav qemu_output.wav
+	rm -rf build
+
+# Show container status
+status:
+	@echo "Podman status:"
+	@podman info 2>/dev/null | grep -E "(host|arch|os)" || echo "Podman not running"
+	@echo ""
+	@echo "Container images:"
+	@podman images | head -10
+	@echo ""
+	@echo "System usage:"
+	@podman system df 2>/dev/null || echo "No data"

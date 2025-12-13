@@ -1,0 +1,18 @@
+# Build artifacts
+*.o
+unit_host_arm
+unit_host
+
+# Test outputs
+build/
+*.wav
+!fixtures/*.wav
+
+# OS files
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Podman/container
+.podman/
