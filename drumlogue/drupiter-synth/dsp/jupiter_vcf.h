@@ -24,6 +24,9 @@ namespace dsp {
  */
 class JupiterVCF {
 public:
+    // Oversampling factor (4x for stability and extended frequency range)
+    static constexpr int kOversamplingFactor = 4;
+    
     /**
      * @brief Filter modes
      */

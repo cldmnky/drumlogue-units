@@ -88,15 +88,15 @@ int8_t DrupiterSynth::Init(const unit_runtime_desc_t* desc) {
     env_vcf_->Init(sample_rate_);
     env_vca_->Init(sample_rate_);
     
-    // Initialize parameter smoothing (slow coefficient for filter, faster for levels)
-    cutoff_smooth_->Init(0.5f, 0.005f);       // Filter cutoff - slow for smooth sweeps
-    dco1_level_smooth_->Init(0.8f, 0.01f);   // DCO1 level
-    dco2_level_smooth_->Init(0.8f, 0.01f);   // DCO2 level
+    // Initialize parameter smoothing (start at 0, will be set by preset load)
+    cutoff_smooth_->Init(0.0f, 0.005f);       // Filter cutoff - slow for smooth sweeps
+    dco1_level_smooth_->Init(0.0f, 0.01f);    // DCO1 level - faster smoothing
+    dco2_level_smooth_->Init(0.0f, 0.01f);    // DCO2 level - faster smoothing
     
     // Initialize factory presets
     InitFactoryPresets();
     
-    // Load init preset
+    // Load init preset (this will set all parameters including smoothed values)
     LoadPreset(0);
     
     return 0;
@@ -452,7 +452,18 @@ void DrupiterSynth::LoadPreset(uint8_t preset_id) {
     
     current_preset_ = factory_presets_[preset_id];
     
-    // Apply all parameters
+    // Set smoothed parameters immediately (no smoothing during preset load)
+    if (cutoff_smooth_) {
+        cutoff_smooth_->SetImmediate(current_preset_.params[PARAM_VCF_CUTOFF] / 127.0f);
+    }
+    if (dco1_level_smooth_) {
+        dco1_level_smooth_->SetImmediate(current_preset_.params[PARAM_DCO1_LEVEL] / 127.0f);
+    }
+    if (dco2_level_smooth_) {
+        dco2_level_smooth_->SetImmediate(current_preset_.params[PARAM_DCO2_LEVEL] / 127.0f);
+    }
+    
+    // Apply all parameters to DSP components
     for (uint8_t i = 0; i < PARAM_COUNT; ++i) {
         SetParameter(i, current_preset_.params[i]);
     }
