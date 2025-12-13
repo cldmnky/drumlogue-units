@@ -72,6 +72,8 @@ JupiterDCO::JupiterDCO()
     , pulse_width_(0.5f)
     , sync_enabled_(false)
     , fm_amount_(0.0f)
+    , drift_phase_(0.0f)
+    , noise_seed_(0x41594E31)  // "AYN1"
     , last_phase_(0.0f)
 {
     if (!tables_initialized_) {
@@ -88,6 +90,8 @@ void JupiterDCO::Init(float sample_rate) {
     phase_ = 0.0f;
     phase_inc_ = 0.0f;
     fm_amount_ = 0.0f;
+    drift_phase_ = 0.0f;
+    noise_seed_ = 0x41594E31;
 }
 
 void JupiterDCO::SetFrequency(float freq_hz) {
@@ -124,6 +128,17 @@ float JupiterDCO::Process() {
         float fm_scale = exp2f(fm_amount_ * kFmModRange);
         current_phase_inc *= fm_scale;
     }
+    
+    // Analog-style slow drift: sine LFO plus tiny noise (±0.3%)
+    drift_phase_ += 0.00002f;  // ~1 Hz at 48k
+    if (drift_phase_ >= 1.0f) {
+        drift_phase_ -= 1.0f;
+    }
+    noise_seed_ = noise_seed_ * 1664525u + 1013904223u;
+    float noise = ((noise_seed_ >> 9) & 0x7FFFFF) / float(0x7FFFFF) - 0.5f;
+    float drift = 0.003f * sinf(drift_phase_ * 2.0f * static_cast<float>(M_PI)) + 0.001f * noise;
+    current_phase_inc *= (1.0f + drift);
+    
     // Protect against aliasing when FM tries to push past Nyquist.
     current_phase_inc = std::max(0.0f, std::min(current_phase_inc, kMaxPhaseIncrement));
     

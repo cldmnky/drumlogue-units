@@ -113,6 +113,8 @@ private:
     float pulse_width_;        // Pulse width (0.0-1.0)
     bool sync_enabled_;
     float fm_amount_;          // Current FM modulation
+    float drift_phase_;        // Slow analog-style drift phase
+    uint32_t noise_seed_;      // For subtle drift noise
     
     float last_phase_;         // For sync detection
     
