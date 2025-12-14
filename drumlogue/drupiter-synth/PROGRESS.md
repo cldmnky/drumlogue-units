@@ -774,6 +774,52 @@ All Phase 4 objectives achieved:
 
 ---
 
-**Last Updated**: December 10, 2025  
-**Version**: 1.0.0 Release Candidate  
-**Status**: ✅ COMPLETE - Ready for Distribution
+**Last Updated**: December 13, 2025  
+**Version**: 1.0.1 (Parameter Fixes)  
+**Status**: ✅ FIXES APPLIED - Ready for Testing
+
+---
+
+## Version 1.0.1 Updates (December 13, 2025)
+
+### Critical Parameter Fixes
+Based on user feedback regarding parameter functionality issues, the following fixes have been implemented:
+
+**1. Filter Cutoff Behavior at Low Percentages**
+- ✅ Fixed filter removing all sound at 1-2% cutoff
+- Changed cutoff curve from `pow(x, 0.25)` to `pow(x, 0.5)` for gentler response
+- Adjusted range from 20Hz-20kHz to 30Hz-12kHz (better Jupiter-8 match)
+- Raised minimum cutoff from 20Hz to 30Hz to prevent over-resonant silence
+- Reduced resonance feedback from 3.2 to 2.8 for stability at low cutoffs
+
+**2. D2 Detune Parameter**
+- ✅ Fixed D2 TUNE parameter not producing audible effect
+- Increased detune range from ±50 cents to ±200 cents (±2 semitones)
+- Now provides musically obvious detuning matching Jupiter-8 character
+
+**3. D1 PWM Parameter**
+- ✅ Fixed D1 PWM parameter not responding to changes
+- Removed auto-switch logic that prevented PWM from working
+- PWM now applies directly when PULSE waveform is selected
+
+**4. DCO Waveform Accuracy**
+- ✅ Corrected sawtooth waveform direction to match Jupiter-8
+- Changed from ascending (+1 to -1) to descending (-1 to +1) saw
+- Better matches Roland/Jupiter sawtooth character
+
+### Technical Details
+See `PARAMETER_FIXES.md` for complete technical documentation of all changes.
+
+### Testing Status
+- ✅ Code changes completed
+- ✅ Syntax validation passed
+- ⏳ Hardware testing required (ARM build environment not available in CI)
+- ⏳ User validation needed
+
+### Files Modified
+- `drupiter_synth.cc` - Filter cutoff calculation, detune range, PWM logic
+- `dsp/jupiter_vcf.cc` - Minimum cutoff, resonance feedback
+- `dsp/jupiter_dco.cc` - Sawtooth waveform direction
+- `PARAMETER_FIXES.md` - Technical documentation (new)
+
+---
