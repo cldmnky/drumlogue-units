@@ -220,9 +220,9 @@ void JupiterDCO::InitWavetables() {
     for (int i = 0; i <= kWavetableSize; ++i) {
         float phase = static_cast<float>(i) / kWavetableSize;
         
-        // Ramp/Sawtooth: -1 to +1 (positive-going)
-        // Bristol uses rear-to-front table to make positive leading edge
-        ramp_table_[i] = phase * 2.0f - 1.0f;
+        // Ramp/Sawtooth: Jupiter-8 style descending saw (+1 to -1)
+        // This matches the Roland/Jupiter sawtooth direction
+        ramp_table_[i] = 1.0f - phase * 2.0f;
         
         // Square wave with slight decay on plateaus (Bristol style)
         // This adds warmth by simulating capacitor discharge
