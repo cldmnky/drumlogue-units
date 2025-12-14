@@ -176,9 +176,9 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     const float dco2_oct_mult = OctaveToMultiplier(current_preset_.params[PARAM_DCO2_OCTAVE]);
     
     // Detune: convert cents to frequency ratio.
-    // Make this musically obvious; the previous ±10 cent range was too subtle.
-    // Map 0..100 (50=center) to ±50 cents.
-    const float detune_cents = (static_cast<int32_t>(current_preset_.params[PARAM_DCO2_DETUNE]) - 50) * 1.0f;
+    // Jupiter-8 style detune: wider range for more obvious effect.
+    // Map 0..100 (50=center) to ±200 cents (±2 semitones).
+    const float detune_cents = (static_cast<int32_t>(current_preset_.params[PARAM_DCO2_DETUNE]) - 50) * 4.0f;
     const float detune_ratio = powf(2.0f, detune_cents / 1200.0f);
     
     const float lfo_vco_depth = current_preset_.params[PARAM_LFO_VCO_DEPTH] / 100.0f;
@@ -229,11 +229,11 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         
         // Apply filter with smoothed cutoff, envelope, and LFO modulation
         const float cutoff_norm = cutoff_smooth_->Process();
-        // Exponential cutoff mapping over ~10 octaves (20 Hz .. ~20 kHz),
-        // with a control curve that keeps the bottom end usable.
-        // This avoids "silent until ~20%" behavior on higher notes.
-        const float cutoff_curve = powf(cutoff_norm, 0.25f);
-        float cutoff_base = 20.0f * powf(2.0f, cutoff_curve * 10.0f);
+        // Exponential cutoff mapping with better low-end response.
+        // Jupiter-8 style: usable range from ~30Hz to 12kHz with more linear feel.
+        // Map 0-1 to cover ~8.5 octaves (30Hz to 12kHz) with gentler curve.
+        const float cutoff_curve = powf(cutoff_norm, 0.5f);  // Square root for gentler curve
+        float cutoff_base = 30.0f * powf(2.0f, cutoff_curve * 8.5f);
 
         // Keyboard tracking (match JupiterVCF default: 50%)
         const float note_offset = (static_cast<int32_t>(current_note_) - 60) / 12.0f;
@@ -355,12 +355,7 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             }
             break;
         case PARAM_DCO1_PW:
-            // PWM is only meaningful on PULSE. If the user tweaks PW while on SQR,
-            // auto-switch to PULSE so the control is immediately audible.
-            if (current_preset_.params[PARAM_DCO1_WAVE] == dsp::JupiterDCO::WAVEFORM_SQUARE) {
-                current_preset_.params[PARAM_DCO1_WAVE] = dsp::JupiterDCO::WAVEFORM_PULSE;
-                dco1_->SetWaveform(dsp::JupiterDCO::WAVEFORM_PULSE);
-            }
+            // Set pulse width directly - applies to PULSE waveform
             dco1_->SetPulseWidth(v / 100.0f);
             break;
         case PARAM_DCO1_LEVEL:

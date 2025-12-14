@@ -186,17 +186,17 @@ void JupiterVCF::UpdateCoefficients() {
     float fc = cutoff_hz_;
     const float fc_max = 0.45f * oversampled_rate;
     if (fc > fc_max) fc = fc_max;
-    if (fc < 20.0f) fc = 20.0f;
+    if (fc < 30.0f) fc = 30.0f;  // Raise minimum to prevent over-resonant silence
 
     // Coefficients for OTA cascade (TPT 1-pole).
     // g = tan(pi*fc/fs), a = g/(1+g)
     const float g = tanf(static_cast<float>(M_PI) * (fc / oversampled_rate));
     ota_a_ = g / (1.0f + g);
 
-    // Resonance mapping: JP-8 IR3109 implementations are generally less eager to
-    // full self-osc than many modern SVF models. Keep a conservative max.
+    // Resonance mapping: Jupiter-8 style with more gradual response.
+    // Lower maximum resonance to avoid over-resonance at low cutoffs.
     const float r = std::max(0.0f, std::min(resonance_, 1.0f));
-    ota_res_k_ = (r * r) * 3.2f;  // square for finer low-res control
+    ota_res_k_ = (r * r) * 2.8f;  // Reduced from 3.2 for stability
 
     // Gain compensation ("Q comp") to keep perceived loudness more stable.
     ota_gain_comp_ = 1.0f + r * 0.6f;
@@ -213,7 +213,7 @@ void JupiterVCF::UpdateCoefficients() {
 }
 
 float JupiterVCF::ClampCutoff(float freq) const {
-    return std::max(20.0f, std::min(freq, 20000.0f));
+    return std::max(30.0f, std::min(freq, 20000.0f));
 }
 
 } // namespace dsp
