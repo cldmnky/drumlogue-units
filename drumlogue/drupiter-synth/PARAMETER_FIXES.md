@@ -114,15 +114,15 @@ dco1_->SetPulseWidth(v / 100.0f);
 - While not explicitly reported, the sawtooth waveform direction didn't match Jupiter-8
 
 **Root Cause:**
-The original implementation used an ascending sawtooth (rising edge):
+The original implementation used an ascending sawtooth (ramps up from negative to positive):
 ```cpp
-ramp_table_[i] = phase * 2.0f - 1.0f;  // -1 to +1 (ascending)
+ramp_table_[i] = phase * 2.0f - 1.0f;  // Starts at -1, rises to +1
 ```
 
 **Solution:**
-Changed to descending sawtooth to match Jupiter-8/Roland style:
+Changed to descending sawtooth to match Jupiter-8/Roland style (ramps down from positive to negative):
 ```cpp
-ramp_table_[i] = 1.0f - phase * 2.0f;  // +1 to -1 (descending)
+ramp_table_[i] = 1.0f - phase * 2.0f;  // Starts at +1, falls to -1
 ```
 
 **Jupiter-8 Reference:**
