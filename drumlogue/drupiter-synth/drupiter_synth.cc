@@ -573,7 +573,7 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             
         // Page 6: MOD HUB selector and EFFECT mode
         case PARAM_MOD_HUB:
-            v = clamp_u8_int32(value, 0, 8);  // 9 hub destinations
+            v = clamp_u8_int32(value, 0, 9);  // 10 hub destinations (0-9)
             mod_hub_.SetDestination(v);
             current_preset_.params[id] = v;
             return;  // Hub handles its own state
@@ -741,9 +741,8 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
             return "";
             
         case PARAM_MOD_AMT: {
-            // Get current destination from preset params (not from mod_hub internal state)
-            // This is important because GetParameterStr is called before SetParameter
-            uint8_t dest = current_preset_.params[PARAM_MOD_HUB];
+            // Get current destination from mod_hub (updated by SetParameter)
+            uint8_t dest = mod_hub_.GetDestination();
             
             // Check if value is within current destination's range
             if (dest >= MOD_NUM_DESTINATIONS) {
