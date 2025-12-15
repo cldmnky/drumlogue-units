@@ -47,8 +47,8 @@ const __unit_header unit_header_t unit_header = {
         {0, 2, 0, 1, k_unit_param_type_strings, 0, 0, 0, {"D2 OCT"}},
         // DCO-2 Waveform: SAW/NOISE/PULSE/SINE
         {0, 3, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"D2 WAVE"}},
-        // DCO-2 Detune: -50 to +50 cents (50=center)
-        {0, 100, 50, 50, k_unit_param_type_strings, 0, 0, 0, {"D2 TUNE"}},
+        // DCO-2 Detune: -50 to +50 cents
+        {-50, 50, 0, 0, k_unit_param_type_cents, 0, 0, 0, {"D2 TUNE"}},
         // DCO-2 Sync: OFF/SOFT/HARD (Jupiter-8 sync to DCO1)
         {0, 2, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"SYNC"}},
 

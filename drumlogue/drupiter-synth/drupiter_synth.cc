@@ -253,7 +253,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     
     // Detune: convert cents to frequency ratio (from DCO2 TUNE param)
     // Map 0..100 (50=center) to ±200 cents (±2 semitones)
-    const float detune_cents = (static_cast<int32_t>(current_preset_.params[PARAM_DCO2_TUNE]) - 50) * 4.0f;
+    const float detune_cents = static_cast<float>(current_preset_.params[PARAM_DCO2_TUNE]) * 4.0f;
     const float detune_ratio = cents_to_ratio(detune_cents);  // Fast approximation
     
     // Cross-modulation depth from direct XMOD param
@@ -694,12 +694,6 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
             return kOctaveNames[value < 3 ? value : 0];
         case PARAM_DCO2_WAVE:
             return kDco2WaveNames[value < 4 ? value : 0];
-        case PARAM_DCO2_TUNE:
-            // Bipolar display: -50 to +50 (value range 0-100)
-            if (value < 0 || value > 100) {
-                return nullptr;  // Out of range
-            }
-            return common::ParamFormat::BipolarValue(str_buf, sizeof(str_buf), value, 0, 100);
         case PARAM_SYNC:
             return kSyncNames[value < 3 ? value : 0];
         
@@ -873,7 +867,7 @@ void DrupiterSynth::InitFactoryPresets() {
     // Page 2: DCO-2
     factory_presets_[0].params[PARAM_DCO2_OCT] = 1;       // 8'
     factory_presets_[0].params[PARAM_DCO2_WAVE] = 0;      // SAW
-    factory_presets_[0].params[PARAM_DCO2_TUNE] = 50;     // Center (no detune)
+    factory_presets_[0].params[PARAM_DCO2_TUNE] = 0;     // Center (no detune)
     factory_presets_[0].params[PARAM_SYNC] = 0;           // OFF
     // Page 3: MIX & VCF
     factory_presets_[0].params[PARAM_OSC_MIX] = 0;        // DCO1 only
@@ -909,7 +903,7 @@ void DrupiterSynth::InitFactoryPresets() {
     factory_presets_[1].params[PARAM_XMOD] = 0;
     factory_presets_[1].params[PARAM_DCO2_OCT] = 0;       // 16'
     factory_presets_[1].params[PARAM_DCO2_WAVE] = 0;      // SAW
-    factory_presets_[1].params[PARAM_DCO2_TUNE] = 50;
+    factory_presets_[1].params[PARAM_DCO2_TUNE] = 0;
     factory_presets_[1].params[PARAM_SYNC] = 0;
     factory_presets_[1].params[PARAM_OSC_MIX] = 0;        // DCO1 only
     factory_presets_[1].params[PARAM_VCF_CUTOFF] = 39;
@@ -941,7 +935,7 @@ void DrupiterSynth::InitFactoryPresets() {
     factory_presets_[2].params[PARAM_XMOD] = 0;
     factory_presets_[2].params[PARAM_DCO2_OCT] = 2;       // 4' (one octave up)
     factory_presets_[2].params[PARAM_DCO2_WAVE] = 0;      // SAW
-    factory_presets_[2].params[PARAM_DCO2_TUNE] = 50;
+    factory_presets_[2].params[PARAM_DCO2_TUNE] = 0;
     factory_presets_[2].params[PARAM_SYNC] = 2;           // HARD sync for classic lead
     factory_presets_[2].params[PARAM_OSC_MIX] = 30;       // Mostly DCO1 with some DCO2
     factory_presets_[2].params[PARAM_VCF_CUTOFF] = 71;
@@ -973,7 +967,7 @@ void DrupiterSynth::InitFactoryPresets() {
     factory_presets_[3].params[PARAM_XMOD] = 0;
     factory_presets_[3].params[PARAM_DCO2_OCT] = 1;       // 8'
     factory_presets_[3].params[PARAM_DCO2_WAVE] = 0;      // SAW
-    factory_presets_[3].params[PARAM_DCO2_TUNE] = 53;     // Slight detune
+    factory_presets_[3].params[PARAM_DCO2_TUNE] = 3;     // Slight detune
     factory_presets_[3].params[PARAM_SYNC] = 0;
     factory_presets_[3].params[PARAM_OSC_MIX] = 50;       // Equal mix
     factory_presets_[3].params[PARAM_VCF_CUTOFF] = 63;
@@ -1005,7 +999,7 @@ void DrupiterSynth::InitFactoryPresets() {
     factory_presets_[4].params[PARAM_XMOD] = 15;          // Subtle cross-mod
     factory_presets_[4].params[PARAM_DCO2_OCT] = 1;       // 8'
     factory_presets_[4].params[PARAM_DCO2_WAVE] = 0;      // SAW
-    factory_presets_[4].params[PARAM_DCO2_TUNE] = 50;
+    factory_presets_[4].params[PARAM_DCO2_TUNE] = 0;
     factory_presets_[4].params[PARAM_SYNC] = 0;
     factory_presets_[4].params[PARAM_OSC_MIX] = 40;
     factory_presets_[4].params[PARAM_VCF_CUTOFF] = 59;
@@ -1037,7 +1031,7 @@ void DrupiterSynth::InitFactoryPresets() {
     factory_presets_[5].params[PARAM_XMOD] = 0;
     factory_presets_[5].params[PARAM_DCO2_OCT] = 1;       // 8'
     factory_presets_[5].params[PARAM_DCO2_WAVE] = 0;      // SAW
-    factory_presets_[5].params[PARAM_DCO2_TUNE] = 55;     // Detune for richness
+    factory_presets_[5].params[PARAM_DCO2_TUNE] = 5;     // Detune for richness
     factory_presets_[5].params[PARAM_SYNC] = 0;
     factory_presets_[5].params[PARAM_OSC_MIX] = 50;       // Equal mix
     factory_presets_[5].params[PARAM_VCF_CUTOFF] = 75;
