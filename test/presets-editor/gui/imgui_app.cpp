@@ -38,6 +38,7 @@ ImGuiApp::ImGuiApp(const std::string& unit_path,
       running_(false),
       audio_running_(false),
       audio_engine_(nullptr),
+      master_volume_(0.5f),  // Default to 50% volume
       preset_manager_(nullptr),
       octave_offset_(0),
       arp_enabled_(false),
@@ -251,7 +252,7 @@ void ImGuiApp::render_ui() {
           if (hdr && (hdr->target & UNIT_TARGET_MODULE_MASK) != k_unit_module_synth) {
             in_ch = channels_;  // Effects units process input
           }
-          audio_config_t cfg = {sample_rate_, frames_per_buffer_, in_ch, channels_};
+          audio_config_t cfg = {sample_rate_, frames_per_buffer_, in_ch, channels_, master_volume_};
           audio_engine_ = audio_engine_create(&cfg, loader_, runtime_state_);
           if (audio_engine_ && audio_engine_start(audio_engine_) == 0) {
             audio_running_ = true;
@@ -294,6 +295,34 @@ void ImGuiApp::render_ui() {
     return;
   }
 
+  // Master Volume Control (at top of parameters panel)
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.2f, 0.3f, 0.4f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.3f, 0.4f, 0.5f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.3f, 0.5f, 0.6f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_SliderGrab, ImVec4(0.5f, 0.7f, 0.9f, 1.0f));
+  ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ImVec4(0.6f, 0.8f, 1.0f, 1.0f));
+  
+  ImGui::Text("Master Volume");
+  ImGui::SameLine();
+  ImGui::TextDisabled("(?)");
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Controls output level and prevents distortion");
+  }
+  
+  float volume_pct = master_volume_ * 100.0f;
+  if (ImGui::SliderFloat("##MasterVolume", &volume_pct, 0.0f, 100.0f, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) {
+    master_volume_ = volume_pct / 100.0f;
+#ifdef PORTAUDIO_PRESENT
+    if (audio_running_ && audio_engine_) {
+      audio_engine_set_master_volume(audio_engine_, master_volume_);
+    }
+#endif
+  }
+  
+  ImGui::PopStyleColor(5);
+  ImGui::Separator();
+  ImGui::Spacing();
+
   // Group parameters by pages (4 params per page)
   const int params_per_page = 4;
   const int num_pages = (hdr->num_params + params_per_page - 1) / params_per_page;
@@ -335,13 +364,31 @@ void ImGuiApp::render_ui() {
     if (p.type == k_unit_param_type_strings && loader_->unit_get_param_str_value) {
       const char* current_str = loader_->unit_get_param_str_value(static_cast<uint8_t>(i), val);
       if (ImGui::BeginCombo("##value", current_str ? current_str : "")) {
+        // Track last string to detect when we've exhausted unique options
+        // This handles HUB VALUE params where the range is 0-100 but only a few values are valid
+        const char* last_str = nullptr;
+        int duplicate_count = 0;
+        
         for (int v = p.min; v <= p.max; ++v) {
           const char* str = loader_->unit_get_param_str_value(static_cast<uint8_t>(i), v);
+          if (!str || str[0] == '\0') continue;
+          
+          // Stop if we see too many consecutive duplicates (indicates we've hit the end of valid options)
+          if (last_str && strcmp(str, last_str) == 0) {
+            duplicate_count++;
+            if (duplicate_count > 2) break;  // More than 2 duplicates = stop
+            continue;  // Skip this duplicate
+          }
+          duplicate_count = 0;
+          last_str = str;
+          
           bool is_selected = (val == v);
-          if (ImGui::Selectable(str ? str : "", is_selected)) {
+          ImGui::PushID(v);
+          if (ImGui::Selectable(str, is_selected)) {
             val = v;
             changed = true;
           }
+          ImGui::PopID();
           if (is_selected) {
             ImGui::SetItemDefaultFocus();
           }
@@ -360,6 +407,21 @@ void ImGuiApp::render_ui() {
       val = clamp_int(val, p.min, p.max);
       param_values_[i] = val;
       unit_loader_set_param(loader_, static_cast<uint8_t>(i), val);
+      
+      // HUB support: when a HUB selector changes, refresh its value parameter
+      // This allows virtual parameter routing where selecting a destination shows its stored value
+      // DCO1 HUB: param 0 (D1 SEL) -> refresh param 1 (D1 VAL)
+      // DCO2 HUB: param 2 (D2 SEL) -> refresh param 3 (D2 VAL)  
+      // MOD HUB: param 20 (MOD SEL) -> refresh param 21 (MOD VAL)
+      if (loader_->unit_get_param_value) {
+        if (i == 0 && param_values_.size() > 1) {
+          param_values_[1] = loader_->unit_get_param_value(1);
+        } else if (i == 2 && param_values_.size() > 3) {
+          param_values_[3] = loader_->unit_get_param_value(3);
+        } else if (i == 20 && param_values_.size() > 21) {
+          param_values_[21] = loader_->unit_get_param_value(21);
+        }
+      }
     }
     
     ImGui::PopID();

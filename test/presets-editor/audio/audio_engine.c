@@ -28,9 +28,18 @@ struct audio_engine {
     void* stream;
 #endif
     ring_buffer_t param_queue;
+    float master_volume;  // Thread-safe read in audio callback
 };
 
 #ifdef PORTAUDIO_PRESENT
+
+// Soft-clipping function using tanh for smooth saturation
+static inline float soft_clip(float x) {
+    // tanh provides smooth saturation at ±1.0
+    // For values near 0, tanh(x) ≈ x, so no distortion at low levels
+    // Scale to make clipping more gradual
+    return tanhf(x * 0.9f) / 0.9f;
+}
 
 static int audio_cb(const void* input,
                     void* output,
@@ -68,6 +77,15 @@ static int audio_cb(const void* input,
     }
 
     unit_loader_render(engine->loader, in ? in : out, out, frames);
+    
+    // Apply master volume and soft-clipping to prevent distortion
+    const float volume = engine->master_volume;
+    const uint32_t total_samples = frames * engine->cfg.output_channels;
+    for (uint32_t i = 0; i < total_samples; i++) {
+        // Apply volume then soft-clip to prevent digital clipping
+        out[i] = soft_clip(out[i] * volume);
+    }
+    
     return paContinue;
 }
 
@@ -84,6 +102,7 @@ audio_engine_t* audio_engine_create(const audio_config_t* cfg,
     engine->cfg = *cfg;
     engine->loader = loader;
     engine->runtime_state = runtime_state;
+    engine->master_volume = cfg->master_volume > 0.0f ? cfg->master_volume : 0.5f;
 
     if (ring_buffer_init(&engine->param_queue, PARAM_QUEUE_CAPACITY, sizeof(param_msg_t)) != 0) {
         free(engine);
@@ -164,6 +183,14 @@ int audio_engine_set_param(audio_engine_t* engine, uint8_t id, int32_t value) {
     return ring_buffer_push(&engine->param_queue, &msg);
 }
 
+void audio_engine_set_master_volume(audio_engine_t* engine, float volume) {
+    if (!engine) return;
+    // Clamp to valid range
+    if (volume < 0.0f) volume = 0.0f;
+    if (volume > 1.0f) volume = 1.0f;
+    engine->master_volume = volume;
+}
+
 float audio_engine_cpu_load(audio_engine_t* engine) {
     if (!engine || !engine->stream) return -1.0f;
     return (float)Pa_GetStreamCpuLoad(engine->stream);
@@ -189,6 +216,9 @@ void audio_engine_stop(audio_engine_t* engine) { (void)engine; }
 
 int audio_engine_set_param(audio_engine_t* engine, uint8_t id, int32_t value) {
     (void)engine; (void)id; (void)value; return -1; }
+
+void audio_engine_set_master_volume(audio_engine_t* engine, float volume) {
+    (void)engine; (void)volume; }
 
 float audio_engine_cpu_load(audio_engine_t* engine) { (void)engine; return -1.0f; }
 

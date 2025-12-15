@@ -61,6 +61,7 @@ class ImGuiApp {
 
   audio_engine_t* audio_engine_;
   std::vector<int> param_values_;
+  float master_volume_;  // Master output volume (0.0 to 1.0)
   
   preset_manager_t* preset_manager_;
   char new_preset_name_[64];

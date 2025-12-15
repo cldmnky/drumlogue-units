@@ -14,6 +14,7 @@ typedef struct {
     uint16_t frames_per_buffer; // e.g., 128 or 256
     uint8_t input_channels;   // 0,1,2
     uint8_t output_channels;  // 1 or 2
+    float master_volume;      // 0.0 to 1.0, default 0.5
 } audio_config_t;
 
 typedef struct audio_engine audio_engine_t;
@@ -28,6 +29,9 @@ void audio_engine_stop(audio_engine_t* engine);
 
 // Thread-safe enqueue of parameter updates (applied in audio thread)
 int audio_engine_set_param(audio_engine_t* engine, uint8_t id, int32_t value);
+
+// Set master output volume (0.0 to 1.0)
+void audio_engine_set_master_volume(audio_engine_t* engine, float volume);
 
 // Returns PortAudio stream CPU load (0..1), or -1 on error
 float audio_engine_cpu_load(audio_engine_t* engine);

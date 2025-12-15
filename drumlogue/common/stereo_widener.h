@@ -634,4 +634,252 @@ inline void MStoLRBatch(const float* mid, const float* side,
 }
 #endif
 
+// ============================================================================
+// ChorusStereoWidener - Chorus-like stereo spread using modulated delays
+// ============================================================================
+
+/**
+ * @brief Chorus-style stereo widener using short modulated delays
+ *
+ * Creates stereo width by applying short delays with LFO modulation to
+ * left and right channels with opposite phases. This creates a rich,
+ * animated stereo field similar to a chorus effect.
+ *
+ * Typical delay times: 10-30ms
+ * Typical modulation depth: 0.5-5ms
+ * Typical LFO rate: 0.3-3 Hz
+ */
+class ChorusStereoWidener {
+public:
+    static constexpr size_t kMaxDelayMs = 50;  // Maximum delay in milliseconds
+    
+    ChorusStereoWidener()
+        : sample_rate_(48000.0f)
+        , delay_time_ms_(20.0f)
+        , mod_depth_ms_(2.0f)
+        , lfo_rate_(0.5f / 48000.0f)
+        , lfo_phase_left_(0.0f)
+        , lfo_phase_right_(0.5f)  // 180° out of phase
+        , wet_mix_(0.5f)
+        , max_delay_samples_(0)
+        , write_pos_(0) {
+        // Delay buffers allocated on Init
+        delay_buffer_left_ = nullptr;
+        delay_buffer_right_ = nullptr;
+    }
+    
+    ~ChorusStereoWidener() {
+        if (delay_buffer_left_) delete[] delay_buffer_left_;
+        if (delay_buffer_right_) delete[] delay_buffer_right_;
+    }
+    
+    /**
+     * @brief Initialize chorus with sample rate
+     */
+    void Init(float sample_rate) {
+        sample_rate_ = sample_rate;
+        lfo_rate_ = 0.5f / sample_rate_;
+        
+        // Allocate delay buffers
+        max_delay_samples_ = static_cast<size_t>((kMaxDelayMs / 1000.0f) * sample_rate_) + 1;
+        
+        if (delay_buffer_left_) delete[] delay_buffer_left_;
+        if (delay_buffer_right_) delete[] delay_buffer_right_;
+        
+        delay_buffer_left_ = new float[max_delay_samples_];
+        delay_buffer_right_ = new float[max_delay_samples_];
+        
+        // Clear buffers
+        for (size_t i = 0; i < max_delay_samples_; ++i) {
+            delay_buffer_left_[i] = 0.0f;
+            delay_buffer_right_[i] = 0.0f;
+        }
+        
+        write_pos_ = 0;
+        lfo_phase_left_ = 0.0f;
+        lfo_phase_right_ = 0.5f;  // Start 180° out of phase
+    }
+    
+    /**
+     * @brief Set base delay time in milliseconds (10-50ms)
+     */
+    void SetDelayTime(float ms) {
+        delay_time_ms_ = (ms < 10.0f) ? 10.0f : ((ms > kMaxDelayMs) ? kMaxDelayMs : ms);
+    }
+    
+    /**
+     * @brief Set modulation depth in milliseconds (0.1-10ms)
+     */
+    void SetModDepth(float ms) {
+        mod_depth_ms_ = (ms < 0.1f) ? 0.1f : ((ms > 10.0f) ? 10.0f : ms);
+    }
+    
+    /**
+     * @brief Set LFO rate in Hz (0.1-5Hz)
+     */
+    void SetLfoRate(float rate_hz) {
+        rate_hz = (rate_hz < 0.1f) ? 0.1f : ((rate_hz > 5.0f) ? 5.0f : rate_hz);
+        lfo_rate_ = rate_hz / sample_rate_;
+    }
+    
+    /**
+     * @brief Set wet/dry mix (0.0 = dry, 1.0 = full chorus)
+     */
+    void SetMix(float mix) {
+        wet_mix_ = (mix < 0.0f) ? 0.0f : ((mix > 1.0f) ? 1.0f : mix);
+    }
+    
+    void Reset() {
+        if (delay_buffer_left_ && delay_buffer_right_) {
+            for (size_t i = 0; i < max_delay_samples_; ++i) {
+                delay_buffer_left_[i] = 0.0f;
+                delay_buffer_right_[i] = 0.0f;
+            }
+        }
+        write_pos_ = 0;
+        lfo_phase_left_ = 0.0f;
+        lfo_phase_right_ = 0.5f;
+    }
+    
+    /**
+     * @brief Process mono input to chorus stereo (single sample)
+     */
+    inline void ProcessMono(float mono, float& out_left, float& out_right) {
+        if (!delay_buffer_left_ || !delay_buffer_right_) {
+            out_left = out_right = mono;
+            return;
+        }
+        
+        // Write input to both delay lines
+        delay_buffer_left_[write_pos_] = mono;
+        delay_buffer_right_[write_pos_] = mono;
+        
+        // Update LFO phases (triangle wave)
+        lfo_phase_left_ += lfo_rate_;
+        lfo_phase_right_ += lfo_rate_;
+        if (lfo_phase_left_ >= 1.0f) lfo_phase_left_ -= 1.0f;
+        if (lfo_phase_right_ >= 1.0f) lfo_phase_right_ -= 1.0f;
+        
+        // Compute triangle LFO values [-1, 1]
+        float lfo_left = lfo_phase_left_ > 0.5f ? 1.0f - lfo_phase_left_ : lfo_phase_left_;
+        lfo_left = lfo_left * 4.0f - 1.0f;
+        
+        float lfo_right = lfo_phase_right_ > 0.5f ? 1.0f - lfo_phase_right_ : lfo_phase_right_;
+        lfo_right = lfo_right * 4.0f - 1.0f;
+        
+        // Calculate modulated delay times in samples
+        float delay_samples_left = ((delay_time_ms_ + lfo_left * mod_depth_ms_) / 1000.0f) * sample_rate_;
+        float delay_samples_right = ((delay_time_ms_ + lfo_right * mod_depth_ms_) / 1000.0f) * sample_rate_;
+        
+        // Read from delay lines with linear interpolation
+        float delayed_left = ReadDelayInterpolated(delay_buffer_left_, delay_samples_left);
+        float delayed_right = ReadDelayInterpolated(delay_buffer_right_, delay_samples_right);
+        
+        // Mix dry and wet signals
+        out_left = mono * (1.0f - wet_mix_) + delayed_left * wet_mix_;
+        out_right = mono * (1.0f - wet_mix_) + delayed_right * wet_mix_;
+        
+        // Advance write position
+        write_pos_ = (write_pos_ + 1) % max_delay_samples_;
+    }
+    
+    /**
+     * @brief Process stereo input with chorus (single sample)
+     */
+    inline void ProcessStereo(float in_left, float in_right, float& out_left, float& out_right) {
+        if (!delay_buffer_left_ || !delay_buffer_right_) {
+            out_left = in_left;
+            out_right = in_right;
+            return;
+        }
+        
+        // Write inputs to delay lines
+        delay_buffer_left_[write_pos_] = in_left;
+        delay_buffer_right_[write_pos_] = in_right;
+        
+        // Update LFO phases
+        lfo_phase_left_ += lfo_rate_;
+        lfo_phase_right_ += lfo_rate_;
+        if (lfo_phase_left_ >= 1.0f) lfo_phase_left_ -= 1.0f;
+        if (lfo_phase_right_ >= 1.0f) lfo_phase_right_ -= 1.0f;
+        
+        // Triangle LFO
+        float lfo_left = lfo_phase_left_ > 0.5f ? 1.0f - lfo_phase_left_ : lfo_phase_left_;
+        lfo_left = lfo_left * 4.0f - 1.0f;
+        
+        float lfo_right = lfo_phase_right_ > 0.5f ? 1.0f - lfo_phase_right_ : lfo_phase_right_;
+        lfo_right = lfo_right * 4.0f - 1.0f;
+        
+        // Modulated delay times
+        float delay_samples_left = ((delay_time_ms_ + lfo_left * mod_depth_ms_) / 1000.0f) * sample_rate_;
+        float delay_samples_right = ((delay_time_ms_ + lfo_right * mod_depth_ms_) / 1000.0f) * sample_rate_;
+        
+        // Read delayed signals
+        float delayed_left = ReadDelayInterpolated(delay_buffer_left_, delay_samples_left);
+        float delayed_right = ReadDelayInterpolated(delay_buffer_right_, delay_samples_right);
+        
+        // Mix
+        out_left = in_left * (1.0f - wet_mix_) + delayed_left * wet_mix_;
+        out_right = in_right * (1.0f - wet_mix_) + delayed_right * wet_mix_;
+        
+        write_pos_ = (write_pos_ + 1) % max_delay_samples_;
+    }
+    
+    /**
+     * @brief Batch process mono to chorus stereo
+     */
+    void ProcessMonoBatch(const float* mono, float* out_left, float* out_right, size_t count) {
+        for (size_t i = 0; i < count; ++i) {
+            ProcessMono(mono[i], out_left[i], out_right[i]);
+        }
+    }
+    
+    /**
+     * @brief Batch process stereo with chorus (in-place capable)
+     */
+    void ProcessStereoBatch(float* left, float* right, size_t count) {
+        for (size_t i = 0; i < count; ++i) {
+            float l = left[i];
+            float r = right[i];
+            ProcessStereo(l, r, left[i], right[i]);
+        }
+    }
+
+private:
+    float sample_rate_;
+    float delay_time_ms_;      // Base delay time
+    float mod_depth_ms_;       // Modulation depth
+    float lfo_rate_;           // LFO rate (normalized)
+    float lfo_phase_left_;     // LFO phase for left channel
+    float lfo_phase_right_;    // LFO phase for right channel (180° offset)
+    float wet_mix_;            // Wet/dry mix (0-1)
+    
+    size_t max_delay_samples_; // Maximum delay buffer size
+    size_t write_pos_;         // Current write position in delay buffer
+    
+    float* delay_buffer_left_;
+    float* delay_buffer_right_;
+    
+    /**
+     * @brief Read from delay buffer with linear interpolation
+     */
+    inline float ReadDelayInterpolated(const float* buffer, float delay_samples) const {
+        // Clamp delay to valid range
+        if (delay_samples < 1.0f) delay_samples = 1.0f;
+        if (delay_samples > max_delay_samples_ - 1) delay_samples = max_delay_samples_ - 1;
+        
+        // Calculate read position (going backwards from write position)
+        float read_pos_float = write_pos_ - delay_samples;
+        if (read_pos_float < 0.0f) read_pos_float += max_delay_samples_;
+        
+        // Linear interpolation
+        size_t read_pos_int = static_cast<size_t>(read_pos_float);
+        float frac = read_pos_float - read_pos_int;
+        
+        size_t next_pos = (read_pos_int + 1) % max_delay_samples_;
+        
+        return buffer[read_pos_int] * (1.0f - frac) + buffer[next_pos] * frac;
+    }
+};
+
 } // namespace common
