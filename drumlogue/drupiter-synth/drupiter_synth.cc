@@ -754,6 +754,11 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
                 return nullptr;  // Out of range - tells UI to stop querying
             }
             
+            // Special case: UNISON uses ParamFormat::OnOff
+            if (dest == MOD_UNISON) {
+                return common::ParamFormat::OnOff(value > 0);
+            }
+            
             return mod_hub_.GetValueStringForDest(dest, value, str_buf, sizeof(str_buf));
         }
             
