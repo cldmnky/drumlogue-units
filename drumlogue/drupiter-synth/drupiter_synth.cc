@@ -7,6 +7,8 @@
  */
 
 #include "drupiter_synth.h"
+#include "../common/hub_control.h"
+#include "../common/param_format.h"
 #include "dsp/jupiter_dco.h"
 #include "dsp/jupiter_vcf.h"
 #include "dsp/jupiter_env.h"
@@ -678,22 +680,7 @@ int32_t DrupiterSynth::GetParameter(uint8_t id) const {
 const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
     static const char* effect_names[] = {"CHORUS", "SPACE", "DRY", "BOTH"};
     
-    // Pre-allocated detune strings for -50 to +50 (indices 0-100)
-    static const char* detune_strings[101] = {
-        "-50", "-49", "-48", "-47", "-46", "-45", "-44", "-43", "-42", "-41",
-        "-40", "-39", "-38", "-37", "-36", "-35", "-34", "-33", "-32", "-31",
-        "-30", "-29", "-28", "-27", "-26", "-25", "-24", "-23", "-22", "-21",
-        "-20", "-19", "-18", "-17", "-16", "-15", "-14", "-13", "-12", "-11",
-        "-10", "-9", "-8", "-7", "-6", "-5", "-4", "-3", "-2", "-1",
-        "0",
-        "+1", "+2", "+3", "+4", "+5", "+6", "+7", "+8", "+9", "+10",
-        "+11", "+12", "+13", "+14", "+15", "+16", "+17", "+18", "+19", "+20",
-        "+21", "+22", "+23", "+24", "+25", "+26", "+27", "+28", "+29", "+30",
-        "+31", "+32", "+33", "+34", "+35", "+36", "+37", "+38", "+39", "+40",
-        "+41", "+42", "+43", "+44", "+45", "+46", "+47", "+48", "+49", "+50"
-    };
-    
-    static char str_buf[16];  // Buffer for formatted strings (MOD AMT only)
+    static char str_buf[16];  // Buffer for formatted strings
     
     switch (id) {
         // ======== Page 1: DCO-1 ========
@@ -708,11 +695,8 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
         case PARAM_DCO2_WAVE:
             return kDco2WaveNames[value < 4 ? value : 0];
         case PARAM_DCO2_TUNE:
-            // Return pre-allocated string for detune value
-            if (value >= 0 && value <= 100) {
-                return detune_strings[value];
-            }
-            return "0";
+            // Bipolar display: -50 to +50
+            return common::ParamFormat::BipolarValue(str_buf, sizeof(str_buf), value, 0, 100);
         case PARAM_SYNC:
             return kSyncNames[value < 3 ? value : 0];
         

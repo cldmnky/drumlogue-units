@@ -69,6 +69,28 @@ class ParamFormat {
   }
   
   /**
+   * @brief Format as bipolar value: "-50" to "+50"
+   * @param buf Output buffer
+   * @param size Buffer size
+   * @param value Current value
+   * @param min Minimum value
+   * @param max Maximum value
+   * @return Pointer to buffer
+   * 
+   * Centers the range: (min+max)/2 displays as "0"
+   */
+  static const char* BipolarValue(char* buf, size_t size, int32_t value,
+                                  int32_t min, int32_t max) {
+    int32_t center = (min + max) / 2;
+    int32_t offset = value - center;
+    int32_t range = (max - min) / 2;
+    // Map to -range to +range
+    int32_t bipolar = offset;
+    snprintf(buf, size, "%+d", bipolar);
+    return buf;
+  }
+  
+  /**
    * @brief Format as frequency: "440Hz" or "4.4kHz"
    * @param buf Output buffer
    * @param size Buffer size
