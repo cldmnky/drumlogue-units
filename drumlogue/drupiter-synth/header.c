@@ -54,13 +54,13 @@ const __unit_header unit_header_t unit_header = {
 
         // ==================== Page 3: MIX & VCF ====================
         // Oscillator Mix: 0=D1 only, 50=equal, 100=D2 only
-        {0, 100, 50, 79, k_unit_param_type_percent, 0, 0, 0, {"OSC MIX"}},
+        {0, 100, 50, 79, k_unit_param_type_percent, 0, 0, 0, {"MIX"}},
         // VCF Cutoff: Filter cutoff frequency
         {0, 100, 0, 79, k_unit_param_type_percent, 0, 0, 0, {"CUTOFF"}},
         // VCF Resonance: Filter resonance/Q
         {0, 100, 0, 16, k_unit_param_type_percent, 0, 0, 0, {"RESO"}},
-        // VCF Type: LP12/LP24/HP12/BP12
-        {0, 3, 0, 1, k_unit_param_type_strings, 0, 0, 0, {"VCF TYP"}},
+        // VCF Keyboard Tracking: 0-100% (50%=standard)
+        {0, 100, 50, 50, k_unit_param_type_percent, 0, 0, 0, {"KEYFLW"}},
 
         // ==================== Page 4: VCF Envelope ====================
         // Filter Envelope Attack
@@ -82,14 +82,14 @@ const __unit_header unit_header_t unit_header = {
         // Amp Envelope Release
         {0, 100, 0, 16, k_unit_param_type_percent, 0, 0, 0, {"A.REL"}},
 
-        // ==================== Page 6: MOD HUB & Output ====================
-        // MOD SELECT: Choose modulation destination (0-7)
-        {0, 7, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"MOD SEL"}},
-        // MOD VALUE: Value for selected destination (strings for context-aware display)
-        {0, 100, 50, 50, k_unit_param_type_strings, 0, 0, 0, {"MOD VAL"}},
-        // CHORUS DEPTH: Chorus effect depth (0=off, 100=deep)
-        {0, 100, 0, 0, k_unit_param_type_percent, 0, 0, 0, {"CHORUS"}},
-        // SPACE: Stereo width (0=mono, 50=normal, 100=wide)
-        {0, 100, 50, 50, k_unit_param_type_percent, 0, 0, 0, {"SPACE"}},
+        // ==================== Page 6: MODULATION ====================
+        // LFO RATE: Direct LFO speed control (0.1Hz - 50Hz)
+        {0, 100, 0, 32, k_unit_param_type_percent, 0, 0, 0, {"LFO RT"}},
+        // MOD HUB: Modulation destination selector (9 modes)
+        {0, 8, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"MOD HUB"}},
+        // MOD AMT: Value for selected destination (context-sensitive string display)
+        {0, 100, 50, 50, k_unit_param_type_strings, 0, 0, 0, {"MOD AMT"}},
+        // EFFECT: Output effect selector (CHORUS/SPACE/DRY/BOTH)
+        {0, 3, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"EFFECT"}},
     }
 };

@@ -171,6 +171,24 @@ Required implementations:
 - Comment complex DSP algorithms
 - Keep 7-bit ASCII for all user-facing strings
 - Respect hardware constraints (memory, CPU cycles)
+- **Use common utilities** - Leverage shared code in `drumlogue/common/` for:
+  - **Parameter Management:**
+    - `hub_control.h` - Hub parameter system (mode selector + value)
+    - `param_format.h` - Standard parameter string formatting
+    - `preset_manager.h` - Preset loading/validation
+    - `smoothed_value.h` - Parameter smoothing for anti-zipper
+  - **MIDI & Music:**
+    - `midi_helper.h` - MIDI utilities (note-to-frequency, velocity conversion)
+  - **DSP Math & Optimization:**
+    - `dsp_utils.h` - Fast approximations (pow2, log2, sin, tanh)
+    - `fixed_mathq.h` - Fixed-point arithmetic for performance
+    - `arm_intrinsics.h` - ARM NEON intrinsics wrappers
+    - `neon_dsp.h` - NEON-optimized DSP operations
+    - `simd_utils.h` - Cross-platform SIMD utilities
+  - **Audio Generators:**
+    - `wavetable_osc.h` - Wavetable oscillator
+    - `ppg_osc.h` - PPG wavetable synthesis
+    - `stereo_widener.h` - Stereo width/chorus effects
 
 ### DSP Best Practices
 - Initialize all audio buffers/state to prevent glitches

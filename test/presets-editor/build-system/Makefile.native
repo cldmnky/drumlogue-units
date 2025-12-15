@@ -16,8 +16,8 @@ UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
 
 # Base flags
-CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra -fPIC -DUNIT_HOST_NATIVE -DTEST -D__unit_header= -D__unit_callback= -DATTRIBUTES_H_
-CFLAGS   ?= -std=c11  -O2 -Wall -Wextra -fPIC -DUNIT_HOST_NATIVE -DTEST -D__unit_header= -D__unit_callback= -DATTRIBUTES_H_
+CXXFLAGS ?= -std=c++17 -g -O0 -Wall -Wextra -fPIC -DUNIT_HOST_NATIVE -DTEST -D__unit_header= -D__unit_callback= -DATTRIBUTES_H_
+CFLAGS   ?= -std=c11  -g -O0 -Wall -Wextra -fPIC -DUNIT_HOST_NATIVE -DTEST -D__unit_header= -D__unit_callback= -DATTRIBUTES_H_
 LDFLAGS  ?=
 LDLIBS   ?=
 
@@ -33,8 +33,8 @@ endif
 
 # Enable NEON on ARM64 hosts (Apple Silicon / Linux aarch64)
 ifneq (,$(findstring arm64,$(UNAME_M)))
-  CXXFLAGS += -march=armv8-a+simd -D__ARM_NEON
-  CFLAGS   += -march=armv8-a+simd -D__ARM_NEON
+  CXXFLAGS += -march=armv8-a+simd -DUSE_NEON
+  CFLAGS   += -march=armv8-a+simd -DUSE_NEON
 endif
 
 # Discover project configuration

@@ -21,9 +21,14 @@
 #define NEON_DSP_NS drupiter
 #include "../common/neon_dsp.h"
 #include "../common/stereo_widener.h"
+#include "../common/hub_control.h"
+#include "../common/param_format.h"
 
 // Maximum frames per buffer (drumlogue typically uses 64)
+// Maximum audio buffer size (drumlogue uses 64 frames max)
+// Add 8 extra floats as safety margin for NEON operations and alignment
 static constexpr uint32_t kMaxFrames = 64;
+static constexpr uint32_t kBufferSize = kMaxFrames + 8;  // Safety margin
 
 // Forward declarations of DSP components
 namespace dsp {
@@ -63,44 +68,48 @@ static const char* const kSyncNames[] = {
 // ============================================================================
 
 /**
- * @brief MOD HUB destinations (selected via MOD_SELECT parameter)
- * 
- * All use 0-100 range. Bipolar params treat 50 as center (no effect).
+ * @brief MOD HUB destinations (9 total, matching UI.md Phase 1 design)
  */
 enum ModDestination {
-    MOD_LFO_RATE = 0,      // 0-100: LFO speed (0.1Hz to 20Hz)
-    MOD_LFO_WAVE,          // 0-3: LFO waveform (TRI/RAMP/SQR/S&H)
-    MOD_LFO_TO_VCO,        // 0-100: LFO to pitch depth
-    MOD_LFO_TO_VCF,        // 0-100: LFO to filter depth
-    MOD_VEL_TO_VCF,        // 0-100: Velocity to filter cutoff
-    MOD_KEY_TRACK,         // 0-100: Filter keyboard tracking (50=50%)
-    MOD_PB_RANGE,          // 0-3: Pitch bend range (2/7/12/24 semitones)
-    MOD_VCF_ENV_AMT,       // 0-100: VCF envelope amount (50=0, bipolar)
+    MOD_LFO_TO_PWM = 0,    // LFO modulates pulse width (both VCOs)
+    MOD_LFO_TO_VCF,        // LFO modulates filter cutoff
+    MOD_LFO_TO_VCO,        // LFO modulates pitch (vibrato)
+    MOD_ENV_TO_PWM,        // Filter ENV modulates pulse width
+    MOD_ENV_TO_VCF,        // Filter ENV modulation (bipolar ±4 octaves)
+    MOD_HPF,               // High-pass filter cutoff
+    MOD_VCF_TYPE,          // Filter type selection (LP12/LP24/HP12/BP)
+    MOD_LFO_DELAY,         // LFO delay (fade-in time)
+    MOD_LFO_WAVE,          // LFO waveform selection
     MOD_NUM_DESTINATIONS
 };
 
-// MOD HUB destination names (7 chars max for display)
-static const char* const kModDestNames[] = {
-    "LFO SPD",   // 0: LFO Rate
-    "LFO WAV",   // 1: LFO Waveform
-    "LFO>VCO",   // 2: LFO to VCO depth
-    "LFO>VCF",   // 3: LFO to VCF depth
-    "VEL>VCF",   // 4: Velocity to VCF
-    "KEYTRK",    // 5: Filter Key Tracking
-    "PB RNG",    // 6: Pitch Bend Range
-    "VCF ENV"    // 7: VCF Envelope Amount
+// VCF filter type names (for VCF TYP hub mode)
+static const char* const kVcfTypeNames[] = {
+    "LP12", "LP24", "HP12", "BP12"
 };
 
-// LFO waveform names
+// LFO waveform names (for LFO WAV hub mode)
 static const char* const kLfoWaveNames[] = {
     "TRI", "RAMP", "SQR", "S&H"
 };
 
-// Pitch bend range names and values
-static const char* const kPbRangeNames[] = {
-    "+/-2", "+/-7", "+/-12", "+/-24"
+// Hub control destinations for MOD HUB
+static constexpr common::HubControl<MOD_NUM_DESTINATIONS>::Destination kModDestinations[] = {
+    {"LFO>PWM", "%",   0, 100, 0,  false, nullptr},        // LFO to pulse width
+    {"LFO>VCF", "%",   0, 100, 0,  false, nullptr},        // LFO to filter
+    {"LFO>VCO", "%",   0, 100, 0,  false, nullptr},        // LFO vibrato
+    {"ENV>PWM", "%",   0, 100, 0,  false, nullptr},        // ENV to pulse width
+    {"ENV>VCF", "%",   0, 100, 50, true,  nullptr},        // ENV to filter (bipolar!)
+    {"HPF",     "Hz",  0, 100, 0,  false, nullptr},        // High-pass filter
+    {"VCF TYP", "",    0, 3,   1,  false, kVcfTypeNames},  // Filter type (enum)
+    {"LFO DLY", "ms",  0, 100, 0,  false, nullptr},        // LFO delay
+    {"LFO WAV", "",    0, 3,   0,  false, kLfoWaveNames}   // LFO waveform (TRI/RAMP/SQR/S&H)
 };
-static const float kPbSemitones[] = {2.0f, 7.0f, 12.0f, 24.0f};
+
+// Effect mode names
+static const char* const kEffectNames[] = {
+    "CHORUS", "SPACE", "DRY", "BOTH"
+};
 
 // ============================================================================
 // DrupiterSynth Class
@@ -136,9 +145,9 @@ public:
         
         // Page 3: MIX & VCF
         PARAM_OSC_MIX,           // 0-100: Oscillator mix
-        PARAM_VCF_CUTOFF,
-        PARAM_VCF_RESONANCE,
-        PARAM_VCF_TYPE,
+        PARAM_VCF_CUTOFF,        // 0-100: Filter cutoff
+        PARAM_VCF_RESONANCE,     // 0-100: Filter resonance
+        PARAM_VCF_KEYFLW,        // 0-100: Keyboard tracking (NEW!)
         
         // Page 4: VCF Envelope
         PARAM_VCF_ATTACK,
@@ -152,11 +161,11 @@ public:
         PARAM_VCA_SUSTAIN,
         PARAM_VCA_RELEASE,
         
-        // Page 6: MOD HUB & Output
-        PARAM_MOD_SELECT,        // Selects which mod destination to edit
-        PARAM_MOD_VALUE,         // Value for selected mod destination
-        PARAM_CHORUS_DEPTH,      // Chorus effect depth
-        PARAM_SPACE,             // Stereo width
+        // Page 6: Modulation (REDESIGNED!)
+        PARAM_LFO_RATE,          // 0-100: Direct LFO rate control (NEW!)
+        PARAM_MOD_HUB,           // 0-7: Modulation destination selector
+        PARAM_MOD_AMT,           // 0-100: Amount for selected destination
+        PARAM_EFFECT,            // 0-1: Effect mode (CHORUS/SPACE)
         
         PARAM_COUNT = 24
     };
@@ -289,9 +298,12 @@ private:
     uint8_t sync_mode_;            // 0=OFF, 1=SOFT, 2=HARD
     float xmod_depth_;             // Cross-mod depth 0-1
     
-    // MOD HUB values (0-100 range, stored separately from preset params)
-    uint8_t mod_values_[MOD_NUM_DESTINATIONS];
+    // MOD HUB - Using common HubControl system (Phase 1 UI redesign)
+    common::HubControl<MOD_NUM_DESTINATIONS> mod_hub_;
     mutable char mod_value_str_[16];  // Buffer for GetParameterStr display
+    
+    // Effect mode (0=CHORUS, 1=SPACE, 2=DRY, 3=BOTH)
+    uint8_t effect_mode_;
     
     // Internal audio buffers (avoid dynamic allocation)
     float dco1_out_;
@@ -303,10 +315,13 @@ private:
     float vca_env_out_;
     float lfo_out_;
     
-    // NEON-aligned intermediate buffers for block processing
-    alignas(16) float mix_buffer_[kMaxFrames];
-    alignas(16) float left_buffer_[kMaxFrames];
-    alignas(16) float right_buffer_[kMaxFrames];
+    // NEON-aligned intermediate buffers for block processing (with safety margin)
+    alignas(16) float mix_buffer_[kBufferSize];
+    alignas(16) float left_buffer_[kBufferSize];
+    alignas(16) float right_buffer_[kBufferSize];
+    
+    // Guard value to detect buffer overflows (will be 0xDEADBEEF)
+    uint64_t buffer_guard_;
     
     // Chorus stereo effect (delay-based stereo spread)
     common::ChorusStereoWidener* space_widener_;

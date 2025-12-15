@@ -16,6 +16,10 @@
 #include <cstring>
 #include <cstdio>
 
+#ifdef USE_NEON
+#include <arm_neon.h>
+#endif
+
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -93,26 +97,21 @@ DrupiterSynth::DrupiterSynth()
     , vcf_env_out_(0.0f)
     , vca_env_out_(0.0f)
     , lfo_out_(0.0f)
+    , buffer_guard_(0xDEADBEEFDEADBEEF)
+    , space_widener_(nullptr)
     , noise_seed_(0x12345678)
     , cutoff_smooth_(nullptr)
     , dco1_level_smooth_(nullptr)
     , dco2_level_smooth_(nullptr)
     , last_cutoff_hz_(1000.0f)
+    , mod_hub_(kModDestinations)  // Initialize HubControl
+    , effect_mode_(0)  // CHORUS by default
 {
     // Initialize preset to defaults
     std::memset(&current_preset_, 0, sizeof(Preset));
     std::strcpy(current_preset_.name, "Init");
     
-    // Initialize MOD HUB with sensible defaults
-    std::memset(mod_values_, 0, sizeof(mod_values_));
-    mod_values_[MOD_LFO_RATE] = 32;      // ~2Hz LFO
-    mod_values_[MOD_LFO_WAVE] = 0;       // Triangle
-    mod_values_[MOD_LFO_TO_VCO] = 0;     // No vibrato
-    mod_values_[MOD_LFO_TO_VCF] = 0;     // No filter mod
-    mod_values_[MOD_VEL_TO_VCF] = 50;    // 50% velocity to filter
-    mod_values_[MOD_KEY_TRACK] = 50;     // 50% key tracking
-    mod_values_[MOD_PB_RANGE] = 0;       // ±2 semitones
-    mod_values_[MOD_VCF_ENV_AMT] = 50;   // 50% VCF envelope amount
+    // HubControl initialized with defaults from kModDestinations
     mod_value_str_[0] = '\0';
 }
 
@@ -218,8 +217,22 @@ void DrupiterSynth::Suspend() {
 }
 
 void DrupiterSynth::Render(float* out, uint32_t frames) {
-    // Limit frames to our buffer size
-    if (frames > kMaxFrames) frames = kMaxFrames;
+    // Safety: ensure output buffer and internal buffers can handle the request
+    if (!out || frames == 0) return;
+    
+    // CRITICAL: Limit frames to our buffer size to prevent overflow
+    if (frames > kMaxFrames) {
+        // Buffer overflow protection - this should NEVER happen
+        // If it does, log the violation and clamp
+        frames = kMaxFrames;
+    }
+    
+    // Check buffer guard on entry (detect any previous overflow)
+    if (buffer_guard_ != 0xDEADBEEFDEADBEEF) {
+        // Buffer was corrupted - reset guard and space_widener_
+        buffer_guard_ = 0xDEADBEEFDEADBEEF;
+        // space_widener_ is likely corrupted, but we can't safely fix it mid-render
+    }
     
     // === Read direct DCO parameters (Pages 1 & 2) ===
     // OSC MIX: 0=DCO1 only, 50=equal, 100=DCO2 only
@@ -245,15 +258,29 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     const float xmod_depth = xmod_depth_;  // Set via PARAM_XMOD in SetParameter
     
     // === Read MOD HUB values ===
-    const float lfo_vco_depth = mod_values_[MOD_LFO_TO_VCO] / 100.0f;
-    const float lfo_vcf_depth = mod_values_[MOD_LFO_TO_VCF] / 100.0f;
-    const float vel_to_vcf = mod_values_[MOD_VEL_TO_VCF] / 100.0f;
-    const float key_track = mod_values_[MOD_KEY_TRACK] / 100.0f;
-    const float vcf_env_amt_mod = mod_values_[MOD_VCF_ENV_AMT] / 100.0f;  // Additional env amount from HUB
-    const float env_amt = (current_preset_.params[PARAM_VCF_SUSTAIN] > 50 ? 0.5f : -0.5f) * vcf_env_amt_mod;  // Simplified - combine with main env
+    const float lfo_pwm_depth = mod_hub_.GetValue(MOD_LFO_TO_PWM) / 100.0f;
+    const float lfo_vcf_depth = mod_hub_.GetValue(MOD_LFO_TO_VCF) / 100.0f;
+    const float lfo_vco_depth = mod_hub_.GetValue(MOD_LFO_TO_VCO) / 100.0f;
+    const float env_pwm_depth = mod_hub_.GetValue(MOD_ENV_TO_PWM) / 100.0f;
+    // ENV→VCF is bipolar: 0-100 maps to -1.0 to +1.0 (50 = center/zero)
+    const float env_vcf_depth = (static_cast<int32_t>(mod_hub_.GetValue(MOD_ENV_TO_VCF)) - 50) / 50.0f;
+    const uint8_t hpf_cutoff = mod_hub_.GetValue(MOD_HPF);
+    const uint8_t vcf_type = mod_hub_.GetValue(MOD_VCF_TYPE);
+    const uint8_t lfo_delay = mod_hub_.GetValue(MOD_LFO_DELAY);
+    const uint8_t lfo_wave = mod_hub_.GetValue(MOD_LFO_WAVE);
     
-    // Velocity modulation factor (based on current note velocity)
-    const float vel_mod = (current_velocity_ / 127.0f) * vel_to_vcf;
+    // Apply LFO delay setting (0-100 maps to 0-5 seconds)
+    const float lfo_delay_sec = (lfo_delay / 100.0f) * 5.0f;
+    lfo_->SetDelay(lfo_delay_sec);
+    
+    // Apply LFO waveform (0-3: TRI/RAMP/SQR/S&H)
+    lfo_->SetWaveform(static_cast<dsp::JupiterLFO::Waveform>(lfo_wave & 0x03));
+    
+    // Keyboard tracking from new KEYFLW parameter
+    const float key_track = current_preset_.params[PARAM_VCF_KEYFLW] / 100.0f;
+    
+    // Velocity modulation (fixed value for now, TODO: make parameter)
+    const float vel_mod = (current_velocity_ / 127.0f) * 0.5f;  // Fixed 50% velocity->VCF
     
     // ============ Main DSP loop - render to mix_buffer_ ============
     for (uint32_t i = 0; i < frames; ++i) {
@@ -267,6 +294,28 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         // Get smoothed oscillator levels
         const float dco1_level = dco1_level_smooth_->Process();
         const float dco2_level = dco2_level_smooth_->Process();
+        
+        // Apply PWM modulation (LFO and ENV to pulse width)
+        // Base pulse width from parameter
+        float base_pw = current_preset_.params[PARAM_DCO1_PW] / 100.0f;
+        
+        // Add LFO→PWM modulation
+        float pw_mod = 0.0f;
+        if (lfo_pwm_depth > 0.001f) {
+            pw_mod += lfo_out_ * lfo_pwm_depth * 0.4f;  // ±40% PWM range
+        }
+        
+        // Add ENV→PWM modulation
+        if (env_pwm_depth > 0.001f) {
+            pw_mod += vcf_env_out_ * env_pwm_depth * 0.4f;  // ±40% PWM range
+        }
+        
+        // Apply modulated pulse width, clamped to safe range (10%-90%)
+        float modulated_pw = base_pw + pw_mod;
+        if (modulated_pw < 0.1f) modulated_pw = 0.1f;
+        if (modulated_pw > 0.9f) modulated_pw = 0.9f;
+        dco1_->SetPulseWidth(modulated_pw);
+        dco2_->SetPulseWidth(modulated_pw);  // Both DCOs share PWM
         
         // Calculate DCO frequencies with LFO modulation
         float freq1 = current_freq_hz_ * dco1_oct_mult;
@@ -335,11 +384,11 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         const float note_offset = (static_cast<int32_t>(current_note_) - 60) / 12.0f;
         cutoff_base *= semitones_to_ratio(note_offset * key_track * 12.0f);  // Fast approx
         
-        // Combine envelope, LFO, and velocity modulation (in octaves).
-        // Keep ranges conservative so cutoff doesn't peg at max and become ineffective.
-        float total_mod = vcf_env_out_ * env_amt * 2.0f 
-                        + lfo_out_ * lfo_vcf_depth * 1.0f
-                        + vel_mod * 2.0f;  // Velocity adds up to +2 octaves
+        // Combine envelope, LFO, velocity, and hub modulation
+        float total_mod = vcf_env_out_ * 2.0f              // Base envelope modulation
+                        + env_vcf_depth * vcf_env_out_     // Hub envelope->VCF modulation
+                        + lfo_out_ * lfo_vcf_depth * 1.0f  // LFO modulation
+                        + vel_mod * 2.0f;                   // Velocity adds up to +2 octaves
 
         // Clamp modulation depth to avoid extreme cutoff values.
         if (total_mod > 3.0f) total_mod = 3.0f;
@@ -356,31 +405,77 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
             last_cutoff_hz_ = cutoff_modulated;
         }
         
+        // Apply filter mode from hub (0=LP12, 1=LP24, 2=HP12, 3=BP12)
+        vcf_->SetMode(static_cast<dsp::JupiterVCF::Mode>(vcf_type & 0x03));
+        
         filtered_ = vcf_->Process(mixed_);
+        
+        // Apply HPF (high-pass filter) from hub - Jupiter-8 style
+        // HPF value: 0-100 maps to 20Hz-2kHz cutoff
+        if (hpf_cutoff > 0) {
+            // Simple one-pole HPF: y[n] = alpha * (y[n-1] + x[n] - x[n-1])
+            // where alpha = 1 / (1 + 2*pi*fc/fs)
+            const float hpf_freq = 20.0f + (hpf_cutoff / 100.0f) * 1980.0f;  // 20Hz-2kHz
+            const float rc = 1.0f / (2.0f * M_PI * hpf_freq);
+            const float dt = 1.0f / sample_rate_;
+            const float alpha = rc / (rc + dt);
+            
+            // Static state variables for HPF
+            static float hpf_prev_output = 0.0f;
+            static float hpf_prev_input = 0.0f;
+            
+            filtered_ = alpha * (hpf_prev_output + filtered_ - hpf_prev_input);
+            hpf_prev_output = filtered_;
+            hpf_prev_input = filtered_;
+        }
         
         // Apply VCA with envelope, store to intermediate buffer
         mix_buffer_[i] = filtered_ * vca_env_out_ * 0.5f;  // Scale to prevent clipping
     }
     
-    // ============ Output stage with chorus effect ============
+    // ============ Output stage with chorus/space effect ============
     
     // Sanitize buffer (remove NaN/Inf) and apply soft clamp
     drupiter::neon::SanitizeAndClamp(mix_buffer_, 1.0f, frames);
     
-    // Configure chorus effect from parameters
-    // CHORUS_DEPTH: 0=off (dry), 50=moderate, 100=deep chorus
-    const float chorus_depth = current_preset_.params[PARAM_CHORUS_DEPTH] / 100.0f;
-    space_widener_->SetModDepth(chorus_depth * 6.0f);  // 0-6ms modulation depth
-    space_widener_->SetMix(chorus_depth);              // Wet/dry mix follows depth
+    // Check if effect processor is initialized
+    if (!space_widener_) {
+        // Fallback: bypass effect, copy mono to stereo
+        for (uint32_t i = 0; i < frames; i++) {
+            left_buffer_[i] = mix_buffer_[i];
+            right_buffer_[i] = mix_buffer_[i];
+        }
+    } else {
+        // Configure effect based on EFFECT parameter
+        // Effect mode: 0=Chorus, 1=Space, 2=Dry, 3=Both
+        const uint8_t effect_mode = current_preset_.params[PARAM_EFFECT];
     
-    // SPACE: Controls stereo spread via delay time (10-50ms range)
-    // 0=narrow (10ms), 50=normal (30ms), 100=wide (50ms)
-    const float space = current_preset_.params[PARAM_SPACE] / 100.0f;
-    space_widener_->SetDelayTime(10.0f + space * 40.0f);  // 10-50ms delay time
-    
-    // Apply chorus stereo effect using modulated delays
-    // Converts mono to wide stereo with LFO-modulated delay times
-    space_widener_->ProcessMonoBatch(mix_buffer_, left_buffer_, right_buffer_, frames);
+    if (effect_mode == 2) {
+        // DRY mode: Bypass all effects, just copy mono to stereo
+        for (uint32_t i = 0; i < frames; i++) {
+            left_buffer_[i] = mix_buffer_[i];
+            right_buffer_[i] = mix_buffer_[i];
+        }
+    } else if (effect_mode == 3) {
+        // BOTH mode: Maximum effect (chorus + space combined)
+        space_widener_->SetModDepth(8.0f);      // 8ms modulation depth
+        space_widener_->SetMix(0.8f);           // 80% wet/dry mix
+        space_widener_->SetDelayTime(40.0f);    // 40ms delay time
+        space_widener_->ProcessMonoBatch(mix_buffer_, left_buffer_, right_buffer_, frames);
+    } else if (effect_mode == 0) {
+        // CHORUS mode: Moderate modulation depth, less delay time
+        space_widener_->SetModDepth(3.0f);      // 3ms modulation depth
+        space_widener_->SetMix(0.5f);           // 50% wet/dry mix
+        space_widener_->SetDelayTime(15.0f);    // 15ms delay time
+        space_widener_->ProcessMonoBatch(mix_buffer_, left_buffer_, right_buffer_, frames);
+    } else {
+        // SPACE mode (1): Wider stereo, more delay time
+        space_widener_->SetModDepth(6.0f);      // 6ms modulation depth
+        space_widener_->SetMix(0.7f);           // 70% wet/dry mix
+        space_widener_->SetDelayTime(35.0f);    // 35ms delay time for wide stereo
+        space_widener_->ProcessMonoBatch(mix_buffer_, left_buffer_, right_buffer_, frames);
+    }
+    }
     
     // Add tiny DC offset for denormal protection before interleaving
     const float denormal_offset = 1.0e-15f;
@@ -412,36 +507,6 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
 }
 
 void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
-    // ========== MOD HUB ==========
-    if (id == PARAM_MOD_VALUE) {
-        // Route MOD_VALUE to the currently selected mod destination
-        uint8_t sel = current_preset_.params[PARAM_MOD_SELECT];
-        if (sel < MOD_NUM_DESTINATIONS) {
-            // Special handling for LFO_WAVE which has 0-3 range
-            uint8_t v;
-            if (sel == MOD_LFO_WAVE) {
-                v = (value < 0) ? 0 : ((value > 3) ? 3 : static_cast<uint8_t>(value));
-            } else {
-                v = (value < 0) ? 0 : ((value > 100) ? 100 : static_cast<uint8_t>(value));
-            }
-            mod_values_[sel] = v;
-            
-            // Update DSP components immediately for certain destinations
-            switch (sel) {
-                case MOD_LFO_RATE:
-                    lfo_->SetFrequency(ParameterToExponentialFreq(v, 0.1f, 20.0f));
-                    break;
-                case MOD_LFO_WAVE:
-                    lfo_->SetWaveform(static_cast<dsp::JupiterLFO::Waveform>(v & 0x03));
-                    break;
-                default:
-                    // Other mod values are read in Render()
-                    break;
-            }
-        }
-        return;
-    }
-    
     if (id >= PARAM_COUNT) {
         return;
     }
@@ -468,14 +533,22 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             v = clamp_u8_int32(value, 0, 2);
             break;
             
-        // Page 3: VCF type
-        case PARAM_VCF_TYPE:
-            v = clamp_u8_int32(value, 0, 3);
-            break;
+        // Page 6: MOD HUB selector and EFFECT mode
+        case PARAM_MOD_HUB:
+            v = clamp_u8_int32(value, 0, 8);  // 9 hub destinations
+            mod_hub_.SetDestination(v);
+            current_preset_.params[id] = v;
+            return;  // Hub handles its own state
             
-        // Page 6: MOD selector
-        case PARAM_MOD_SELECT:
-            v = clamp_u8_int32(value, 0, MOD_NUM_DESTINATIONS - 1);
+        case PARAM_MOD_AMT:
+            // Hub amount: -100 to +100 for most, special ranges for LFO_WAVE/HPF_CUTOFF
+            v = clamp_u8_int32(value, 0, 100);
+            mod_hub_.SetValue(v);
+            current_preset_.params[id] = v;
+            return;  // Hub handles its own state
+            
+        case PARAM_EFFECT:
+            v = clamp_u8_int32(value, 0, 1);  // 0=Chorus, 1=Space
             break;
             
         default:
@@ -537,8 +610,8 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
         case PARAM_VCF_RESONANCE:
             vcf_->SetResonance(v / 100.0f);
             break;
-        case PARAM_VCF_TYPE:
-            vcf_->SetMode(static_cast<dsp::JupiterVCF::Mode>(v & 0x03));
+        case PARAM_VCF_KEYFLW:
+            // Keyboard tracking handled in Render()
             break;
         
         // ======== Page 4: VCF Envelope ========
@@ -569,28 +642,25 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             env_vca_->SetRelease(ParameterToEnvelopeTime(v));
             break;
         
-        // ======== Page 6: MOD HUB & Output ========
-        case PARAM_MOD_SELECT:
-            // When selection changes, update the visible MOD_VALUE param
-            if (v < MOD_NUM_DESTINATIONS) {
-                current_preset_.params[PARAM_MOD_VALUE] = mod_values_[v];
-            }
+        // ======== Page 6: LFO, MOD HUB & Effects ========
+        case PARAM_LFO_RATE:
+            lfo_->SetFrequency(ParameterToExponentialFreq(v, 0.1f, 20.0f));
             break;
-        case PARAM_CHORUS_DEPTH:
-        case PARAM_SPACE:
-            // Applied in Render() output stage
+        case PARAM_MOD_HUB:
+        case PARAM_MOD_AMT:
+            // Hub updates handled in Render() by reading hub values
+            break;
+        case PARAM_EFFECT:
+            // Effect mode (Chorus/Space) handled in Render()
             break;
     }
 }
 
 int32_t DrupiterSynth::GetParameter(uint8_t id) const {
-    // Special handling for MOD HUB value
-    if (id == PARAM_MOD_VALUE) {
-        uint8_t sel = current_preset_.params[PARAM_MOD_SELECT];
-        if (sel < MOD_NUM_DESTINATIONS) {
-            return mod_values_[sel];
-        }
-        return 50;  // Default center value
+    // Special handling for MOD HUB amount - return current destination's value
+    if (id == PARAM_MOD_AMT) {
+        uint8_t dest = current_preset_.params[PARAM_MOD_HUB];
+        return mod_hub_.GetValue(dest);
     }
     
     if (id >= PARAM_COUNT) {
@@ -600,8 +670,24 @@ int32_t DrupiterSynth::GetParameter(uint8_t id) const {
 }
 
 const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
-    static const char* filter_types[] = {"LP12", "LP24", "HP12", "BP12"};
-    static char str_buf[16];  // Buffer for formatted strings (larger to avoid truncation warnings)
+    static const char* effect_names[] = {"CHORUS", "SPACE", "DRY", "BOTH"};
+    
+    // Pre-allocated detune strings for -50 to +50 (indices 0-100)
+    static const char* detune_strings[101] = {
+        "-50", "-49", "-48", "-47", "-46", "-45", "-44", "-43", "-42", "-41",
+        "-40", "-39", "-38", "-37", "-36", "-35", "-34", "-33", "-32", "-31",
+        "-30", "-29", "-28", "-27", "-26", "-25", "-24", "-23", "-22", "-21",
+        "-20", "-19", "-18", "-17", "-16", "-15", "-14", "-13", "-12", "-11",
+        "-10", "-9", "-8", "-7", "-6", "-5", "-4", "-3", "-2", "-1",
+        "0",
+        "+1", "+2", "+3", "+4", "+5", "+6", "+7", "+8", "+9", "+10",
+        "+11", "+12", "+13", "+14", "+15", "+16", "+17", "+18", "+19", "+20",
+        "+21", "+22", "+23", "+24", "+25", "+26", "+27", "+28", "+29", "+30",
+        "+31", "+32", "+33", "+34", "+35", "+36", "+37", "+38", "+39", "+40",
+        "+41", "+42", "+43", "+44", "+45", "+46", "+47", "+48", "+49", "+50"
+    };
+    
+    static char str_buf[16];  // Buffer for formatted strings (MOD AMT only)
     
     switch (id) {
         // ======== Page 1: DCO-1 ========
@@ -615,55 +701,44 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
             return kOctaveNames[value < 3 ? value : 0];
         case PARAM_DCO2_WAVE:
             return kDco2WaveNames[value < 4 ? value : 0];
-        case PARAM_DCO2_TUNE: {
-            // Show detune as centered value: 50=0, <50=negative, >50=positive
-            // Clamp to expected range to avoid truncation
-            int detune = (value > 100 ? 100 : (value < 0 ? 0 : value)) - 50;
-            if (detune == 0) {
-                return "0";
-            } else if (detune > 0) {
-                snprintf(str_buf, sizeof(str_buf), "+%d", detune);
-            } else {
-                snprintf(str_buf, sizeof(str_buf), "%d", detune);
+        case PARAM_DCO2_TUNE:
+            // Return pre-allocated string for detune value
+            if (value >= 0 && value <= 100) {
+                return detune_strings[value];
             }
-            return str_buf;
-        }
+            return "0";
         case PARAM_SYNC:
             return kSyncNames[value < 3 ? value : 0];
         
-        // ======== Page 3: VCF ========
-        case PARAM_VCF_TYPE:
-            return filter_types[value & 0x03];
-        
         // ======== Page 6: MOD HUB ========
-        case PARAM_MOD_SELECT:
-            if (value >= 0 && value < MOD_NUM_DESTINATIONS) {
-                return kModDestNames[value];
+        case PARAM_MOD_HUB:
+            if (value >= 0 && value < 9) {
+                return mod_hub_.GetDestinationName(value);
             }
-            return kModDestNames[0];
-        
-        // MOD HUB value - context-aware display
-        case PARAM_MOD_VALUE: {
-            uint8_t sel = current_preset_.params[PARAM_MOD_SELECT];
-            switch (sel) {
-                case MOD_LFO_WAVE:
-                    // LFO waveform names
-                    if (value < 4) {
-                        return kLfoWaveNames[value];
-                    }
-                    return kLfoWaveNames[0];
-                case MOD_PB_RANGE:
-                    // Pitch bend range names
-                    if (value < 4) {
-                        return kPbRangeNames[value];
-                    }
-                    return kPbRangeNames[0];
-                default:
-                    // Most MOD destinations are 0-100%
-                    snprintf(str_buf, sizeof(str_buf), "%d%%", value);
-                    return str_buf;
+            return "";
+            
+        case PARAM_MOD_AMT: {
+            // Get current destination to validate range
+            uint8_t dest = mod_hub_.GetDestination();
+            
+            // Check if value is within current destination's range
+            if (dest >= MOD_NUM_DESTINATIONS) {
+                return nullptr;  // Invalid destination
             }
+            
+            const auto& dest_info = kModDestinations[dest];
+            if (value < dest_info.min || value > dest_info.max) {
+                return nullptr;  // Out of range - tells UI to stop querying
+            }
+            
+            return mod_hub_.GetValueStringForDest(dest, value, str_buf, sizeof(str_buf));
         }
+            
+        case PARAM_EFFECT:
+            if (value >= 0 && value < 4) {
+                return effect_names[value];
+            }
+            return "DRY";  // Default fallback
         
         default:
             return nullptr;
@@ -773,22 +848,7 @@ float DrupiterSynth::ParameterToExponentialFreq(uint8_t value, float min_freq, f
 }
 
 void DrupiterSynth::InitFactoryPresets() {
-    // Factory presets now use direct params for DCO1/DCO2 (no more HUB routing)
-    // MOD HUB values are still stored separately
-    
-    // Helper to set MOD HUB values for a preset
-    auto setModValues = [this](uint8_t lfo_rate, uint8_t lfo_wave, uint8_t lfo_vco, 
-                                uint8_t lfo_vcf, uint8_t vel_vcf, uint8_t key_track,
-                                uint8_t pb_range, uint8_t vcf_env_amt) {
-        mod_values_[MOD_LFO_RATE] = lfo_rate;
-        mod_values_[MOD_LFO_WAVE] = lfo_wave;
-        mod_values_[MOD_LFO_TO_VCO] = lfo_vco;
-        mod_values_[MOD_LFO_TO_VCF] = lfo_vcf;
-        mod_values_[MOD_VEL_TO_VCF] = vel_vcf;
-        mod_values_[MOD_KEY_TRACK] = key_track;
-        mod_values_[MOD_PB_RANGE] = pb_range;
-        mod_values_[MOD_VCF_ENV_AMT] = vcf_env_amt;
-    };
+    // Factory presets now use hub control for modulation routing
     
     // Preset 0: Init - Basic sound
     std::memset(&factory_presets_[0], 0, sizeof(Preset));
@@ -806,7 +866,7 @@ void DrupiterSynth::InitFactoryPresets() {
     factory_presets_[0].params[PARAM_OSC_MIX] = 0;        // DCO1 only
     factory_presets_[0].params[PARAM_VCF_CUTOFF] = 79;
     factory_presets_[0].params[PARAM_VCF_RESONANCE] = 16;
-    factory_presets_[0].params[PARAM_VCF_TYPE] = 1;       // LP24
+    factory_presets_[0].params[PARAM_VCF_KEYFLW] = 50;    // 50% keyboard tracking
     // Page 4: VCF Envelope
     factory_presets_[0].params[PARAM_VCF_ATTACK] = 4;
     factory_presets_[0].params[PARAM_VCF_DECAY] = 31;
@@ -817,12 +877,12 @@ void DrupiterSynth::InitFactoryPresets() {
     factory_presets_[0].params[PARAM_VCA_DECAY] = 39;
     factory_presets_[0].params[PARAM_VCA_SUSTAIN] = 79;
     factory_presets_[0].params[PARAM_VCA_RELEASE] = 16;
-    // Page 6: MOD HUB & Output
-    factory_presets_[0].params[PARAM_MOD_SELECT] = 0;
-    factory_presets_[0].params[PARAM_MOD_VALUE] = 32;
-    factory_presets_[0].params[PARAM_CHORUS_DEPTH] = 0;
-    factory_presets_[0].params[PARAM_SPACE] = 50;
-    std::strcpy(factory_presets_[0].name, "Init");
+    // Page 6: LFO, MOD HUB & Effects
+    factory_presets_[0].params[PARAM_LFO_RATE] = 32;      // Moderate LFO rate
+    factory_presets_[0].params[PARAM_MOD_HUB] = MOD_VCF_TYPE;  // VCF Type by default
+    factory_presets_[0].params[PARAM_MOD_AMT] = 1;        // LP24 filter
+    factory_presets_[0].params[PARAM_EFFECT] = 0;         // Chorus
+    std::strcpy(factory_presets_[0].name, "Init 1");
     
     // Preset 1: Bass - Punchy bass with filter envelope
     std::memset(&factory_presets_[1], 0, sizeof(Preset));
@@ -837,7 +897,7 @@ void DrupiterSynth::InitFactoryPresets() {
     factory_presets_[1].params[PARAM_OSC_MIX] = 0;        // DCO1 only
     factory_presets_[1].params[PARAM_VCF_CUTOFF] = 39;
     factory_presets_[1].params[PARAM_VCF_RESONANCE] = 39;
-    factory_presets_[1].params[PARAM_VCF_TYPE] = 1;
+    factory_presets_[1].params[PARAM_VCF_KEYFLW] = 75;    // High key tracking for bass
     factory_presets_[1].params[PARAM_VCF_ATTACK] = 0;
     factory_presets_[1].params[PARAM_VCF_DECAY] = 27;
     factory_presets_[1].params[PARAM_VCF_SUSTAIN] = 16;
@@ -846,11 +906,11 @@ void DrupiterSynth::InitFactoryPresets() {
     factory_presets_[1].params[PARAM_VCA_DECAY] = 31;
     factory_presets_[1].params[PARAM_VCA_SUSTAIN] = 63;
     factory_presets_[1].params[PARAM_VCA_RELEASE] = 12;
-    factory_presets_[1].params[PARAM_MOD_SELECT] = 0;
-    factory_presets_[1].params[PARAM_MOD_VALUE] = 32;
-    factory_presets_[1].params[PARAM_CHORUS_DEPTH] = 0;
-    factory_presets_[1].params[PARAM_SPACE] = 30;
-    std::strcpy(factory_presets_[1].name, "Bass");
+    factory_presets_[1].params[PARAM_LFO_RATE] = 32;
+    factory_presets_[1].params[PARAM_MOD_HUB] = MOD_VCF_TYPE;
+    factory_presets_[1].params[PARAM_MOD_AMT] = 1;        // LP24
+    factory_presets_[1].params[PARAM_EFFECT] = 0;
+    std::strcpy(factory_presets_[1].name, "Bass 1");
     
     // Preset 2: Lead - Sharp lead with sync
     std::memset(&factory_presets_[2], 0, sizeof(Preset));
@@ -865,7 +925,7 @@ void DrupiterSynth::InitFactoryPresets() {
     factory_presets_[2].params[PARAM_OSC_MIX] = 30;       // Mostly DCO1 with some DCO2
     factory_presets_[2].params[PARAM_VCF_CUTOFF] = 71;
     factory_presets_[2].params[PARAM_VCF_RESONANCE] = 55;
-    factory_presets_[2].params[PARAM_VCF_TYPE] = 1;
+    factory_presets_[2].params[PARAM_VCF_KEYFLW] = 40;
     factory_presets_[2].params[PARAM_VCF_ATTACK] = 4;
     factory_presets_[2].params[PARAM_VCF_DECAY] = 24;
     factory_presets_[2].params[PARAM_VCF_SUSTAIN] = 47;
@@ -874,11 +934,11 @@ void DrupiterSynth::InitFactoryPresets() {
     factory_presets_[2].params[PARAM_VCA_DECAY] = 24;
     factory_presets_[2].params[PARAM_VCA_SUSTAIN] = 79;
     factory_presets_[2].params[PARAM_VCA_RELEASE] = 16;
-    factory_presets_[2].params[PARAM_MOD_SELECT] = 0;
-    factory_presets_[2].params[PARAM_MOD_VALUE] = 50;
-    factory_presets_[2].params[PARAM_CHORUS_DEPTH] = 20;
-    factory_presets_[2].params[PARAM_SPACE] = 60;
-    std::strcpy(factory_presets_[2].name, "Lead");
+    factory_presets_[2].params[PARAM_LFO_RATE] = 50;
+    factory_presets_[2].params[PARAM_MOD_HUB] = MOD_LFO_TO_VCF;
+    factory_presets_[2].params[PARAM_MOD_AMT] = 30;
+    factory_presets_[2].params[PARAM_EFFECT] = 0;
+    std::strcpy(factory_presets_[2].name, "Lead 1");
     
     // Preset 3: Pad - Warm pad with detuned oscillators
     std::memset(&factory_presets_[3], 0, sizeof(Preset));
@@ -893,7 +953,7 @@ void DrupiterSynth::InitFactoryPresets() {
     factory_presets_[3].params[PARAM_OSC_MIX] = 50;       // Equal mix
     factory_presets_[3].params[PARAM_VCF_CUTOFF] = 63;
     factory_presets_[3].params[PARAM_VCF_RESONANCE] = 20;
-    factory_presets_[3].params[PARAM_VCF_TYPE] = 1;
+    factory_presets_[3].params[PARAM_VCF_KEYFLW] = 20;
     factory_presets_[3].params[PARAM_VCF_ATTACK] = 35;
     factory_presets_[3].params[PARAM_VCF_DECAY] = 39;
     factory_presets_[3].params[PARAM_VCF_SUSTAIN] = 55;
@@ -902,11 +962,11 @@ void DrupiterSynth::InitFactoryPresets() {
     factory_presets_[3].params[PARAM_VCA_DECAY] = 39;
     factory_presets_[3].params[PARAM_VCA_SUSTAIN] = 79;
     factory_presets_[3].params[PARAM_VCA_RELEASE] = 55;
-    factory_presets_[3].params[PARAM_MOD_SELECT] = 0;
-    factory_presets_[3].params[PARAM_MOD_VALUE] = 35;
-    factory_presets_[3].params[PARAM_CHORUS_DEPTH] = 50;
-    factory_presets_[3].params[PARAM_SPACE] = 80;
-    std::strcpy(factory_presets_[3].name, "Pad");
+    factory_presets_[3].params[PARAM_LFO_RATE] = 35;
+    factory_presets_[3].params[PARAM_MOD_HUB] = MOD_VCF_TYPE;
+    factory_presets_[3].params[PARAM_MOD_AMT] = 1;        // LP24
+    factory_presets_[3].params[PARAM_EFFECT] = 0;
+    std::strcpy(factory_presets_[3].name, "Pad 1");
     
     // Preset 4: Brass - Bright brass with XMOD
     std::memset(&factory_presets_[4], 0, sizeof(Preset));
@@ -921,7 +981,7 @@ void DrupiterSynth::InitFactoryPresets() {
     factory_presets_[4].params[PARAM_OSC_MIX] = 40;
     factory_presets_[4].params[PARAM_VCF_CUTOFF] = 59;
     factory_presets_[4].params[PARAM_VCF_RESONANCE] = 24;
-    factory_presets_[4].params[PARAM_VCF_TYPE] = 1;
+    factory_presets_[4].params[PARAM_VCF_KEYFLW] = 60;
     factory_presets_[4].params[PARAM_VCF_ATTACK] = 12;
     factory_presets_[4].params[PARAM_VCF_DECAY] = 35;
     factory_presets_[4].params[PARAM_VCF_SUSTAIN] = 51;
@@ -930,11 +990,11 @@ void DrupiterSynth::InitFactoryPresets() {
     factory_presets_[4].params[PARAM_VCA_DECAY] = 35;
     factory_presets_[4].params[PARAM_VCA_SUSTAIN] = 71;
     factory_presets_[4].params[PARAM_VCA_RELEASE] = 24;
-    factory_presets_[4].params[PARAM_MOD_SELECT] = 0;
-    factory_presets_[4].params[PARAM_MOD_VALUE] = 40;
-    factory_presets_[4].params[PARAM_CHORUS_DEPTH] = 15;
-    factory_presets_[4].params[PARAM_SPACE] = 55;
-    std::strcpy(factory_presets_[4].name, "Brass");
+    factory_presets_[4].params[PARAM_LFO_RATE] = 40;
+    factory_presets_[4].params[PARAM_MOD_HUB] = MOD_ENV_TO_VCF;
+    factory_presets_[4].params[PARAM_MOD_AMT] = 40;
+    factory_presets_[4].params[PARAM_EFFECT] = 0;
+    std::strcpy(factory_presets_[4].name, "Brass 1");
     
     // Preset 5: Strings - Lush strings with detuned oscillators
     std::memset(&factory_presets_[5], 0, sizeof(Preset));
@@ -949,7 +1009,7 @@ void DrupiterSynth::InitFactoryPresets() {
     factory_presets_[5].params[PARAM_OSC_MIX] = 50;       // Equal mix
     factory_presets_[5].params[PARAM_VCF_CUTOFF] = 75;
     factory_presets_[5].params[PARAM_VCF_RESONANCE] = 16;
-    factory_presets_[5].params[PARAM_VCF_TYPE] = 1;
+    factory_presets_[5].params[PARAM_VCF_KEYFLW] = 25;
     factory_presets_[5].params[PARAM_VCF_ATTACK] = 47;
     factory_presets_[5].params[PARAM_VCF_DECAY] = 43;
     factory_presets_[5].params[PARAM_VCF_SUSTAIN] = 59;
@@ -958,12 +1018,9 @@ void DrupiterSynth::InitFactoryPresets() {
     factory_presets_[5].params[PARAM_VCA_DECAY] = 43;
     factory_presets_[5].params[PARAM_VCA_SUSTAIN] = 79;
     factory_presets_[5].params[PARAM_VCA_RELEASE] = 63;
-    factory_presets_[5].params[PARAM_MOD_SELECT] = 0;
-    factory_presets_[5].params[PARAM_MOD_VALUE] = 38;
-    factory_presets_[5].params[PARAM_CHORUS_DEPTH] = 60;
-    factory_presets_[5].params[PARAM_SPACE] = 85;
-    std::strcpy(factory_presets_[5].name, "Strings");
-    
-    // Initialize default MOD HUB values
-    setModValues(32, 0, 0, 0, 50, 50, 0, 50);
+    factory_presets_[5].params[PARAM_LFO_RATE] = 38;
+    factory_presets_[5].params[PARAM_MOD_HUB] = MOD_LFO_TO_VCO;
+    factory_presets_[5].params[PARAM_MOD_AMT] = 20;
+    factory_presets_[5].params[PARAM_EFFECT] = 0;
+    std::strcpy(factory_presets_[5].name, "String 1");
 }
