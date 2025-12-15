@@ -735,7 +735,7 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
         
         // ======== Page 6: MOD HUB ========
         case PARAM_MOD_HUB:
-            if (value >= 0 && value < 9) {
+            if (value >= 0 && value < MOD_NUM_DESTINATIONS) {
                 return mod_hub_.GetDestinationName(value);
             }
             return "";
