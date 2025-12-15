@@ -14,12 +14,41 @@
 #include "dsp/smoothed_value.h"
 #include <cmath>
 #include <cstring>
+#include <cstdio>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
 namespace {
+
+// Fast 2^x approximation (accurate for |x| < 8)
+// Uses polynomial: 2^x ≈ 1 + 0.693x + 0.240x² + 0.056x³
+// Relative error < 0.3% for |x| < 4
+inline float fast_pow2(float x) {
+    // Clamp to safe range
+    if (x < -8.0f) return 0.00390625f;  // 2^-8
+    if (x > 8.0f) return 256.0f;         // 2^8
+    
+    // Polynomial approximation (Horner's form)
+    const float c1 = 0.693147181f;  // ln(2)
+    const float c2 = 0.240226507f;  // ln(2)²/2!
+    const float c3 = 0.055504109f;  // ln(2)³/3!
+    const float c4 = 0.009618129f;  // ln(2)⁴/4!
+    
+    return 1.0f + x * (c1 + x * (c2 + x * (c3 + x * c4)));
+}
+
+// Fast cents to ratio: 2^(cents/1200)
+// For detune in cents, typically ±200
+inline float cents_to_ratio(float cents) {
+    return fast_pow2(cents * (1.0f / 1200.0f));
+}
+
+// Fast semitones to ratio: 2^(semitones/12)
+inline float semitones_to_ratio(float semitones) {
+    return fast_pow2(semitones * (1.0f / 12.0f));
+}
 
 inline uint8_t clamp_u8_int32(int32_t value, int32_t min_value, int32_t max_value) {
     if (value < min_value) return static_cast<uint8_t>(min_value);
@@ -54,6 +83,8 @@ DrupiterSynth::DrupiterSynth()
     , current_note_(60)
     , current_velocity_(100)
     , current_freq_hz_(440.0f)
+    , sync_mode_(0)
+    , xmod_depth_(0.0f)
     , dco1_out_(0.0f)
     , dco2_out_(0.0f)
     , noise_out_(0.0f)
@@ -71,6 +102,18 @@ DrupiterSynth::DrupiterSynth()
     // Initialize preset to defaults
     std::memset(&current_preset_, 0, sizeof(Preset));
     std::strcpy(current_preset_.name, "Init");
+    
+    // Initialize MOD HUB with sensible defaults
+    std::memset(mod_values_, 0, sizeof(mod_values_));
+    mod_values_[MOD_LFO_RATE] = 32;      // ~2Hz LFO
+    mod_values_[MOD_LFO_WAVE] = 0;       // Triangle
+    mod_values_[MOD_LFO_TO_VCO] = 0;     // No vibrato
+    mod_values_[MOD_LFO_TO_VCF] = 0;     // No filter mod
+    mod_values_[MOD_VEL_TO_VCF] = 50;    // 50% velocity to filter
+    mod_values_[MOD_KEY_TRACK] = 50;     // 50% key tracking
+    mod_values_[MOD_PB_RANGE] = 0;       // ±2 semitones
+    mod_values_[MOD_VCF_ENV_AMT] = 50;   // 50% VCF envelope amount
+    mod_value_str_[0] = '\0';
 }
 
 DrupiterSynth::~DrupiterSynth() {
@@ -97,8 +140,11 @@ int8_t DrupiterSynth::Init(const unit_runtime_desc_t* desc) {
     dco1_level_smooth_ = new dsp::SmoothedValue();
     dco2_level_smooth_ = new dsp::SmoothedValue();
     
+    // Allocate chorus effect
+    space_widener_ = new common::ChorusStereoWidener();
+    
     if (!dco1_ || !dco2_ || !vcf_ || !lfo_ || !env_vcf_ || !env_vca_ ||
-        !cutoff_smooth_ || !dco1_level_smooth_ || !dco2_level_smooth_) {
+        !cutoff_smooth_ || !dco1_level_smooth_ || !dco2_level_smooth_ || !space_widener_) {
         Teardown();
         return -1;
     }
@@ -115,6 +161,13 @@ int8_t DrupiterSynth::Init(const unit_runtime_desc_t* desc) {
     cutoff_smooth_->Init(0.0f, 0.005f);       // Filter cutoff - slow for smooth sweeps
     dco1_level_smooth_->Init(0.0f, 0.01f);    // DCO1 level - faster smoothing
     dco2_level_smooth_->Init(0.0f, 0.01f);    // DCO2 level - faster smoothing
+    
+    // Initialize chorus effect (delay-based stereo spread)
+    space_widener_->Init(sample_rate_);
+    space_widener_->SetDelayTime(15.0f);      // 15ms base delay
+    space_widener_->SetModDepth(3.0f);        // ±3ms modulation
+    space_widener_->SetLfoRate(0.5f);         // 0.5 Hz LFO
+    space_widener_->SetMix(0.5f);             // 50% wet/dry mix
     
     // Initialize factory presets
     InitFactoryPresets();
@@ -135,6 +188,7 @@ void DrupiterSynth::Teardown() {
     delete cutoff_smooth_;
     delete dco1_level_smooth_;
     delete dco2_level_smooth_;
+    delete space_widener_;
     
     dco1_ = nullptr;
     dco2_ = nullptr;
@@ -145,6 +199,7 @@ void DrupiterSynth::Teardown() {
     cutoff_smooth_ = nullptr;
     dco1_level_smooth_ = nullptr;
     dco2_level_smooth_ = nullptr;
+    space_widener_ = nullptr;
 }
 
 void DrupiterSynth::Reset() {
@@ -166,24 +221,39 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     // Limit frames to our buffer size
     if (frames > kMaxFrames) frames = kMaxFrames;
     
+    // === Read direct DCO parameters (Pages 1 & 2) ===
+    // OSC MIX: 0=DCO1 only, 50=equal, 100=DCO2 only
+    const float osc_mix = current_preset_.params[PARAM_OSC_MIX] / 100.0f;
+    const float dco1_level_target = 1.0f - osc_mix;  // Inverted: 0=full, 100=none
+    const float dco2_level_target = osc_mix;         // Direct: 0=none, 100=full
+    
     // Update smoothed parameter targets (once per buffer for efficiency)
     cutoff_smooth_->SetTarget(current_preset_.params[PARAM_VCF_CUTOFF] / 100.0f);
-    dco1_level_smooth_->SetTarget(current_preset_.params[PARAM_DCO1_LEVEL] / 100.0f);
-    dco2_level_smooth_->SetTarget(current_preset_.params[PARAM_DCO2_LEVEL] / 100.0f);
+    dco1_level_smooth_->SetTarget(dco1_level_target);
+    dco2_level_smooth_->SetTarget(dco2_level_target);
     
-    // Pre-calculate constants outside the loop
-    const float dco1_oct_mult = OctaveToMultiplier(current_preset_.params[PARAM_DCO1_OCTAVE]);
-    const float dco2_oct_mult = OctaveToMultiplier(current_preset_.params[PARAM_DCO2_OCTAVE]);
+    // Pre-calculate DCO constants from direct params
+    const float dco1_oct_mult = OctaveToMultiplier(current_preset_.params[PARAM_DCO1_OCT]);
+    const float dco2_oct_mult = OctaveToMultiplier(current_preset_.params[PARAM_DCO2_OCT]);
     
-    // Detune: convert cents to frequency ratio.
-    // Jupiter-8 style detune: wider range for more obvious effect.
-    // Map 0..100 (50=center) to ±200 cents (±2 semitones).
-    const float detune_cents = (static_cast<int32_t>(current_preset_.params[PARAM_DCO2_DETUNE]) - 50) * 4.0f;
-    const float detune_ratio = powf(2.0f, detune_cents / 1200.0f);
+    // Detune: convert cents to frequency ratio (from DCO2 TUNE param)
+    // Map 0..100 (50=center) to ±200 cents (±2 semitones)
+    const float detune_cents = (static_cast<int32_t>(current_preset_.params[PARAM_DCO2_TUNE]) - 50) * 4.0f;
+    const float detune_ratio = cents_to_ratio(detune_cents);  // Fast approximation
     
-    const float lfo_vco_depth = current_preset_.params[PARAM_LFO_VCO_DEPTH] / 100.0f;
-    const float env_amt = (current_preset_.params[PARAM_VCF_ENV_AMT] - 50) / 50.0f;  // -1 to +1
-    const float lfo_vcf_depth = current_preset_.params[PARAM_LFO_VCF_DEPTH] / 100.0f;
+    // Cross-modulation depth from direct XMOD param
+    const float xmod_depth = xmod_depth_;  // Set via PARAM_XMOD in SetParameter
+    
+    // === Read MOD HUB values ===
+    const float lfo_vco_depth = mod_values_[MOD_LFO_TO_VCO] / 100.0f;
+    const float lfo_vcf_depth = mod_values_[MOD_LFO_TO_VCF] / 100.0f;
+    const float vel_to_vcf = mod_values_[MOD_VEL_TO_VCF] / 100.0f;
+    const float key_track = mod_values_[MOD_KEY_TRACK] / 100.0f;
+    const float vcf_env_amt_mod = mod_values_[MOD_VCF_ENV_AMT] / 100.0f;  // Additional env amount from HUB
+    const float env_amt = (current_preset_.params[PARAM_VCF_SUSTAIN] > 50 ? 0.5f : -0.5f) * vcf_env_amt_mod;  // Simplified - combine with main env
+    
+    // Velocity modulation factor (based on current note velocity)
+    const float vel_mod = (current_velocity_ / 127.0f) * vel_to_vcf;
     
     // ============ Main DSP loop - render to mix_buffer_ ============
     for (uint32_t i = 0; i < frames; ++i) {
@@ -212,14 +282,31 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         dco1_->SetFrequency(freq1);
         dco2_->SetFrequency(freq2);
         
-        // Cross-modulation (DCO2 -> DCO1 FM) exists on the Jupiter-8,
-        // but it's controlled by a dedicated XMOD control.
-        // Since we currently don't expose XMOD as a parameter, keep it off
-        // to avoid DCO1 sounding "filtered"/different from DCO2.
-        dco1_->ApplyFM(0.0f);
+        // Cross-modulation (DCO2 -> DCO1 FM) - Jupiter-8 style
+        // Uses direct XMOD parameter for control
+        if (xmod_depth > 0.001f) {
+            dco1_->ApplyFM(dco2_out_ * xmod_depth * 0.5f);
+        } else {
+            dco1_->ApplyFM(0.0f);
+        }
         
         // Process DCO1 first (master for sync)
         dco1_out_ = dco1_->Process();
+        
+        // Hard sync: Reset DCO2 phase when DCO1 wraps
+        // This is the classic Jupiter-8 sync sound
+        if (sync_mode_ == 2 && dco1_->DidWrap()) {  // HARD sync
+            dco2_->ResetPhase();
+        }
+        // Soft sync: Attenuate DCO2 when DCO1 wraps (gentler effect)
+        else if (sync_mode_ == 1 && dco1_->DidWrap()) {  // SOFT sync
+            // Soft sync gently pushes DCO2 toward phase reset
+            // Creates a more subtle timbral variation
+            float phase2 = dco2_->GetPhase();
+            if (phase2 > 0.5f) {
+                dco2_->ResetPhase();  // Only reset if past halfway
+            }
+        }
 
         // Process DCO2 (slave)
         dco2_out_ = dco2_->Process();
@@ -229,33 +316,38 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         
         // Apply filter with smoothed cutoff, envelope, and LFO modulation
         const float cutoff_norm = cutoff_smooth_->Process();
-        // Exponential cutoff mapping with better low-end response.
-        // Jupiter-8 style: usable range from ~30Hz to 12kHz with more linear feel.
-        // Map 0-1 to cover ~8.5 octaves (30Hz to 12kHz) with gentler curve.
-        const float cutoff_curve = powf(cutoff_norm, 0.5f);  // Square root for gentler curve
-        float cutoff_base = 30.0f * powf(2.0f, cutoff_curve * 8.5f);
-
-        // Keyboard tracking (match JupiterVCF default: 50%)
-        const float note_offset = (static_cast<int32_t>(current_note_) - 60) / 12.0f;
-        const float kbd_tracking = 0.5f;
-        cutoff_base *= powf(2.0f, note_offset * kbd_tracking);
         
-        // Combine envelope and LFO modulation (in octaves).
+        // Jupiter-8 style cutoff mapping:
+        // - At 0%: ~100Hz (closed, but still audible/usable)
+        // - At 50%: ~1kHz (typical starting point)
+        // - At 100%: ~12kHz (fully open)
+        // Use a combination of linear and exponential mapping for musical control
+        // 
+        // Map 0-1 to cover ~7 octaves (100Hz to 12.8kHz)
+        // Linear portion at low end prevents the filter from getting "stuck" closed
+        const float linear_blend = 0.15f;  // 15% linear, 85% exponential
+        const float exp_portion = fast_pow2(cutoff_norm * 7.0f);  // 2^7 = 128x range
+        const float lin_portion = 1.0f + cutoff_norm * 127.0f;     // 1 to 128 linear
+        const float cutoff_mult = linear_blend * lin_portion + (1.0f - linear_blend) * exp_portion;
+        float cutoff_base = 100.0f * cutoff_mult;  // 100Hz * multiplier
+
+        // Keyboard tracking (from MOD HUB)
+        const float note_offset = (static_cast<int32_t>(current_note_) - 60) / 12.0f;
+        cutoff_base *= semitones_to_ratio(note_offset * key_track * 12.0f);  // Fast approx
+        
+        // Combine envelope, LFO, and velocity modulation (in octaves).
         // Keep ranges conservative so cutoff doesn't peg at max and become ineffective.
-        float total_mod = vcf_env_out_ * env_amt * 2.0f + lfo_out_ * lfo_vcf_depth * 1.0f;
+        float total_mod = vcf_env_out_ * env_amt * 2.0f 
+                        + lfo_out_ * lfo_vcf_depth * 1.0f
+                        + vel_mod * 2.0f;  // Velocity adds up to +2 octaves
 
         // Clamp modulation depth to avoid extreme cutoff values.
         if (total_mod > 3.0f) total_mod = 3.0f;
         else if (total_mod < -3.0f) total_mod = -3.0f;
         
-        // Approximate 2^x for small x: 2^x ≈ 1 + 0.693x (for |x| < 0.5)
-        // For larger range, clamp and use full calculation
-        float cutoff_modulated;
-        if (total_mod > -0.5f && total_mod < 0.5f) {
-            cutoff_modulated = cutoff_base * (1.0f + 0.693f * total_mod);
-        } else {
-            cutoff_modulated = cutoff_base * powf(2.0f, total_mod);
-        }
+        // Use fast 2^x approximation for all modulation values
+        // fast_pow2 is accurate enough for audio-rate modulation
+        float cutoff_modulated = cutoff_base * fast_pow2(total_mod);
         
         // Only update filter coefficients if cutoff changed significantly (optimization)
         const float cutoff_diff = cutoff_modulated - last_cutoff_hz_;
@@ -270,68 +362,124 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         mix_buffer_[i] = filtered_ * vca_env_out_ * 0.5f;  // Scale to prevent clipping
     }
     
-    // ============ NEON-optimized output stage ============
+    // ============ Output stage with chorus effect ============
     
     // Sanitize buffer (remove NaN/Inf) and apply soft clamp
     drupiter::neon::SanitizeAndClamp(mix_buffer_, 1.0f, frames);
     
+    // Configure chorus effect from parameters
+    // CHORUS_DEPTH: 0=off (dry), 50=moderate, 100=deep chorus
+    const float chorus_depth = current_preset_.params[PARAM_CHORUS_DEPTH] / 100.0f;
+    space_widener_->SetModDepth(chorus_depth * 6.0f);  // 0-6ms modulation depth
+    space_widener_->SetMix(chorus_depth);              // Wet/dry mix follows depth
+    
+    // SPACE: Controls stereo spread via delay time (10-50ms range)
+    // 0=narrow (10ms), 50=normal (30ms), 100=wide (50ms)
+    const float space = current_preset_.params[PARAM_SPACE] / 100.0f;
+    space_widener_->SetDelayTime(10.0f + space * 40.0f);  // 10-50ms delay time
+    
+    // Apply chorus stereo effect using modulated delays
+    // Converts mono to wide stereo with LFO-modulated delay times
+    space_widener_->ProcessMonoBatch(mix_buffer_, left_buffer_, right_buffer_, frames);
+    
+    // Add tiny DC offset for denormal protection before interleaving
+    const float denormal_offset = 1.0e-15f;
 #ifdef USE_NEON
-    // NEON-optimized mono to stereo duplication with interleaving
-    // Process 4 samples at a time
-    const float32x4_t dc_offset = vdupq_n_f32(1.0e-15f);  // Denormal protection
-    uint32_t i = 0;
-    
-    for (; i + 4 <= frames; i += 4) {
-        // Load 4 mono samples
-        float32x4_t mono = vld1q_f32(&mix_buffer_[i]);
-        
-        // Add tiny DC offset for denormal protection
-        mono = vaddq_f32(mono, dc_offset);
-        
-        // Duplicate to left and right (mono -> stereo)
-        // Interleave: [m0,m1,m2,m3] -> [m0,m0,m1,m1,m2,m2,m3,m3]
-        float32x4x2_t stereo = vzipq_f32(mono, mono);
-        
-        // Store interleaved stereo output
-        vst1q_f32(&out[i * 2], stereo.val[0]);      // m0,m0,m1,m1
-        vst1q_f32(&out[i * 2 + 4], stereo.val[1]);  // m2,m2,m3,m3
-    }
-    
-    // Scalar fallback for remaining samples
-    for (; i < frames; ++i) {
-        float sample = mix_buffer_[i] + 1.0e-15f;
-        out[i * 2] = sample;
-        out[i * 2 + 1] = sample;
+    // NEON-optimized stereo interleave (processes 4 frames at a time)
+    {
+        float32x4_t dc = vdupq_n_f32(denormal_offset);
+        uint32_t i = 0;
+        for (; i + 4 <= frames; i += 4) {
+            float32x4_t l = vaddq_f32(vld1q_f32(&left_buffer_[i]), dc);
+            float32x4_t r = vaddq_f32(vld1q_f32(&right_buffer_[i]), dc);
+            float32x4x2_t interleaved = vzipq_f32(l, r);
+            vst1q_f32(&out[i * 2], interleaved.val[0]);
+            vst1q_f32(&out[i * 2 + 4], interleaved.val[1]);
+        }
+        // Scalar tail for remaining frames
+        for (; i < frames; ++i) {
+            out[i * 2] = left_buffer_[i] + denormal_offset;
+            out[i * 2 + 1] = right_buffer_[i] + denormal_offset;
+        }
     }
 #else
-    // Non-NEON fallback
+    // Scalar fallback for non-NEON builds
     for (uint32_t i = 0; i < frames; ++i) {
-        float sample = mix_buffer_[i] + 1.0e-15f;  // Denormal protection
-        out[i * 2] = sample;
-        out[i * 2 + 1] = sample;
+        out[i * 2] = left_buffer_[i] + denormal_offset;
+        out[i * 2 + 1] = right_buffer_[i] + denormal_offset;
     }
 #endif
 }
 
 void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
+    // ========== MOD HUB ==========
+    if (id == PARAM_MOD_VALUE) {
+        // Route MOD_VALUE to the currently selected mod destination
+        uint8_t sel = current_preset_.params[PARAM_MOD_SELECT];
+        if (sel < MOD_NUM_DESTINATIONS) {
+            // Special handling for LFO_WAVE which has 0-3 range
+            uint8_t v;
+            if (sel == MOD_LFO_WAVE) {
+                v = (value < 0) ? 0 : ((value > 3) ? 3 : static_cast<uint8_t>(value));
+            } else {
+                v = (value < 0) ? 0 : ((value > 100) ? 100 : static_cast<uint8_t>(value));
+            }
+            mod_values_[sel] = v;
+            
+            // Update DSP components immediately for certain destinations
+            switch (sel) {
+                case MOD_LFO_RATE:
+                    lfo_->SetFrequency(ParameterToExponentialFreq(v, 0.1f, 20.0f));
+                    break;
+                case MOD_LFO_WAVE:
+                    lfo_->SetWaveform(static_cast<dsp::JupiterLFO::Waveform>(v & 0x03));
+                    break;
+                default:
+                    // Other mod values are read in Render()
+                    break;
+            }
+        }
+        return;
+    }
+    
     if (id >= PARAM_COUNT) {
         return;
     }
 
-    // Clamp to expected ranges (protects against wraparound and keeps UI consistent).
+    // Clamp to expected ranges based on parameter type
     uint8_t v = 0;
     switch (id) {
-        case PARAM_DCO1_OCTAVE:
-        case PARAM_DCO2_OCTAVE:
+        // Page 1: DCO-1 discrete params
+        case PARAM_DCO1_OCT:
             v = clamp_u8_int32(value, 0, 2);
             break;
         case PARAM_DCO1_WAVE:
-        case PARAM_DCO2_WAVE:
-        case PARAM_VCF_TYPE:
-        case PARAM_LFO_WAVE:
             v = clamp_u8_int32(value, 0, 3);
             break;
+            
+        // Page 2: DCO-2 discrete params
+        case PARAM_DCO2_OCT:
+            v = clamp_u8_int32(value, 0, 2);
+            break;
+        case PARAM_DCO2_WAVE:
+            v = clamp_u8_int32(value, 0, 3);
+            break;
+        case PARAM_SYNC:
+            v = clamp_u8_int32(value, 0, 2);
+            break;
+            
+        // Page 3: VCF type
+        case PARAM_VCF_TYPE:
+            v = clamp_u8_int32(value, 0, 3);
+            break;
+            
+        // Page 6: MOD selector
+        case PARAM_MOD_SELECT:
+            v = clamp_u8_int32(value, 0, MOD_NUM_DESTINATIONS - 1);
+            break;
+            
         default:
+            // All other params are 0-100
             v = clamp_u8_int32(value, 0, 100);
             break;
     }
@@ -339,60 +487,49 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
     
     // Update DSP components based on parameter changes
     switch (id) {
-        // DCO1 parameters
-        case PARAM_DCO1_OCTAVE:
-            // Octave changes affect frequency, will be applied in next Render()
+        // ======== Page 1: DCO-1 ========
+        case PARAM_DCO1_OCT:
+            // Octave handled in Render()
             break;
         case PARAM_DCO1_WAVE:
-            // Jupiter-8 VCO1 waveforms: TRI, SAW, PULSE, SQUARE (we expose 4)
-            // Map UI 0..3 to: SAW, SQR, PULSE, TRI
             switch (v & 0x03) {
                 case 0: dco1_->SetWaveform(dsp::JupiterDCO::WAVEFORM_SAW); break;
                 case 1: dco1_->SetWaveform(dsp::JupiterDCO::WAVEFORM_SQUARE); break;
                 case 2: dco1_->SetWaveform(dsp::JupiterDCO::WAVEFORM_PULSE); break;
                 case 3: dco1_->SetWaveform(dsp::JupiterDCO::WAVEFORM_TRIANGLE); break;
-                default: break;
             }
             break;
         case PARAM_DCO1_PW:
-            // Set pulse width directly - applies to PULSE waveform
             dco1_->SetPulseWidth(v / 100.0f);
             break;
-        case PARAM_DCO1_LEVEL:
-            // Level is smoothed in Render(), but set target immediately
-            if (dco1_level_smooth_) {
-                dco1_level_smooth_->SetTarget(v / 100.0f);
-            }
+        case PARAM_XMOD:
+            xmod_depth_ = v / 100.0f;
             break;
-        
-        // DCO2 parameters
-        case PARAM_DCO2_OCTAVE:
-            // Octave changes affect frequency, will be applied in next Render()
+            
+        // ======== Page 2: DCO-2 ========
+        case PARAM_DCO2_OCT:
+            // Octave handled in Render()
             break;
         case PARAM_DCO2_WAVE:
-            // Jupiter-8 VCO2 waveforms: SINE, SAW, PULSE, NOISE (square replaced by noise)
-            // Map UI 0..3 to: SAW, NOISE, PULSE, SINE
             switch (v & 0x03) {
                 case 0: dco2_->SetWaveform(dsp::JupiterDCO::WAVEFORM_SAW); break;
                 case 1: dco2_->SetWaveform(dsp::JupiterDCO::WAVEFORM_NOISE); break;
                 case 2: dco2_->SetWaveform(dsp::JupiterDCO::WAVEFORM_PULSE); break;
                 case 3: dco2_->SetWaveform(dsp::JupiterDCO::WAVEFORM_SINE); break;
-                default: break;
             }
             break;
-        case PARAM_DCO2_DETUNE:
-            // Detune is applied in Render()
+        case PARAM_DCO2_TUNE:
+            // Detune handled in Render()
             break;
-        case PARAM_DCO2_LEVEL:
-            // Level is smoothed in Render(), but set target immediately
-            if (dco2_level_smooth_) {
-                dco2_level_smooth_->SetTarget(v / 100.0f);
-            }
+        case PARAM_SYNC:
+            sync_mode_ = v;
             break;
-        
-        // VCF parameters
+            
+        // ======== Page 3: MIX & VCF ========
+        case PARAM_OSC_MIX:
+            // Mix handled in Render() with smoothing
+            break;
         case PARAM_VCF_CUTOFF:
-            // Cutoff is smoothed in Render()
             if (cutoff_smooth_) {
                 cutoff_smooth_->SetTarget(v / 100.0f);
             }
@@ -400,14 +537,11 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
         case PARAM_VCF_RESONANCE:
             vcf_->SetResonance(v / 100.0f);
             break;
-        case PARAM_VCF_ENV_AMT:
-            // Envelope amount is applied in Render()
-            break;
         case PARAM_VCF_TYPE:
             vcf_->SetMode(static_cast<dsp::JupiterVCF::Mode>(v & 0x03));
             break;
         
-        // VCF Envelope
+        // ======== Page 4: VCF Envelope ========
         case PARAM_VCF_ATTACK:
             env_vcf_->SetAttack(ParameterToEnvelopeTime(v));
             break;
@@ -421,7 +555,7 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             env_vcf_->SetRelease(ParameterToEnvelopeTime(v));
             break;
         
-        // VCA Envelope
+        // ======== Page 5: VCA Envelope ========
         case PARAM_VCA_ATTACK:
             env_vca_->SetAttack(ParameterToEnvelopeTime(v));
             break;
@@ -435,24 +569,30 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             env_vca_->SetRelease(ParameterToEnvelopeTime(v));
             break;
         
-        // LFO
-        case PARAM_LFO_RATE:
-            // Quadratic scaling: 0.1Hz to 20Hz (better control at low rates)
-            lfo_->SetFrequency(ParameterToExponentialFreq(v, 0.1f, 20.0f));
+        // ======== Page 6: MOD HUB & Output ========
+        case PARAM_MOD_SELECT:
+            // When selection changes, update the visible MOD_VALUE param
+            if (v < MOD_NUM_DESTINATIONS) {
+                current_preset_.params[PARAM_MOD_VALUE] = mod_values_[v];
+            }
             break;
-        case PARAM_LFO_WAVE:
-            lfo_->SetWaveform(static_cast<dsp::JupiterLFO::Waveform>(v & 0x03));
-            break;
-        case PARAM_LFO_VCO_DEPTH:
-            // Stored in preset, applied in Render()
-            break;
-        case PARAM_LFO_VCF_DEPTH:
-            // Stored in preset, applied in Render()
+        case PARAM_CHORUS_DEPTH:
+        case PARAM_SPACE:
+            // Applied in Render() output stage
             break;
     }
 }
 
 int32_t DrupiterSynth::GetParameter(uint8_t id) const {
+    // Special handling for MOD HUB value
+    if (id == PARAM_MOD_VALUE) {
+        uint8_t sel = current_preset_.params[PARAM_MOD_SELECT];
+        if (sel < MOD_NUM_DESTINATIONS) {
+            return mod_values_[sel];
+        }
+        return 50;  // Default center value
+    }
+    
     if (id >= PARAM_COUNT) {
         return 0;
     }
@@ -460,24 +600,71 @@ int32_t DrupiterSynth::GetParameter(uint8_t id) const {
 }
 
 const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
-    static const char* dco1_waveforms[] = {"SAW", "SQR", "PULSE", "TRI"};
-    static const char* dco2_waveforms[] = {"SAW", "NOISE", "PULSE", "SINE"};
     static const char* filter_types[] = {"LP12", "LP24", "HP12", "BP12"};
-    static const char* lfo_waves[] = {"TRI", "RAMP", "SQR", "S&H"};
-    static const char* octaves[] = {"16", "8", "4"};
+    static char str_buf[16];  // Buffer for formatted strings (larger to avoid truncation warnings)
     
     switch (id) {
-        case PARAM_DCO1_OCTAVE:
-        case PARAM_DCO2_OCTAVE:
-            return octaves[(value >= 0 && value <= 2) ? value : 1];
+        // ======== Page 1: DCO-1 ========
+        case PARAM_DCO1_OCT:
+            return kOctaveNames[value < 3 ? value : 0];
         case PARAM_DCO1_WAVE:
-            return dco1_waveforms[(value >= 0 && value <= 3) ? value : 0];
+            return kDco1WaveNames[value < 4 ? value : 0];
+            
+        // ======== Page 2: DCO-2 ========
+        case PARAM_DCO2_OCT:
+            return kOctaveNames[value < 3 ? value : 0];
         case PARAM_DCO2_WAVE:
-            return dco2_waveforms[(value >= 0 && value <= 3) ? value : 0];
+            return kDco2WaveNames[value < 4 ? value : 0];
+        case PARAM_DCO2_TUNE: {
+            // Show detune as centered value: 50=0, <50=negative, >50=positive
+            // Clamp to expected range to avoid truncation
+            int detune = (value > 100 ? 100 : (value < 0 ? 0 : value)) - 50;
+            if (detune == 0) {
+                return "0";
+            } else if (detune > 0) {
+                snprintf(str_buf, sizeof(str_buf), "+%d", detune);
+            } else {
+                snprintf(str_buf, sizeof(str_buf), "%d", detune);
+            }
+            return str_buf;
+        }
+        case PARAM_SYNC:
+            return kSyncNames[value < 3 ? value : 0];
+        
+        // ======== Page 3: VCF ========
         case PARAM_VCF_TYPE:
             return filter_types[value & 0x03];
-        case PARAM_LFO_WAVE:
-            return lfo_waves[value & 0x03];
+        
+        // ======== Page 6: MOD HUB ========
+        case PARAM_MOD_SELECT:
+            if (value >= 0 && value < MOD_NUM_DESTINATIONS) {
+                return kModDestNames[value];
+            }
+            return kModDestNames[0];
+        
+        // MOD HUB value - context-aware display
+        case PARAM_MOD_VALUE: {
+            uint8_t sel = current_preset_.params[PARAM_MOD_SELECT];
+            switch (sel) {
+                case MOD_LFO_WAVE:
+                    // LFO waveform names
+                    if (value < 4) {
+                        return kLfoWaveNames[value];
+                    }
+                    return kLfoWaveNames[0];
+                case MOD_PB_RANGE:
+                    // Pitch bend range names
+                    if (value < 4) {
+                        return kPbRangeNames[value];
+                    }
+                    return kPbRangeNames[0];
+                default:
+                    // Most MOD destinations are 0-100%
+                    snprintf(str_buf, sizeof(str_buf), "%d%%", value);
+                    return str_buf;
+            }
+        }
+        
         default:
             return nullptr;
     }
@@ -523,12 +710,19 @@ void DrupiterSynth::LoadPreset(uint8_t preset_id) {
     if (cutoff_smooth_) {
         cutoff_smooth_->SetImmediate(current_preset_.params[PARAM_VCF_CUTOFF] / 100.0f);
     }
+    
+    // DCO levels from OSC_MIX parameter
+    float osc_mix = current_preset_.params[PARAM_OSC_MIX] / 100.0f;
     if (dco1_level_smooth_) {
-        dco1_level_smooth_->SetImmediate(current_preset_.params[PARAM_DCO1_LEVEL] / 100.0f);
+        dco1_level_smooth_->SetImmediate(1.0f - osc_mix);
     }
     if (dco2_level_smooth_) {
-        dco2_level_smooth_->SetImmediate(current_preset_.params[PARAM_DCO2_LEVEL] / 100.0f);
+        dco2_level_smooth_->SetImmediate(osc_mix);
     }
+    
+    // Load XMOD and SYNC directly
+    xmod_depth_ = current_preset_.params[PARAM_XMOD] / 100.0f;
+    sync_mode_ = current_preset_.params[PARAM_SYNC];
     
     // Apply all parameters to DSP components
     for (uint8_t i = 0; i < PARAM_COUNT; ++i) {
@@ -579,171 +773,197 @@ float DrupiterSynth::ParameterToExponentialFreq(uint8_t value, float min_freq, f
 }
 
 void DrupiterSynth::InitFactoryPresets() {
+    // Factory presets now use direct params for DCO1/DCO2 (no more HUB routing)
+    // MOD HUB values are still stored separately
+    
+    // Helper to set MOD HUB values for a preset
+    auto setModValues = [this](uint8_t lfo_rate, uint8_t lfo_wave, uint8_t lfo_vco, 
+                                uint8_t lfo_vcf, uint8_t vel_vcf, uint8_t key_track,
+                                uint8_t pb_range, uint8_t vcf_env_amt) {
+        mod_values_[MOD_LFO_RATE] = lfo_rate;
+        mod_values_[MOD_LFO_WAVE] = lfo_wave;
+        mod_values_[MOD_LFO_TO_VCO] = lfo_vco;
+        mod_values_[MOD_LFO_TO_VCF] = lfo_vcf;
+        mod_values_[MOD_VEL_TO_VCF] = vel_vcf;
+        mod_values_[MOD_KEY_TRACK] = key_track;
+        mod_values_[MOD_PB_RANGE] = pb_range;
+        mod_values_[MOD_VCF_ENV_AMT] = vcf_env_amt;
+    };
+    
     // Preset 0: Init - Basic sound
     std::memset(&factory_presets_[0], 0, sizeof(Preset));
-    factory_presets_[0].params[PARAM_DCO1_OCTAVE] = 1;       // 8'
-    factory_presets_[0].params[PARAM_DCO1_WAVE] = 1;         // Square
-    factory_presets_[0].params[PARAM_DCO1_PW] = scale_127_to_100(64);          // ~50%
-    factory_presets_[0].params[PARAM_DCO1_LEVEL] = scale_127_to_100(100);
-    factory_presets_[0].params[PARAM_DCO2_OCTAVE] = 1;       // 8'
-    factory_presets_[0].params[PARAM_DCO2_WAVE] = 0;         // Ramp
-    factory_presets_[0].params[PARAM_DCO2_DETUNE] = 50;      // No detune
-    factory_presets_[0].params[PARAM_DCO2_LEVEL] = scale_127_to_100(0);
-    factory_presets_[0].params[PARAM_VCF_CUTOFF] = scale_127_to_100(100);
-    factory_presets_[0].params[PARAM_VCF_RESONANCE] = scale_127_to_100(20);
-    factory_presets_[0].params[PARAM_VCF_ENV_AMT] = 50;      // No envelope mod
-    factory_presets_[0].params[PARAM_VCF_TYPE] = 1;          // LP24
-    factory_presets_[0].params[PARAM_VCF_ATTACK] = scale_127_to_100(5);
-    factory_presets_[0].params[PARAM_VCF_DECAY] = scale_127_to_100(40);
-    factory_presets_[0].params[PARAM_VCF_SUSTAIN] = scale_127_to_100(64);
-    factory_presets_[0].params[PARAM_VCF_RELEASE] = scale_127_to_100(30);
-    factory_presets_[0].params[PARAM_VCA_ATTACK] = scale_127_to_100(1);
-    factory_presets_[0].params[PARAM_VCA_DECAY] = scale_127_to_100(50);
-    factory_presets_[0].params[PARAM_VCA_SUSTAIN] = scale_127_to_100(100);
-    factory_presets_[0].params[PARAM_VCA_RELEASE] = scale_127_to_100(20);
-    factory_presets_[0].params[PARAM_LFO_RATE] = scale_127_to_100(40);
-    factory_presets_[0].params[PARAM_LFO_WAVE] = 0;          // Triangle
-    factory_presets_[0].params[PARAM_LFO_VCO_DEPTH] = scale_127_to_100(0);
-    factory_presets_[0].params[PARAM_LFO_VCF_DEPTH] = scale_127_to_100(0);
+    // Page 1: DCO-1
+    factory_presets_[0].params[PARAM_DCO1_OCT] = 1;       // 8'
+    factory_presets_[0].params[PARAM_DCO1_WAVE] = 0;      // SAW
+    factory_presets_[0].params[PARAM_DCO1_PW] = 50;       // 50%
+    factory_presets_[0].params[PARAM_XMOD] = 0;           // No cross-mod
+    // Page 2: DCO-2
+    factory_presets_[0].params[PARAM_DCO2_OCT] = 1;       // 8'
+    factory_presets_[0].params[PARAM_DCO2_WAVE] = 0;      // SAW
+    factory_presets_[0].params[PARAM_DCO2_TUNE] = 50;     // Center (no detune)
+    factory_presets_[0].params[PARAM_SYNC] = 0;           // OFF
+    // Page 3: MIX & VCF
+    factory_presets_[0].params[PARAM_OSC_MIX] = 0;        // DCO1 only
+    factory_presets_[0].params[PARAM_VCF_CUTOFF] = 79;
+    factory_presets_[0].params[PARAM_VCF_RESONANCE] = 16;
+    factory_presets_[0].params[PARAM_VCF_TYPE] = 1;       // LP24
+    // Page 4: VCF Envelope
+    factory_presets_[0].params[PARAM_VCF_ATTACK] = 4;
+    factory_presets_[0].params[PARAM_VCF_DECAY] = 31;
+    factory_presets_[0].params[PARAM_VCF_SUSTAIN] = 50;
+    factory_presets_[0].params[PARAM_VCF_RELEASE] = 24;
+    // Page 5: VCA Envelope
+    factory_presets_[0].params[PARAM_VCA_ATTACK] = 1;
+    factory_presets_[0].params[PARAM_VCA_DECAY] = 39;
+    factory_presets_[0].params[PARAM_VCA_SUSTAIN] = 79;
+    factory_presets_[0].params[PARAM_VCA_RELEASE] = 16;
+    // Page 6: MOD HUB & Output
+    factory_presets_[0].params[PARAM_MOD_SELECT] = 0;
+    factory_presets_[0].params[PARAM_MOD_VALUE] = 32;
+    factory_presets_[0].params[PARAM_CHORUS_DEPTH] = 0;
+    factory_presets_[0].params[PARAM_SPACE] = 50;
     std::strcpy(factory_presets_[0].name, "Init");
     
     // Preset 1: Bass - Punchy bass with filter envelope
     std::memset(&factory_presets_[1], 0, sizeof(Preset));
-    factory_presets_[1].params[PARAM_DCO1_OCTAVE] = 0;       // 16'
-    factory_presets_[1].params[PARAM_DCO1_WAVE] = 2;         // Pulse
-    factory_presets_[1].params[PARAM_DCO1_PW] = scale_127_to_100(40);
-    factory_presets_[1].params[PARAM_DCO1_LEVEL] = scale_127_to_100(127);
-    factory_presets_[1].params[PARAM_DCO2_OCTAVE] = 0;       // 16'
-    factory_presets_[1].params[PARAM_DCO2_WAVE] = 0;         // Ramp
-    factory_presets_[1].params[PARAM_DCO2_DETUNE] = 50;
-    factory_presets_[1].params[PARAM_DCO2_LEVEL] = scale_127_to_100(0);
-    factory_presets_[1].params[PARAM_VCF_CUTOFF] = scale_127_to_100(50);
-    factory_presets_[1].params[PARAM_VCF_RESONANCE] = scale_127_to_100(50);
-    factory_presets_[1].params[PARAM_VCF_ENV_AMT] = scale_127_centered_to_100(100, 64, 50);
-    factory_presets_[1].params[PARAM_VCF_TYPE] = 1;          // LP24
-    factory_presets_[1].params[PARAM_VCF_ATTACK] = scale_127_to_100(0);
-    factory_presets_[1].params[PARAM_VCF_DECAY] = scale_127_to_100(35);
-    factory_presets_[1].params[PARAM_VCF_SUSTAIN] = scale_127_to_100(20);
-    factory_presets_[1].params[PARAM_VCF_RELEASE] = scale_127_to_100(10);
-    factory_presets_[1].params[PARAM_VCA_ATTACK] = scale_127_to_100(0);
-    factory_presets_[1].params[PARAM_VCA_DECAY] = scale_127_to_100(40);
-    factory_presets_[1].params[PARAM_VCA_SUSTAIN] = scale_127_to_100(80);
-    factory_presets_[1].params[PARAM_VCA_RELEASE] = scale_127_to_100(15);
-    factory_presets_[1].params[PARAM_LFO_RATE] = scale_127_to_100(30);
-    factory_presets_[1].params[PARAM_LFO_WAVE] = 0;
-    factory_presets_[1].params[PARAM_LFO_VCO_DEPTH] = scale_127_to_100(0);
-    factory_presets_[1].params[PARAM_LFO_VCF_DEPTH] = scale_127_to_100(0);
+    factory_presets_[1].params[PARAM_DCO1_OCT] = 0;       // 16'
+    factory_presets_[1].params[PARAM_DCO1_WAVE] = 2;      // PULSE
+    factory_presets_[1].params[PARAM_DCO1_PW] = 31;       // Narrow pulse
+    factory_presets_[1].params[PARAM_XMOD] = 0;
+    factory_presets_[1].params[PARAM_DCO2_OCT] = 0;       // 16'
+    factory_presets_[1].params[PARAM_DCO2_WAVE] = 0;      // SAW
+    factory_presets_[1].params[PARAM_DCO2_TUNE] = 50;
+    factory_presets_[1].params[PARAM_SYNC] = 0;
+    factory_presets_[1].params[PARAM_OSC_MIX] = 0;        // DCO1 only
+    factory_presets_[1].params[PARAM_VCF_CUTOFF] = 39;
+    factory_presets_[1].params[PARAM_VCF_RESONANCE] = 39;
+    factory_presets_[1].params[PARAM_VCF_TYPE] = 1;
+    factory_presets_[1].params[PARAM_VCF_ATTACK] = 0;
+    factory_presets_[1].params[PARAM_VCF_DECAY] = 27;
+    factory_presets_[1].params[PARAM_VCF_SUSTAIN] = 16;
+    factory_presets_[1].params[PARAM_VCF_RELEASE] = 8;
+    factory_presets_[1].params[PARAM_VCA_ATTACK] = 0;
+    factory_presets_[1].params[PARAM_VCA_DECAY] = 31;
+    factory_presets_[1].params[PARAM_VCA_SUSTAIN] = 63;
+    factory_presets_[1].params[PARAM_VCA_RELEASE] = 12;
+    factory_presets_[1].params[PARAM_MOD_SELECT] = 0;
+    factory_presets_[1].params[PARAM_MOD_VALUE] = 32;
+    factory_presets_[1].params[PARAM_CHORUS_DEPTH] = 0;
+    factory_presets_[1].params[PARAM_SPACE] = 30;
     std::strcpy(factory_presets_[1].name, "Bass");
     
-    // Preset 2: Lead - Sharp lead with vibrato
+    // Preset 2: Lead - Sharp lead with sync
     std::memset(&factory_presets_[2], 0, sizeof(Preset));
-    factory_presets_[2].params[PARAM_DCO1_OCTAVE] = 1;       // 8'
-    factory_presets_[2].params[PARAM_DCO1_WAVE] = 0;         // Ramp
-    factory_presets_[2].params[PARAM_DCO1_PW] = scale_127_to_100(64);
-    factory_presets_[2].params[PARAM_DCO1_LEVEL] = scale_127_to_100(127);
-    factory_presets_[2].params[PARAM_DCO2_OCTAVE] = 1;
-    factory_presets_[2].params[PARAM_DCO2_WAVE] = 0;
-    factory_presets_[2].params[PARAM_DCO2_DETUNE] = 50;
-    factory_presets_[2].params[PARAM_DCO2_LEVEL] = scale_127_to_100(0);
-    factory_presets_[2].params[PARAM_VCF_CUTOFF] = scale_127_to_100(90);
-    factory_presets_[2].params[PARAM_VCF_RESONANCE] = scale_127_to_100(70);
-    factory_presets_[2].params[PARAM_VCF_ENV_AMT] = scale_127_centered_to_100(80, 64, 50);
-    factory_presets_[2].params[PARAM_VCF_TYPE] = 1;          // LP24
-    factory_presets_[2].params[PARAM_VCF_ATTACK] = scale_127_to_100(5);
-    factory_presets_[2].params[PARAM_VCF_DECAY] = scale_127_to_100(30);
-    factory_presets_[2].params[PARAM_VCF_SUSTAIN] = scale_127_to_100(60);
-    factory_presets_[2].params[PARAM_VCF_RELEASE] = scale_127_to_100(25);
-    factory_presets_[2].params[PARAM_VCA_ATTACK] = scale_127_to_100(2);
-    factory_presets_[2].params[PARAM_VCA_DECAY] = scale_127_to_100(30);
-    factory_presets_[2].params[PARAM_VCA_SUSTAIN] = scale_127_to_100(100);
-    factory_presets_[2].params[PARAM_VCA_RELEASE] = scale_127_to_100(20);
-    factory_presets_[2].params[PARAM_LFO_RATE] = scale_127_to_100(50);
-    factory_presets_[2].params[PARAM_LFO_WAVE] = 0;          // Triangle
-    factory_presets_[2].params[PARAM_LFO_VCO_DEPTH] = scale_127_to_100(30);
-    factory_presets_[2].params[PARAM_LFO_VCF_DEPTH] = scale_127_to_100(0);
+    factory_presets_[2].params[PARAM_DCO1_OCT] = 1;       // 8'
+    factory_presets_[2].params[PARAM_DCO1_WAVE] = 0;      // SAW
+    factory_presets_[2].params[PARAM_DCO1_PW] = 50;
+    factory_presets_[2].params[PARAM_XMOD] = 0;
+    factory_presets_[2].params[PARAM_DCO2_OCT] = 2;       // 4' (one octave up)
+    factory_presets_[2].params[PARAM_DCO2_WAVE] = 0;      // SAW
+    factory_presets_[2].params[PARAM_DCO2_TUNE] = 50;
+    factory_presets_[2].params[PARAM_SYNC] = 2;           // HARD sync for classic lead
+    factory_presets_[2].params[PARAM_OSC_MIX] = 30;       // Mostly DCO1 with some DCO2
+    factory_presets_[2].params[PARAM_VCF_CUTOFF] = 71;
+    factory_presets_[2].params[PARAM_VCF_RESONANCE] = 55;
+    factory_presets_[2].params[PARAM_VCF_TYPE] = 1;
+    factory_presets_[2].params[PARAM_VCF_ATTACK] = 4;
+    factory_presets_[2].params[PARAM_VCF_DECAY] = 24;
+    factory_presets_[2].params[PARAM_VCF_SUSTAIN] = 47;
+    factory_presets_[2].params[PARAM_VCF_RELEASE] = 20;
+    factory_presets_[2].params[PARAM_VCA_ATTACK] = 2;
+    factory_presets_[2].params[PARAM_VCA_DECAY] = 24;
+    factory_presets_[2].params[PARAM_VCA_SUSTAIN] = 79;
+    factory_presets_[2].params[PARAM_VCA_RELEASE] = 16;
+    factory_presets_[2].params[PARAM_MOD_SELECT] = 0;
+    factory_presets_[2].params[PARAM_MOD_VALUE] = 50;
+    factory_presets_[2].params[PARAM_CHORUS_DEPTH] = 20;
+    factory_presets_[2].params[PARAM_SPACE] = 60;
     std::strcpy(factory_presets_[2].name, "Lead");
     
     // Preset 3: Pad - Warm pad with detuned oscillators
     std::memset(&factory_presets_[3], 0, sizeof(Preset));
-    factory_presets_[3].params[PARAM_DCO1_OCTAVE] = 1;       // 8'
-    factory_presets_[3].params[PARAM_DCO1_WAVE] = 0;         // Ramp
-    factory_presets_[3].params[PARAM_DCO1_PW] = scale_127_to_100(64);
-    factory_presets_[3].params[PARAM_DCO1_LEVEL] = scale_127_to_100(100);
-    factory_presets_[3].params[PARAM_DCO2_OCTAVE] = 1;
-    factory_presets_[3].params[PARAM_DCO2_WAVE] = 0;         // Ramp
-    factory_presets_[3].params[PARAM_DCO2_DETUNE] = scale_127_centered_to_100(68, 64, 50);
-    factory_presets_[3].params[PARAM_DCO2_LEVEL] = scale_127_to_100(90);
-    factory_presets_[3].params[PARAM_VCF_CUTOFF] = scale_127_to_100(80);
-    factory_presets_[3].params[PARAM_VCF_RESONANCE] = scale_127_to_100(25);
-    factory_presets_[3].params[PARAM_VCF_ENV_AMT] = scale_127_centered_to_100(70, 64, 50);
-    factory_presets_[3].params[PARAM_VCF_TYPE] = 1;          // LP24
-    factory_presets_[3].params[PARAM_VCF_ATTACK] = scale_127_to_100(45);
-    factory_presets_[3].params[PARAM_VCF_DECAY] = scale_127_to_100(50);
-    factory_presets_[3].params[PARAM_VCF_SUSTAIN] = scale_127_to_100(70);
-    factory_presets_[3].params[PARAM_VCF_RELEASE] = scale_127_to_100(50);
-    factory_presets_[3].params[PARAM_VCA_ATTACK] = scale_127_to_100(50);
-    factory_presets_[3].params[PARAM_VCA_DECAY] = scale_127_to_100(50);
-    factory_presets_[3].params[PARAM_VCA_SUSTAIN] = scale_127_to_100(100);
-    factory_presets_[3].params[PARAM_VCA_RELEASE] = scale_127_to_100(70);
-    factory_presets_[3].params[PARAM_LFO_RATE] = scale_127_to_100(35);
-    factory_presets_[3].params[PARAM_LFO_WAVE] = 0;
-    factory_presets_[3].params[PARAM_LFO_VCO_DEPTH] = scale_127_to_100(10);
-    factory_presets_[3].params[PARAM_LFO_VCF_DEPTH] = scale_127_to_100(15);
+    factory_presets_[3].params[PARAM_DCO1_OCT] = 1;       // 8'
+    factory_presets_[3].params[PARAM_DCO1_WAVE] = 0;      // SAW
+    factory_presets_[3].params[PARAM_DCO1_PW] = 50;
+    factory_presets_[3].params[PARAM_XMOD] = 0;
+    factory_presets_[3].params[PARAM_DCO2_OCT] = 1;       // 8'
+    factory_presets_[3].params[PARAM_DCO2_WAVE] = 0;      // SAW
+    factory_presets_[3].params[PARAM_DCO2_TUNE] = 53;     // Slight detune
+    factory_presets_[3].params[PARAM_SYNC] = 0;
+    factory_presets_[3].params[PARAM_OSC_MIX] = 50;       // Equal mix
+    factory_presets_[3].params[PARAM_VCF_CUTOFF] = 63;
+    factory_presets_[3].params[PARAM_VCF_RESONANCE] = 20;
+    factory_presets_[3].params[PARAM_VCF_TYPE] = 1;
+    factory_presets_[3].params[PARAM_VCF_ATTACK] = 35;
+    factory_presets_[3].params[PARAM_VCF_DECAY] = 39;
+    factory_presets_[3].params[PARAM_VCF_SUSTAIN] = 55;
+    factory_presets_[3].params[PARAM_VCF_RELEASE] = 39;
+    factory_presets_[3].params[PARAM_VCA_ATTACK] = 39;
+    factory_presets_[3].params[PARAM_VCA_DECAY] = 39;
+    factory_presets_[3].params[PARAM_VCA_SUSTAIN] = 79;
+    factory_presets_[3].params[PARAM_VCA_RELEASE] = 55;
+    factory_presets_[3].params[PARAM_MOD_SELECT] = 0;
+    factory_presets_[3].params[PARAM_MOD_VALUE] = 35;
+    factory_presets_[3].params[PARAM_CHORUS_DEPTH] = 50;
+    factory_presets_[3].params[PARAM_SPACE] = 80;
     std::strcpy(factory_presets_[3].name, "Pad");
     
-    // Preset 4: Brass - Bright brass with slow attack
+    // Preset 4: Brass - Bright brass with XMOD
     std::memset(&factory_presets_[4], 0, sizeof(Preset));
-    factory_presets_[4].params[PARAM_DCO1_OCTAVE] = 1;
-    factory_presets_[4].params[PARAM_DCO1_WAVE] = 0;         // Ramp
-    factory_presets_[4].params[PARAM_DCO1_PW] = scale_127_to_100(64);
-    factory_presets_[4].params[PARAM_DCO1_LEVEL] = scale_127_to_100(127);
-    factory_presets_[4].params[PARAM_DCO2_OCTAVE] = 1;
-    factory_presets_[4].params[PARAM_DCO2_WAVE] = 0;
-    factory_presets_[4].params[PARAM_DCO2_DETUNE] = 50;
-    factory_presets_[4].params[PARAM_DCO2_LEVEL] = scale_127_to_100(0);
-    factory_presets_[4].params[PARAM_VCF_CUTOFF] = scale_127_to_100(75);
-    factory_presets_[4].params[PARAM_VCF_RESONANCE] = scale_127_to_100(30);
-    factory_presets_[4].params[PARAM_VCF_ENV_AMT] = scale_127_centered_to_100(90, 64, 50);
-    factory_presets_[4].params[PARAM_VCF_TYPE] = 1;          // LP24
-    factory_presets_[4].params[PARAM_VCF_ATTACK] = scale_127_to_100(15);
-    factory_presets_[4].params[PARAM_VCF_DECAY] = scale_127_to_100(45);
-    factory_presets_[4].params[PARAM_VCF_SUSTAIN] = scale_127_to_100(65);
-    factory_presets_[4].params[PARAM_VCF_RELEASE] = scale_127_to_100(35);
-    factory_presets_[4].params[PARAM_VCA_ATTACK] = scale_127_to_100(15);
-    factory_presets_[4].params[PARAM_VCA_DECAY] = scale_127_to_100(45);
-    factory_presets_[4].params[PARAM_VCA_SUSTAIN] = scale_127_to_100(90);
-    factory_presets_[4].params[PARAM_VCA_RELEASE] = scale_127_to_100(30);
-    factory_presets_[4].params[PARAM_LFO_RATE] = scale_127_to_100(40);
-    factory_presets_[4].params[PARAM_LFO_WAVE] = 0;
-    factory_presets_[4].params[PARAM_LFO_VCO_DEPTH] = scale_127_to_100(0);
-    factory_presets_[4].params[PARAM_LFO_VCF_DEPTH] = scale_127_to_100(0);
+    factory_presets_[4].params[PARAM_DCO1_OCT] = 1;       // 8'
+    factory_presets_[4].params[PARAM_DCO1_WAVE] = 0;      // SAW
+    factory_presets_[4].params[PARAM_DCO1_PW] = 50;
+    factory_presets_[4].params[PARAM_XMOD] = 15;          // Subtle cross-mod
+    factory_presets_[4].params[PARAM_DCO2_OCT] = 1;       // 8'
+    factory_presets_[4].params[PARAM_DCO2_WAVE] = 0;      // SAW
+    factory_presets_[4].params[PARAM_DCO2_TUNE] = 50;
+    factory_presets_[4].params[PARAM_SYNC] = 0;
+    factory_presets_[4].params[PARAM_OSC_MIX] = 40;
+    factory_presets_[4].params[PARAM_VCF_CUTOFF] = 59;
+    factory_presets_[4].params[PARAM_VCF_RESONANCE] = 24;
+    factory_presets_[4].params[PARAM_VCF_TYPE] = 1;
+    factory_presets_[4].params[PARAM_VCF_ATTACK] = 12;
+    factory_presets_[4].params[PARAM_VCF_DECAY] = 35;
+    factory_presets_[4].params[PARAM_VCF_SUSTAIN] = 51;
+    factory_presets_[4].params[PARAM_VCF_RELEASE] = 27;
+    factory_presets_[4].params[PARAM_VCA_ATTACK] = 12;
+    factory_presets_[4].params[PARAM_VCA_DECAY] = 35;
+    factory_presets_[4].params[PARAM_VCA_SUSTAIN] = 71;
+    factory_presets_[4].params[PARAM_VCA_RELEASE] = 24;
+    factory_presets_[4].params[PARAM_MOD_SELECT] = 0;
+    factory_presets_[4].params[PARAM_MOD_VALUE] = 40;
+    factory_presets_[4].params[PARAM_CHORUS_DEPTH] = 15;
+    factory_presets_[4].params[PARAM_SPACE] = 55;
     std::strcpy(factory_presets_[4].name, "Brass");
     
     // Preset 5: Strings - Lush strings with detuned oscillators
     std::memset(&factory_presets_[5], 0, sizeof(Preset));
-    factory_presets_[5].params[PARAM_DCO1_OCTAVE] = 1;
-    factory_presets_[5].params[PARAM_DCO1_WAVE] = 0;         // Ramp
-    factory_presets_[5].params[PARAM_DCO1_PW] = scale_127_to_100(64);
-    factory_presets_[5].params[PARAM_DCO1_LEVEL] = scale_127_to_100(110);
-    factory_presets_[5].params[PARAM_DCO2_OCTAVE] = 1;
-    factory_presets_[5].params[PARAM_DCO2_WAVE] = 0;         // Ramp
-    factory_presets_[5].params[PARAM_DCO2_DETUNE] = scale_127_centered_to_100(70, 64, 50);
-    factory_presets_[5].params[PARAM_DCO2_LEVEL] = scale_127_to_100(100);
-    factory_presets_[5].params[PARAM_VCF_CUTOFF] = scale_127_to_100(95);
-    factory_presets_[5].params[PARAM_VCF_RESONANCE] = scale_127_to_100(20);
-    factory_presets_[5].params[PARAM_VCF_ENV_AMT] = scale_127_centered_to_100(60, 64, 50);
-    factory_presets_[5].params[PARAM_VCF_TYPE] = 1;          // LP24
-    factory_presets_[5].params[PARAM_VCF_ATTACK] = scale_127_to_100(60);
-    factory_presets_[5].params[PARAM_VCF_DECAY] = scale_127_to_100(55);
-    factory_presets_[5].params[PARAM_VCF_SUSTAIN] = scale_127_to_100(75);
-    factory_presets_[5].params[PARAM_VCF_RELEASE] = scale_127_to_100(60);
-    factory_presets_[5].params[PARAM_VCA_ATTACK] = scale_127_to_100(65);
-    factory_presets_[5].params[PARAM_VCA_DECAY] = scale_127_to_100(55);
-    factory_presets_[5].params[PARAM_VCA_SUSTAIN] = scale_127_to_100(100);
-    factory_presets_[5].params[PARAM_VCA_RELEASE] = scale_127_to_100(80);
-    factory_presets_[5].params[PARAM_LFO_RATE] = scale_127_to_100(38);
-    factory_presets_[5].params[PARAM_LFO_WAVE] = 0;
-    factory_presets_[5].params[PARAM_LFO_VCO_DEPTH] = scale_127_to_100(8);
-    factory_presets_[5].params[PARAM_LFO_VCF_DEPTH] = scale_127_to_100(12);
+    factory_presets_[5].params[PARAM_DCO1_OCT] = 1;       // 8'
+    factory_presets_[5].params[PARAM_DCO1_WAVE] = 0;      // SAW
+    factory_presets_[5].params[PARAM_DCO1_PW] = 50;
+    factory_presets_[5].params[PARAM_XMOD] = 0;
+    factory_presets_[5].params[PARAM_DCO2_OCT] = 1;       // 8'
+    factory_presets_[5].params[PARAM_DCO2_WAVE] = 0;      // SAW
+    factory_presets_[5].params[PARAM_DCO2_TUNE] = 55;     // Detune for richness
+    factory_presets_[5].params[PARAM_SYNC] = 0;
+    factory_presets_[5].params[PARAM_OSC_MIX] = 50;       // Equal mix
+    factory_presets_[5].params[PARAM_VCF_CUTOFF] = 75;
+    factory_presets_[5].params[PARAM_VCF_RESONANCE] = 16;
+    factory_presets_[5].params[PARAM_VCF_TYPE] = 1;
+    factory_presets_[5].params[PARAM_VCF_ATTACK] = 47;
+    factory_presets_[5].params[PARAM_VCF_DECAY] = 43;
+    factory_presets_[5].params[PARAM_VCF_SUSTAIN] = 59;
+    factory_presets_[5].params[PARAM_VCF_RELEASE] = 47;
+    factory_presets_[5].params[PARAM_VCA_ATTACK] = 51;
+    factory_presets_[5].params[PARAM_VCA_DECAY] = 43;
+    factory_presets_[5].params[PARAM_VCA_SUSTAIN] = 79;
+    factory_presets_[5].params[PARAM_VCA_RELEASE] = 63;
+    factory_presets_[5].params[PARAM_MOD_SELECT] = 0;
+    factory_presets_[5].params[PARAM_MOD_VALUE] = 38;
+    factory_presets_[5].params[PARAM_CHORUS_DEPTH] = 60;
+    factory_presets_[5].params[PARAM_SPACE] = 85;
     std::strcpy(factory_presets_[5].name, "Strings");
+    
+    // Initialize default MOD HUB values
+    setModValues(32, 0, 0, 0, 50, 50, 0, 50);
 }

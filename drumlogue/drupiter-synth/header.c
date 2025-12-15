@@ -33,63 +33,63 @@ const __unit_header unit_header_t unit_header = {
         // Format: min, max, center, default, type, fractional, frac. type, <reserved>, name
 
         // ==================== Page 1: DCO-1 ====================
-        // DCO-1 Octave: 16', 8', 4'
-        {0, 2, 1, 1, k_unit_param_type_strings, 0, 0, 0, {"D1 OCT"}},
-        // DCO-1 Waveform (JP-8 VCO1): Saw, Square, Pulse, Triangle
-        {0, 3, 0, 1, k_unit_param_type_strings, 0, 0, 0, {"D1 WAVE"}},
-        // DCO-1 Pulse Width: 0-100% (only affects PULSE waveform)
-        {0, 100, 0, 50, k_unit_param_type_percent, 0, 0, 0, {"D1 PW"}},
-        // DCO-1 Level: 0-100%
-        {0, 100, 0, 79, k_unit_param_type_percent, 0, 0, 0, {"D1 LEVEL"}},
+        // DCO-1 Range: Octave (0=16', 1=8', 2=4')
+        {0, 2, 0, 1, k_unit_param_type_strings, 0, 0, 0, {"D1 OCT"}},
+        // DCO-1 Waveform: SAW/SQR/PULSE/TRI
+        {0, 3, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"D1 WAVE"}},
+        // DCO-1 Pulse Width: 0-100%
+        {0, 100, 50, 50, k_unit_param_type_percent, 0, 0, 0, {"D1 PW"}},
+        // DCO-1 Cross Modulation: DCO2->DCO1 FM depth (Jupiter-8 feature)
+        {0, 100, 0, 0, k_unit_param_type_percent, 0, 0, 0, {"XMOD"}},
 
         // ==================== Page 2: DCO-2 ====================
-        // DCO-2 Octave: 16', 8', 4'
-        {0, 2, 1, 1, k_unit_param_type_strings, 0, 0, 0, {"D2 OCT"}},
-        // DCO-2 Waveform (JP-8 VCO2): Saw, Noise, Pulse, Sine
+        // DCO-2 Range: Octave (0=16', 1=8', 2=4')
+        {0, 2, 0, 1, k_unit_param_type_strings, 0, 0, 0, {"D2 OCT"}},
+        // DCO-2 Waveform: SAW/NOISE/PULSE/SINE
         {0, 3, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"D2 WAVE"}},
-        // DCO-2 Detune: 0-100 (50 = center)
-        {0, 100, 50, 50, k_unit_param_type_percent, 0, 0, 0, {"D2 TUNE"}},
-        // DCO-2 Level: 0-100%
-        {0, 100, 0, 79, k_unit_param_type_percent, 0, 0, 0, {"D2 LEVEL"}},
+        // DCO-2 Detune: -50 to +50 cents (50=center)
+        {0, 100, 50, 50, k_unit_param_type_strings, 0, 0, 0, {"D2 TUNE"}},
+        // DCO-2 Sync: OFF/SOFT/HARD (Jupiter-8 sync to DCO1)
+        {0, 2, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"SYNC"}},
 
-        // ==================== Page 3: VCF ====================
+        // ==================== Page 3: MIX & VCF ====================
+        // Oscillator Mix: 0=D1 only, 50=equal, 100=D2 only
+        {0, 100, 50, 79, k_unit_param_type_percent, 0, 0, 0, {"OSC MIX"}},
         // VCF Cutoff: Filter cutoff frequency
         {0, 100, 0, 79, k_unit_param_type_percent, 0, 0, 0, {"CUTOFF"}},
         // VCF Resonance: Filter resonance/Q
         {0, 100, 0, 16, k_unit_param_type_percent, 0, 0, 0, {"RESO"}},
-        // VCF Envelope Amount: 0-100 (50 = center / bipolar)
-        {0, 100, 50, 63, k_unit_param_type_percent, 0, 0, 0, {"ENV AMT"}},
         // VCF Type: LP12/LP24/HP12/BP12
         {0, 3, 0, 1, k_unit_param_type_strings, 0, 0, 0, {"VCF TYP"}},
 
         // ==================== Page 4: VCF Envelope ====================
-        // Filter Envelope Attack: 0-127 (0 = instant, 127 = slow)
+        // Filter Envelope Attack
         {0, 100, 0, 4, k_unit_param_type_percent, 0, 0, 0, {"F.ATK"}},
-        // Filter Envelope Decay: 0-127
+        // Filter Envelope Decay
         {0, 100, 0, 31, k_unit_param_type_percent, 0, 0, 0, {"F.DCY"}},
-        // Filter Envelope Sustain: 0-127
+        // Filter Envelope Sustain
         {0, 100, 0, 50, k_unit_param_type_percent, 0, 0, 0, {"F.SUS"}},
-        // Filter Envelope Release: 0-127
+        // Filter Envelope Release
         {0, 100, 0, 24, k_unit_param_type_percent, 0, 0, 0, {"F.REL"}},
 
         // ==================== Page 5: VCA Envelope ====================
-        // Amp Envelope Attack: 0-127
+        // Amp Envelope Attack
         {0, 100, 0, 1, k_unit_param_type_percent, 0, 0, 0, {"A.ATK"}},
-        // Amp Envelope Decay: 0-127
+        // Amp Envelope Decay
         {0, 100, 0, 39, k_unit_param_type_percent, 0, 0, 0, {"A.DCY"}},
-        // Amp Envelope Sustain: 0-127
+        // Amp Envelope Sustain
         {0, 100, 0, 79, k_unit_param_type_percent, 0, 0, 0, {"A.SUS"}},
-        // Amp Envelope Release: 0-127
+        // Amp Envelope Release
         {0, 100, 0, 16, k_unit_param_type_percent, 0, 0, 0, {"A.REL"}},
 
-        // ==================== Page 6: LFO & Modulation ====================
-        // LFO Rate: 0-127 (0.1Hz to ~50Hz)
-        {0, 100, 0, 32, k_unit_param_type_percent, 0, 0, 0, {"LFO RATE"}},
-        // LFO Waveform: Triangle, Ramp, Square, S&H
-        {0, 3, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"LFO WAV"}},
-        // LFO to VCO Depth: 0-127 (vibrato amount)
-        {0, 100, 0, 0, k_unit_param_type_percent, 0, 0, 0, {"LFO>VCO"}},
-        // LFO to VCF Depth: 0-127 (filter modulation)
-        {0, 100, 0, 0, k_unit_param_type_percent, 0, 0, 0, {"LFO>VCF"}},
+        // ==================== Page 6: MOD HUB & Output ====================
+        // MOD SELECT: Choose modulation destination (0-7)
+        {0, 7, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"MOD SEL"}},
+        // MOD VALUE: Value for selected destination (strings for context-aware display)
+        {0, 100, 50, 50, k_unit_param_type_strings, 0, 0, 0, {"MOD VAL"}},
+        // CHORUS DEPTH: Chorus effect depth (0=off, 100=deep)
+        {0, 100, 0, 0, k_unit_param_type_percent, 0, 0, 0, {"CHORUS"}},
+        // SPACE: Stereo width (0=mono, 50=normal, 100=wide)
+        {0, 100, 50, 50, k_unit_param_type_percent, 0, 0, 0, {"SPACE"}},
     }
 };

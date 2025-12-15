@@ -20,6 +20,7 @@
 // Common DSP utilities (includes NEON helpers when USE_NEON defined)
 #define NEON_DSP_NS drupiter
 #include "../common/neon_dsp.h"
+#include "../common/stereo_widener.h"
 
 // Maximum frames per buffer (drumlogue typically uses 64)
 static constexpr uint32_t kMaxFrames = 64;
@@ -32,6 +33,78 @@ namespace dsp {
     class JupiterLFO;
     class SmoothedValue;
 }
+
+// ============================================================================
+// DCO Waveform and Option Names
+// ============================================================================
+
+// DCO1 waveform names
+static const char* const kDco1WaveNames[] = {
+    "SAW", "SQR", "PUL", "TRI"
+};
+
+// DCO2 waveform names
+static const char* const kDco2WaveNames[] = {
+    "SAW", "NSE", "PUL", "SIN"
+};
+
+// Octave names
+static const char* const kOctaveNames[] = {
+    "16'", "8'", "4'"
+};
+
+// Sync mode names
+static const char* const kSyncNames[] = {
+    "OFF", "SOFT", "HARD"
+};
+
+// ============================================================================
+// MOD HUB - Jupiter-8 style modulation routing
+// ============================================================================
+
+/**
+ * @brief MOD HUB destinations (selected via MOD_SELECT parameter)
+ * 
+ * All use 0-100 range. Bipolar params treat 50 as center (no effect).
+ */
+enum ModDestination {
+    MOD_LFO_RATE = 0,      // 0-100: LFO speed (0.1Hz to 20Hz)
+    MOD_LFO_WAVE,          // 0-3: LFO waveform (TRI/RAMP/SQR/S&H)
+    MOD_LFO_TO_VCO,        // 0-100: LFO to pitch depth
+    MOD_LFO_TO_VCF,        // 0-100: LFO to filter depth
+    MOD_VEL_TO_VCF,        // 0-100: Velocity to filter cutoff
+    MOD_KEY_TRACK,         // 0-100: Filter keyboard tracking (50=50%)
+    MOD_PB_RANGE,          // 0-3: Pitch bend range (2/7/12/24 semitones)
+    MOD_VCF_ENV_AMT,       // 0-100: VCF envelope amount (50=0, bipolar)
+    MOD_NUM_DESTINATIONS
+};
+
+// MOD HUB destination names (7 chars max for display)
+static const char* const kModDestNames[] = {
+    "LFO SPD",   // 0: LFO Rate
+    "LFO WAV",   // 1: LFO Waveform
+    "LFO>VCO",   // 2: LFO to VCO depth
+    "LFO>VCF",   // 3: LFO to VCF depth
+    "VEL>VCF",   // 4: Velocity to VCF
+    "KEYTRK",    // 5: Filter Key Tracking
+    "PB RNG",    // 6: Pitch Bend Range
+    "VCF ENV"    // 7: VCF Envelope Amount
+};
+
+// LFO waveform names
+static const char* const kLfoWaveNames[] = {
+    "TRI", "RAMP", "SQR", "S&H"
+};
+
+// Pitch bend range names and values
+static const char* const kPbRangeNames[] = {
+    "+/-2", "+/-7", "+/-12", "+/-24"
+};
+static const float kPbSemitones[] = {2.0f, 7.0f, 12.0f, 24.0f};
+
+// ============================================================================
+// DrupiterSynth Class
+// ============================================================================
 
 /**
  * @brief Main Drupiter synthesizer class
@@ -50,21 +123,21 @@ public:
      */
     enum ParamId {
         // Page 1: DCO-1
-        PARAM_DCO1_OCTAVE = 0,
-        PARAM_DCO1_WAVE,
-        PARAM_DCO1_PW,
-        PARAM_DCO1_LEVEL,
+        PARAM_DCO1_OCT = 0,      // 0-2: Octave (16', 8', 4')
+        PARAM_DCO1_WAVE,         // 0-3: Waveform
+        PARAM_DCO1_PW,           // 0-100: Pulse width
+        PARAM_XMOD,              // 0-100: Cross-mod DCO2->DCO1
         
         // Page 2: DCO-2
-        PARAM_DCO2_OCTAVE,
-        PARAM_DCO2_WAVE,
-        PARAM_DCO2_DETUNE,
-        PARAM_DCO2_LEVEL,
+        PARAM_DCO2_OCT,          // 0-2: Octave (16', 8', 4')
+        PARAM_DCO2_WAVE,         // 0-3: Waveform
+        PARAM_DCO2_TUNE,         // 0-100: Detune (50=center)
+        PARAM_SYNC,              // 0-2: OFF/SOFT/HARD
         
-        // Page 3: VCF
+        // Page 3: MIX & VCF
+        PARAM_OSC_MIX,           // 0-100: Oscillator mix
         PARAM_VCF_CUTOFF,
         PARAM_VCF_RESONANCE,
-        PARAM_VCF_ENV_AMT,
         PARAM_VCF_TYPE,
         
         // Page 4: VCF Envelope
@@ -79,14 +152,11 @@ public:
         PARAM_VCA_SUSTAIN,
         PARAM_VCA_RELEASE,
         
-        // Page 6: LFO & Modulation
-        PARAM_LFO_RATE = 20,
-        PARAM_LFO_WAVE,
-        PARAM_LFO_VCO_DEPTH,
-        PARAM_LFO_VCF_DEPTH,  // LFO to VCF cutoff modulation
-        
-        // Note: Removed PARAM_XMOD_DEPTH to stay at 24 params
-        // Xmod is now always active when DCO2 level > 0
+        // Page 6: MOD HUB & Output
+        PARAM_MOD_SELECT,        // Selects which mod destination to edit
+        PARAM_MOD_VALUE,         // Value for selected mod destination
+        PARAM_CHORUS_DEPTH,      // Chorus effect depth
+        PARAM_SPACE,             // Stereo width
         
         PARAM_COUNT = 24
     };
@@ -215,6 +285,14 @@ private:
     Preset current_preset_;
     Preset factory_presets_[6];
     
+    // Jupiter-8 specific oscillator controls
+    uint8_t sync_mode_;            // 0=OFF, 1=SOFT, 2=HARD
+    float xmod_depth_;             // Cross-mod depth 0-1
+    
+    // MOD HUB values (0-100 range, stored separately from preset params)
+    uint8_t mod_values_[MOD_NUM_DESTINATIONS];
+    mutable char mod_value_str_[16];  // Buffer for GetParameterStr display
+    
     // Internal audio buffers (avoid dynamic allocation)
     float dco1_out_;
     float dco2_out_;
@@ -229,6 +307,9 @@ private:
     alignas(16) float mix_buffer_[kMaxFrames];
     alignas(16) float left_buffer_[kMaxFrames];
     alignas(16) float right_buffer_[kMaxFrames];
+    
+    // Chorus stereo effect (delay-based stereo spread)
+    common::ChorusStereoWidener* space_widener_;
     
     // Noise generator state
     uint32_t noise_seed_;
