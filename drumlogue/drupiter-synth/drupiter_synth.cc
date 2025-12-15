@@ -592,7 +592,7 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             return;  // Hub handles its own state
             
         case PARAM_EFFECT:
-            v = clamp_u8_int32(value, 0, 1);  // 0=Chorus, 1=Space
+            v = clamp_u8_int32(value, 0, 3);  // 0=Chorus, 1=Space, 2=Dry, 3=Both
             break;
             
         default:
