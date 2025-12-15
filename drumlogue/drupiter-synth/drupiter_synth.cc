@@ -741,8 +741,9 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
             return "";
             
         case PARAM_MOD_AMT: {
-            // Get current destination to validate range
-            uint8_t dest = mod_hub_.GetDestination();
+            // Get current destination from preset params (not from mod_hub internal state)
+            // This is important because GetParameterStr is called before SetParameter
+            uint8_t dest = current_preset_.params[PARAM_MOD_HUB];
             
             // Check if value is within current destination's range
             if (dest >= MOD_NUM_DESTINATIONS) {
