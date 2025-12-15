@@ -695,7 +695,10 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
         case PARAM_DCO2_WAVE:
             return kDco2WaveNames[value < 4 ? value : 0];
         case PARAM_DCO2_TUNE:
-            // Bipolar display: -50 to +50
+            // Bipolar display: -50 to +50 (value range 0-100)
+            if (value < 0 || value > 100) {
+                return nullptr;  // Out of range
+            }
             return common::ParamFormat::BipolarValue(str_buf, sizeof(str_buf), value, 0, 100);
         case PARAM_SYNC:
             return kSyncNames[value < 3 ? value : 0];
