@@ -270,6 +270,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     const uint8_t vcf_type = mod_hub_.GetValue(MOD_VCF_TYPE);
     const uint8_t lfo_delay = mod_hub_.GetValue(MOD_LFO_DELAY);
     const uint8_t lfo_wave = mod_hub_.GetValue(MOD_LFO_WAVE);
+    const bool unison_enabled = (mod_hub_.GetValue(MOD_UNISON) > 0);
     
     // Apply LFO delay setting (0-100 maps to 0-5 seconds)
     const float lfo_delay_sec = (lfo_delay / 100.0f) * 5.0f;
@@ -363,7 +364,42 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         dco2_out_ = dco2_->Process();
         
         // Mix oscillators with smoothed levels
-        mixed_ = dco1_out_ * dco1_level + dco2_out_ * dco2_level;
+        if (unison_enabled) {
+            // Unison mode: Sum current voice with 3 additional detuned voices
+            // This creates a thick, chorus-like sound
+            // Base voice (no detune)
+            mixed_ = dco1_out_ * dco1_level + dco2_out_ * dco2_level;
+            
+            // Voice 2: +10 cents detune
+            const float detune2 = cents_to_ratio(10.0f);
+            dco1_->SetFrequency(freq1 * detune2);
+            dco2_->SetFrequency(freq2 * detune2);
+            float voice2_dco1 = dco1_->Process();
+            float voice2_dco2 = dco2_->Process();
+            mixed_ += voice2_dco1 * dco1_level + voice2_dco2 * dco2_level;
+            
+            // Voice 3: -10 cents detune
+            const float detune3 = cents_to_ratio(-10.0f);
+            dco1_->SetFrequency(freq1 * detune3);
+            dco2_->SetFrequency(freq2 * detune3);
+            float voice3_dco1 = dco1_->Process();
+            float voice3_dco2 = dco2_->Process();
+            mixed_ += voice3_dco1 * dco1_level + voice3_dco2 * dco2_level;
+            
+            // Voice 4: +20 cents detune
+            const float detune4 = cents_to_ratio(20.0f);
+            dco1_->SetFrequency(freq1 * detune4);
+            dco2_->SetFrequency(freq2 * detune4);
+            float voice4_dco1 = dco1_->Process();
+            float voice4_dco2 = dco2_->Process();
+            mixed_ += voice4_dco1 * dco1_level + voice4_dco2 * dco2_level;
+            
+            // Average the 4 voices to prevent clipping
+            mixed_ *= 0.25f;
+        } else {
+            // Normal single-voice mode
+            mixed_ = dco1_out_ * dco1_level + dco2_out_ * dco2_level;
+        }
         
         // Apply filter with smoothed cutoff, envelope, and LFO modulation
         const float cutoff_norm = cutoff_smooth_->Process();

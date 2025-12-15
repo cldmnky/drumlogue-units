@@ -80,6 +80,7 @@ enum ModDestination {
     MOD_VCF_TYPE,          // Filter type selection (LP12/LP24/HP12/BP)
     MOD_LFO_DELAY,         // LFO delay (fade-in time)
     MOD_LFO_WAVE,          // LFO waveform selection
+    MOD_UNISON,            // Unison mode (4 voices for thicker sound)
     MOD_NUM_DESTINATIONS
 };
 
@@ -93,6 +94,11 @@ static const char* const kLfoWaveNames[] = {
     "TRI", "RAMP", "SQR", "S&H"
 };
 
+// Unison mode names
+static const char* const kUnisonNames[] = {
+    "OFF", "ON"
+};
+
 // Hub control destinations for MOD HUB
 static constexpr common::HubControl<MOD_NUM_DESTINATIONS>::Destination kModDestinations[] = {
     {"LFO>PWM", "%",   0, 100, 0,  false, nullptr},        // LFO to pulse width
@@ -103,7 +109,8 @@ static constexpr common::HubControl<MOD_NUM_DESTINATIONS>::Destination kModDesti
     {"HPF",     "Hz",  0, 100, 0,  false, nullptr},        // High-pass filter
     {"VCF TYP", "",    0, 3,   1,  false, kVcfTypeNames},  // Filter type (enum)
     {"LFO DLY", "ms",  0, 100, 0,  false, nullptr},        // LFO delay
-    {"LFO WAV", "",    0, 3,   0,  false, kLfoWaveNames}   // LFO waveform (TRI/RAMP/SQR/S&H)
+    {"LFO WAV", "",    0, 3,   0,  false, kLfoWaveNames},  // LFO waveform (TRI/RAMP/SQR/S&H)
+    {"UNISON",  "",    0, 1,   0,  false, kUnisonNames}    // Unison mode (OFF/ON)
 };
 
 // Effect mode names
