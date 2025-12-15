@@ -541,10 +541,16 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             return;  // Hub handles its own state
             
         case PARAM_MOD_AMT:
-            // Hub amount: -100 to +100 for most, special ranges for LFO_WAVE/HPF_CUTOFF
+            // Hub amount: Store in hub and preset's hub_values array
             v = clamp_u8_int32(value, 0, 100);
             mod_hub_.SetValue(v);
-            current_preset_.params[id] = v;
+            // Save to preset's hub storage for current destination
+            {
+                uint8_t dest = current_preset_.params[PARAM_MOD_HUB];
+                if (dest < MOD_NUM_DESTINATIONS) {
+                    current_preset_.hub_values[dest] = v;
+                }
+            }
             return;  // Hub handles its own state
             
         case PARAM_EFFECT:
@@ -799,6 +805,11 @@ void DrupiterSynth::LoadPreset(uint8_t preset_id) {
     xmod_depth_ = current_preset_.params[PARAM_XMOD] / 100.0f;
     sync_mode_ = current_preset_.params[PARAM_SYNC];
     
+    // Restore MOD HUB destination values
+    for (uint8_t dest = 0; dest < MOD_NUM_DESTINATIONS; ++dest) {
+        mod_hub_.SetValueForDest(dest, current_preset_.hub_values[dest]);
+    }
+    
     // Apply all parameters to DSP components
     for (uint8_t i = 0; i < PARAM_COUNT; ++i) {
         SetParameter(i, current_preset_.params[i]);
@@ -807,6 +818,10 @@ void DrupiterSynth::LoadPreset(uint8_t preset_id) {
 
 void DrupiterSynth::SavePreset(uint8_t preset_id) {
     if (preset_id < 6) {
+        // Save current MOD HUB values to preset
+        for (uint8_t dest = 0; dest < MOD_NUM_DESTINATIONS; ++dest) {
+            current_preset_.hub_values[dest] = mod_hub_.GetValue(dest);
+        }
         factory_presets_[preset_id] = current_preset_;
     }
 }
@@ -850,8 +865,19 @@ float DrupiterSynth::ParameterToExponentialFreq(uint8_t value, float min_freq, f
 void DrupiterSynth::InitFactoryPresets() {
     // Factory presets now use hub control for modulation routing
     
+    // Initialize all presets with default hub values
+    for (uint8_t p = 0; p < 6; ++p) {
+        for (uint8_t dest = 0; dest < MOD_NUM_DESTINATIONS; ++dest) {
+            factory_presets_[p].hub_values[dest] = kModDestinations[dest].default_value;
+        }
+    }
+    
     // Preset 0: Init - Basic sound
     std::memset(&factory_presets_[0], 0, sizeof(Preset));
+    // Reinit hub values after memset
+    for (uint8_t dest = 0; dest < MOD_NUM_DESTINATIONS; ++dest) {
+        factory_presets_[0].hub_values[dest] = kModDestinations[dest].default_value;
+    }
     // Page 1: DCO-1
     factory_presets_[0].params[PARAM_DCO1_OCT] = 1;       // 8'
     factory_presets_[0].params[PARAM_DCO1_WAVE] = 0;      // SAW
@@ -880,12 +906,16 @@ void DrupiterSynth::InitFactoryPresets() {
     // Page 6: LFO, MOD HUB & Effects
     factory_presets_[0].params[PARAM_LFO_RATE] = 32;      // Moderate LFO rate
     factory_presets_[0].params[PARAM_MOD_HUB] = MOD_VCF_TYPE;  // VCF Type by default
-    factory_presets_[0].params[PARAM_MOD_AMT] = 1;        // LP24 filter
+    factory_presets_[0].hub_values[MOD_VCF_TYPE] = 1;     // LP24 filter
     factory_presets_[0].params[PARAM_EFFECT] = 0;         // Chorus
     std::strcpy(factory_presets_[0].name, "Init 1");
     
     // Preset 1: Bass - Punchy bass with filter envelope
     std::memset(&factory_presets_[1], 0, sizeof(Preset));
+    // Reinit hub values after memset
+    for (uint8_t dest = 0; dest < MOD_NUM_DESTINATIONS; ++dest) {
+        factory_presets_[1].hub_values[dest] = kModDestinations[dest].default_value;
+    }
     factory_presets_[1].params[PARAM_DCO1_OCT] = 0;       // 16'
     factory_presets_[1].params[PARAM_DCO1_WAVE] = 2;      // PULSE
     factory_presets_[1].params[PARAM_DCO1_PW] = 31;       // Narrow pulse
@@ -908,12 +938,16 @@ void DrupiterSynth::InitFactoryPresets() {
     factory_presets_[1].params[PARAM_VCA_RELEASE] = 12;
     factory_presets_[1].params[PARAM_LFO_RATE] = 32;
     factory_presets_[1].params[PARAM_MOD_HUB] = MOD_VCF_TYPE;
-    factory_presets_[1].params[PARAM_MOD_AMT] = 1;        // LP24
+    factory_presets_[1].hub_values[MOD_VCF_TYPE] = 1;     // LP24
     factory_presets_[1].params[PARAM_EFFECT] = 0;
     std::strcpy(factory_presets_[1].name, "Bass 1");
     
     // Preset 2: Lead - Sharp lead with sync
     std::memset(&factory_presets_[2], 0, sizeof(Preset));
+    // Reinit hub values after memset
+    for (uint8_t dest = 0; dest < MOD_NUM_DESTINATIONS; ++dest) {
+        factory_presets_[2].hub_values[dest] = kModDestinations[dest].default_value;
+    }
     factory_presets_[2].params[PARAM_DCO1_OCT] = 1;       // 8'
     factory_presets_[2].params[PARAM_DCO1_WAVE] = 0;      // SAW
     factory_presets_[2].params[PARAM_DCO1_PW] = 50;
@@ -936,12 +970,16 @@ void DrupiterSynth::InitFactoryPresets() {
     factory_presets_[2].params[PARAM_VCA_RELEASE] = 16;
     factory_presets_[2].params[PARAM_LFO_RATE] = 50;
     factory_presets_[2].params[PARAM_MOD_HUB] = MOD_LFO_TO_VCF;
-    factory_presets_[2].params[PARAM_MOD_AMT] = 30;
+    factory_presets_[2].hub_values[MOD_LFO_TO_VCF] = 30;
     factory_presets_[2].params[PARAM_EFFECT] = 0;
     std::strcpy(factory_presets_[2].name, "Lead 1");
     
     // Preset 3: Pad - Warm pad with detuned oscillators
     std::memset(&factory_presets_[3], 0, sizeof(Preset));
+    // Reinit hub values after memset
+    for (uint8_t dest = 0; dest < MOD_NUM_DESTINATIONS; ++dest) {
+        factory_presets_[3].hub_values[dest] = kModDestinations[dest].default_value;
+    }
     factory_presets_[3].params[PARAM_DCO1_OCT] = 1;       // 8'
     factory_presets_[3].params[PARAM_DCO1_WAVE] = 0;      // SAW
     factory_presets_[3].params[PARAM_DCO1_PW] = 50;
@@ -964,12 +1002,16 @@ void DrupiterSynth::InitFactoryPresets() {
     factory_presets_[3].params[PARAM_VCA_RELEASE] = 55;
     factory_presets_[3].params[PARAM_LFO_RATE] = 35;
     factory_presets_[3].params[PARAM_MOD_HUB] = MOD_VCF_TYPE;
-    factory_presets_[3].params[PARAM_MOD_AMT] = 1;        // LP24
+    factory_presets_[3].hub_values[MOD_VCF_TYPE] = 1;     // LP24
     factory_presets_[3].params[PARAM_EFFECT] = 0;
     std::strcpy(factory_presets_[3].name, "Pad 1");
     
     // Preset 4: Brass - Bright brass with XMOD
     std::memset(&factory_presets_[4], 0, sizeof(Preset));
+    // Reinit hub values after memset
+    for (uint8_t dest = 0; dest < MOD_NUM_DESTINATIONS; ++dest) {
+        factory_presets_[4].hub_values[dest] = kModDestinations[dest].default_value;
+    }
     factory_presets_[4].params[PARAM_DCO1_OCT] = 1;       // 8'
     factory_presets_[4].params[PARAM_DCO1_WAVE] = 0;      // SAW
     factory_presets_[4].params[PARAM_DCO1_PW] = 50;
@@ -992,12 +1034,16 @@ void DrupiterSynth::InitFactoryPresets() {
     factory_presets_[4].params[PARAM_VCA_RELEASE] = 24;
     factory_presets_[4].params[PARAM_LFO_RATE] = 40;
     factory_presets_[4].params[PARAM_MOD_HUB] = MOD_ENV_TO_VCF;
-    factory_presets_[4].params[PARAM_MOD_AMT] = 40;
+    factory_presets_[4].hub_values[MOD_ENV_TO_VCF] = 40;
     factory_presets_[4].params[PARAM_EFFECT] = 0;
     std::strcpy(factory_presets_[4].name, "Brass 1");
     
     // Preset 5: Strings - Lush strings with detuned oscillators
     std::memset(&factory_presets_[5], 0, sizeof(Preset));
+    // Reinit hub values after memset
+    for (uint8_t dest = 0; dest < MOD_NUM_DESTINATIONS; ++dest) {
+        factory_presets_[5].hub_values[dest] = kModDestinations[dest].default_value;
+    }
     factory_presets_[5].params[PARAM_DCO1_OCT] = 1;       // 8'
     factory_presets_[5].params[PARAM_DCO1_WAVE] = 0;      // SAW
     factory_presets_[5].params[PARAM_DCO1_PW] = 50;
@@ -1020,7 +1066,7 @@ void DrupiterSynth::InitFactoryPresets() {
     factory_presets_[5].params[PARAM_VCA_RELEASE] = 63;
     factory_presets_[5].params[PARAM_LFO_RATE] = 38;
     factory_presets_[5].params[PARAM_MOD_HUB] = MOD_LFO_TO_VCO;
-    factory_presets_[5].params[PARAM_MOD_AMT] = 20;
+    factory_presets_[5].hub_values[MOD_LFO_TO_VCO] = 20;
     factory_presets_[5].params[PARAM_EFFECT] = 0;
     std::strcpy(factory_presets_[5].name, "String 1");
 }

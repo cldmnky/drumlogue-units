@@ -175,6 +175,7 @@ public:
      */
     struct Preset {
         uint8_t params[PARAM_COUNT];  // Continuous params are 0-100; discrete params are small enums
+        uint8_t hub_values[MOD_NUM_DESTINATIONS];  // Stored values for each MOD HUB destination
         char name[14];                // 13 chars + null terminator
     };
 
