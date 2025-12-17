@@ -41,6 +41,7 @@ class ImGuiApp {
   void render_ui();
   void render_presets_panel();
   void render_piano_roll();
+  void render_tuner();
   void save_current_preset();
   void load_preset(const preset_t* preset);
 
@@ -82,6 +83,10 @@ class ImGuiApp {
   double arp_last_step_time_;
   double arp_note_off_time_;        // Scheduled time for note off
   uint8_t arp_current_note_;
+  
+  // Tuner state
+  bool tuner_enabled_;
+  float tuner_reference_freq_;      // A4 reference frequency (default 440Hz)
   
   void update_arpeggiator();
 };

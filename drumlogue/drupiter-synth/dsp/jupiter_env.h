@@ -119,13 +119,13 @@ private:
     float sustain_level_;
     float release_time_;
     
-    // Precalculated rates (increment per sample)
-    float attack_rate_;
-    float decay_rate_;
-    float release_rate_;
+    // Precalculated rates/coefficients
+    float attack_rate_;         // Linear increment per sample
+    float decay_coef_;          // Exponential multiplier per sample
+    float release_coef_;        // Exponential multiplier per sample
     
     // Minimum/maximum times
-    static constexpr float kMinTime = 0.001f;    // 1ms
+    static constexpr float kMinTime = 0.0001f;   // 0.1ms (~5 samples at 48kHz, effectively instant)
     static constexpr float kMaxTime = 10.0f;     // 10 seconds
     
     /**
@@ -134,11 +134,18 @@ private:
     void UpdateRates();
     
     /**
-     * @brief Calculate rate from time
+     * @brief Calculate rate from time (Linear)
      * @param time_sec Time in seconds
      * @return Rate (increment per sample)
      */
     float TimeToRate(float time_sec) const;
+
+    /**
+     * @brief Calculate coefficient from time (Exponential)
+     * @param time_sec Time in seconds
+     * @return Coefficient (multiplier per sample)
+     */
+    float TimeToCoef(float time_sec) const;
 };
 
 } // namespace dsp

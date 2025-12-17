@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # Build a drumlogue unit as a native shared library for the presets editor
-# Usage: ./build-native.sh <unit-name>
+# Usage: ./build-native.sh <unit-name> [DEBUG=1]
 
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
-  echo "Usage: $0 <unit-name>" >&2
+  echo "Usage: $0 <unit-name> [DEBUG=1]" >&2
   exit 1
 fi
 
 UNIT_NAME="$1"
+DEBUG="${2:-0}"
 SCRIPT_DIR="$(cd -- "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd -- "$SCRIPT_DIR/../../.." && pwd)"
 EDITOR_DIR="$ROOT_DIR/test/presets-editor"
@@ -23,7 +24,7 @@ if [[ ! -d "$UNIT_DIR" ]]; then
 fi
 
 echo "Building unit '$UNIT_NAME' for native host..."
-make -f "$MAKEFILE" UNIT="$UNIT_NAME" --no-print-directory
+make -f "$MAKEFILE" UNIT="$UNIT_NAME" DEBUG="$DEBUG" --no-print-directory
 
 LIB_EXT="$(uname -s | grep -qi darwin && echo dylib || echo so)"
 

@@ -12,6 +12,7 @@
 #include "ring_buffer.h"
 
 #define PARAM_QUEUE_CAPACITY 64
+#define PITCH_BUFFER_SIZE 4096  // ~85ms at 48kHz for pitch detection
 
 typedef struct {
     uint8_t id;
@@ -29,6 +30,11 @@ struct audio_engine {
 #endif
     ring_buffer_t param_queue;
     float master_volume;  // Thread-safe read in audio callback
+    
+    // Pitch detection
+    float pitch_buffer[PITCH_BUFFER_SIZE];
+    uint32_t pitch_buffer_pos;
+    float detected_pitch;  // In Hz, 0 if no pitch detected
 };
 
 #ifdef PORTAUDIO_PRESENT
@@ -39,6 +45,111 @@ static inline float soft_clip(float x) {
     // For values near 0, tanh(x) ≈ x, so no distortion at low levels
     // Scale to make clipping more gradual
     return tanhf(x * 0.9f) / 0.9f;
+}
+
+// YIN-style autocorrelation pitch detection with hysteresis
+static float detect_pitch(const float* buffer, uint32_t buffer_size, uint32_t sample_rate) {
+    static float last_pitch = 0.0f;
+    
+    if (buffer_size < 128) return last_pitch;
+    
+    // Compute RMS to check if signal is strong enough
+    float rms = 0.0f;
+    for (uint32_t i = 0; i < buffer_size; i++) {
+        rms += buffer[i] * buffer[i];
+    }
+    rms = sqrtf(rms / buffer_size);
+    
+#ifdef DEBUG
+    static int debug_log_counter = 0;
+    if (++debug_log_counter >= 10) {  // Log every 10th detection (~2 Hz)
+        debug_log_counter = 0;
+        fprintf(stderr, "[Tuner] RMS: %.6f", rms);
+    }
+#endif
+    
+    // Lower threshold - be more sensitive to detect signal
+    if (rms < 0.001f) {
+#ifdef DEBUG
+        if (debug_log_counter == 1) {  // Only log on counter reset
+            fprintf(stderr, " -> No signal (RMS too low)\n");
+        }
+#endif
+        last_pitch = 0.0f;
+        return 0.0f;
+    }
+    
+    const uint32_t min_period = sample_rate / 1500;  // Up to 1500 Hz
+    const uint32_t max_period = sample_rate / 50;    // Down to 50 Hz
+    const uint32_t search_end = buffer_size / 2 < max_period ? buffer_size / 2 : max_period;
+    
+    // YIN difference function
+    float* diff = (float*)alloca(search_end * sizeof(float));
+    
+    // Compute difference function
+    diff[0] = 1.0f;
+    for (uint32_t lag = 1; lag < search_end; lag++) {
+        float sum = 0.0f;
+        for (uint32_t i = 0; i < buffer_size - lag; i++) {
+            float delta = buffer[i] - buffer[i + lag];
+            sum += delta * delta;
+        }
+        diff[lag] = sum;
+    }
+    
+    // Cumulative mean normalized difference
+    float running_sum = 0.0f;
+    for (uint32_t lag = 1; lag < search_end; lag++) {
+        running_sum += diff[lag];
+        diff[lag] = diff[lag] * (float)lag / running_sum;
+    }
+    
+    // Find first minimum below threshold (more lenient threshold)
+    const float threshold = 0.25f;  // Increased from 0.15 to be less strict
+    for (uint32_t lag = min_period; lag < search_end; lag++) {
+        if (diff[lag] < threshold) {
+            // Parabolic interpolation for better accuracy
+            float detected_pitch;
+            if (lag > 0 && lag < search_end - 1) {
+                float alpha = diff[lag - 1];
+                float beta = diff[lag];
+                float gamma = diff[lag + 1];
+                float delta_interp = (alpha - gamma) / (2.0f * (2.0f * beta - alpha - gamma));
+                float better_lag = (float)lag + delta_interp;
+                detected_pitch = (float)sample_rate / better_lag;
+            } else {
+                detected_pitch = (float)sample_rate / (float)lag;
+            }
+            
+            // Hysteresis: only update if change is significant or first detection
+            if (last_pitch == 0.0f || fabsf(detected_pitch - last_pitch) > 2.0f) {
+                last_pitch = detected_pitch;
+            }
+            
+#ifdef DEBUG
+            if (debug_log_counter == 1) {  // Only log on counter reset
+                fprintf(stderr, ", Lag: %u, Pitch: %.2f Hz", lag, last_pitch);
+                if (detected_pitch != last_pitch) {
+                    fprintf(stderr, " (hysteresis: was %.2f)", detected_pitch);
+                }
+                fprintf(stderr, "\n");
+                fflush(stderr);
+            }
+#endif
+            
+            return last_pitch;
+        }
+    }
+    
+#ifdef DEBUG
+    if (debug_log_counter == 1) {  // Only log on counter reset
+        fprintf(stderr, " -> No pitch found (no minimum below threshold)\n");
+        fflush(stderr);
+    }
+#endif
+    
+    // No pitch found - keep last detected pitch (provides stability)
+    return last_pitch;
 }
 
 static int audio_cb(const void* input,
@@ -78,12 +189,25 @@ static int audio_cb(const void* input,
 
     unit_loader_render(engine->loader, in ? in : out, out, frames);
     
+    // Capture UNPROCESSED mono signal for pitch analysis BEFORE volume/clipping
+    for (uint32_t i = 0; i < frames; i++) {
+        engine->pitch_buffer[engine->pitch_buffer_pos] = out[i * engine->cfg.output_channels];
+        engine->pitch_buffer_pos = (engine->pitch_buffer_pos + 1) % PITCH_BUFFER_SIZE;
+    }
+    
     // Apply master volume and soft-clipping to prevent distortion
     const float volume = engine->master_volume;
     const uint32_t total_samples = frames * engine->cfg.output_channels;
     for (uint32_t i = 0; i < total_samples; i++) {
         // Apply volume then soft-clip to prevent digital clipping
         out[i] = soft_clip(out[i] * volume);
+    }
+    
+    // Update pitch detection periodically (throttle to reduce CPU load)
+    static uint32_t pitch_counter = 0;
+    if (++pitch_counter >= 24) {  // ~20 Hz update rate
+        pitch_counter = 0;
+        engine->detected_pitch = detect_pitch(engine->pitch_buffer, PITCH_BUFFER_SIZE, engine->cfg.sample_rate);
     }
     
     return paContinue;
@@ -103,6 +227,11 @@ audio_engine_t* audio_engine_create(const audio_config_t* cfg,
     engine->loader = loader;
     engine->runtime_state = runtime_state;
     engine->master_volume = cfg->master_volume > 0.0f ? cfg->master_volume : 0.5f;
+    
+    // Initialize pitch detection
+    memset(engine->pitch_buffer, 0, sizeof(engine->pitch_buffer));
+    engine->pitch_buffer_pos = 0;
+    engine->detected_pitch = 0.0f;
 
     if (ring_buffer_init(&engine->param_queue, PARAM_QUEUE_CAPACITY, sizeof(param_msg_t)) != 0) {
         free(engine);
@@ -147,6 +276,16 @@ audio_engine_t* audio_engine_create(const audio_config_t* cfg,
         ring_buffer_free(&engine->param_queue);
         free(engine);
         return NULL;
+    }
+    
+    // Debug: Check actual sample rate
+    const PaStreamInfo* stream_info = Pa_GetStreamInfo(engine->stream);
+    if (stream_info) {
+        printf("[Audio Engine] Requested sample rate: %u Hz, Actual: %.0f Hz\n",
+               cfg->sample_rate, stream_info->sampleRate);
+        if (fabsf(stream_info->sampleRate - cfg->sample_rate) > 100.0f) {
+            fprintf(stderr, "WARNING: Sample rate mismatch! This will cause tuning problems.\n");
+        }
     }
 
     return engine;
@@ -196,6 +335,11 @@ float audio_engine_cpu_load(audio_engine_t* engine) {
     return (float)Pa_GetStreamCpuLoad(engine->stream);
 }
 
+float audio_engine_get_detected_pitch(audio_engine_t* engine) {
+    if (!engine) return 0.0f;
+    return engine->detected_pitch;
+}
+
 #else  // PORTAUDIO_PRESENT not available
 
 audio_engine_t* audio_engine_create(const audio_config_t* cfg,
@@ -221,5 +365,7 @@ void audio_engine_set_master_volume(audio_engine_t* engine, float volume) {
     (void)engine; (void)volume; }
 
 float audio_engine_cpu_load(audio_engine_t* engine) { (void)engine; return -1.0f; }
+
+float audio_engine_get_detected_pitch(audio_engine_t* engine) { (void)engine; return 0.0f; }
 
 #endif

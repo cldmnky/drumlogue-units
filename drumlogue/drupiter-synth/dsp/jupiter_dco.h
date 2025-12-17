@@ -116,6 +116,8 @@ private:
     bool sync_enabled_;
     float fm_amount_;          // Current FM modulation
     float drift_phase_;        // Slow analog-style drift phase
+    int drift_counter_;        // Counter for drift update
+    float current_drift_;      // Current drift value
     uint32_t noise_seed_;      // For subtle drift noise
     uint32_t noise_seed2_;     // For noise waveform
     

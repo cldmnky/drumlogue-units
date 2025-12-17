@@ -10,6 +10,10 @@
 #include <algorithm>
 #include <cmath>
 
+#ifdef DEBUG
+#include <cstdio>
+#endif
+
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -23,6 +27,7 @@ namespace {
 constexpr float kMaxPhaseIncrement = 0.48f;
 constexpr float kFmModRange = 1.0f;  // Exponential FM: fm_amount=±1 -> ±1 octave
 
+#ifdef ENABLE_POLYBLEP
 // PolyBLEP (polynomial band-limited step) to smooth discontinuities.
 // t = current phase [0,1), dt = phase increment (controls transition width).
 inline float PolyBlep(float t, float dt) {
@@ -43,6 +48,7 @@ inline float PolyBlep(float t, float dt) {
     }
     return 0.0f;
 }
+#endif  // ENABLE_POLYBLEP
 
 inline float WrapPhase(float phase) {
     // Efficient wrapping to [0, 1) using floorf
@@ -68,6 +74,8 @@ JupiterDCO::JupiterDCO()
     , sync_enabled_(false)
     , fm_amount_(0.0f)
     , drift_phase_(0.0f)
+    , drift_counter_(0)
+    , current_drift_(0.0f)
     , noise_seed_(0x41594E31)  // "AYN1"
     , noise_seed2_(0x4A503842) // "JP8B"
     , last_phase_(0.0f)
@@ -88,6 +96,8 @@ void JupiterDCO::Init(float sample_rate) {
     phase_inc_ = base_freq_hz_ / sample_rate_;
     fm_amount_ = 0.0f;
     drift_phase_ = 0.0f;
+    drift_counter_ = 0;
+    current_drift_ = 0.0f;
     noise_seed_ = 0x41594E31;
     noise_seed2_ = 0x4A503842;
 }
@@ -129,15 +139,20 @@ float JupiterDCO::Process() {
         current_phase_inc *= fm_scale;
     }
     
-    // Analog-style slow drift: sine LFO plus tiny noise (±0.3%)
-    drift_phase_ += 0.00002f;  // ~1 Hz at 48k
-    if (drift_phase_ >= 1.0f) {
-        drift_phase_ -= 1.0f;
+    // Analog-style slow drift: Update drift amount at a slow rate (~100 Hz)
+    // to avoid rapid pitch wobbling that confuses the tuner
+    if (++drift_counter_ >= 480) {  // Update every ~10ms at 48kHz
+        drift_counter_ = 0;
+        drift_phase_ += 0.01f;  // ~1 Hz drift LFO
+        if (drift_phase_ >= 1.0f) {
+            drift_phase_ -= 1.0f;
+        }
+        noise_seed_ = noise_seed_ * 1664525u + 1013904223u;
+        float noise = ((noise_seed_ >> 9) & 0x7FFFFF) / float(0x7FFFFF) - 0.5f;
+        current_drift_ = 0.0003f * sinf(drift_phase_ * 2.0f * static_cast<float>(M_PI)) + 0.0002f * noise;
     }
-    noise_seed_ = noise_seed_ * 1664525u + 1013904223u;
-    float noise = ((noise_seed_ >> 9) & 0x7FFFFF) / float(0x7FFFFF) - 0.5f;
-    float drift = 0.003f * sinf(drift_phase_ * 2.0f * static_cast<float>(M_PI)) + 0.001f * noise;
-    current_phase_inc *= (1.0f + drift);
+    current_phase_inc *= (1.0f + current_drift_);
+    
     
     // Protect against aliasing when FM tries to push past Nyquist.
     current_phase_inc = std::max(0.0f, std::min(current_phase_inc, kMaxPhaseIncrement));
@@ -163,30 +178,39 @@ bool JupiterDCO::DidWrap() const {
 }
 
 float JupiterDCO::GenerateWaveform(float phase, float phase_inc) {
+#ifdef ENABLE_POLYBLEP
     const float dt = std::min(phase_inc, 1.0f);
+#else
+    (void)phase_inc;  // Unused when PolyBLEP is disabled
+#endif
     
     switch (waveform_) {
         case WAVEFORM_SAW:
         {
             float value = LookupWavetable(ramp_table_, phase);
-            // PolyBLEP corrects discontinuity at wrap for Jupiter-style ramp
+#ifdef ENABLE_POLYBLEP
             value -= PolyBlep(phase, dt);
+#endif
             return value;
         }
         
         case WAVEFORM_SQUARE:
         {
             float value = LookupWavetable(square_table_, phase);
+#ifdef ENABLE_POLYBLEP
             value += PolyBlep(phase, dt);                           // rising edge at 0
             value -= PolyBlep(WrapPhase(phase + 0.5f), dt);         // falling edge at 0.5
+#endif
             return value;
         }
         
         case WAVEFORM_PULSE: {
             // Comparator-style PWM for Jupiter character
             float value = (phase < pulse_width_) ? 1.0f : -1.0f;
+#ifdef ENABLE_POLYBLEP
             value += PolyBlep(phase, dt);                            // rising edge at reset
             value -= PolyBlep(WrapPhase(phase + (1.0f - pulse_width_)), dt);  // falling edge at PW
+#endif
             return value;
         }
         

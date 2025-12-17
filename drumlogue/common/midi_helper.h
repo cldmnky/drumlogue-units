@@ -14,6 +14,10 @@
 #include <cstdint>
 #include <cmath>
 
+#ifdef DEBUG
+#include <cstdio>
+#endif
+
 namespace common {
 
 /**
@@ -28,11 +32,48 @@ class MidiHelper {
    * @param note MIDI note number (0-127, A4=69)
    * @return Frequency in Hz (A4 = 440Hz tuning)
    * 
+   * Uses pre-computed lookup table for optimal performance.
    * Formula: f = 440 * 2^((note - 69) / 12)
    */
   static inline float NoteToFreq(uint8_t note) {
-    // Fast approximation using powf
-    return 440.0f * powf(2.0f, (static_cast<float>(note) - 69.0f) / 12.0f);
+    // Lookup table approach - much faster than powf()
+    // Table is initialized on first call (lazy static initialization)
+    static const float note_freq_table[128] = {
+      // Octave -1 (MIDI 0-11)
+      8.176f, 8.662f, 9.177f, 9.723f, 10.301f, 10.913f, 11.562f, 12.250f, 12.978f, 13.750f, 14.568f, 15.434f,
+      // Octave 0 (MIDI 12-23)
+      16.352f, 17.324f, 18.354f, 19.445f, 20.602f, 21.827f, 23.125f, 24.500f, 25.957f, 27.500f, 29.135f, 30.868f,
+      // Octave 1 (MIDI 24-35)
+      32.703f, 34.648f, 36.708f, 38.891f, 41.203f, 43.654f, 46.249f, 48.999f, 51.913f, 55.000f, 58.270f, 61.735f,
+      // Octave 2 (MIDI 36-47)
+      65.406f, 69.296f, 73.416f, 77.782f, 82.407f, 87.307f, 92.499f, 97.999f, 103.826f, 110.000f, 116.541f, 123.471f,
+      // Octave 3 (MIDI 48-59)
+      130.813f, 138.591f, 146.832f, 155.563f, 164.814f, 174.614f, 184.997f, 195.998f, 207.652f, 220.000f, 233.082f, 246.942f,
+      // Octave 4 (MIDI 60-71) - Middle C = 60
+      261.626f, 277.183f, 293.665f, 311.127f, 329.628f, 349.228f, 369.994f, 391.995f, 415.305f, 440.000f, 466.164f, 493.883f,
+      // Octave 5 (MIDI 72-83)
+      523.251f, 554.365f, 587.330f, 622.254f, 659.255f, 698.456f, 739.989f, 783.991f, 830.609f, 880.000f, 932.328f, 987.767f,
+      // Octave 6 (MIDI 84-95)
+      1046.502f, 1108.731f, 1174.659f, 1244.508f, 1318.510f, 1396.913f, 1479.978f, 1567.982f, 1661.219f, 1760.000f, 1864.655f, 1975.533f,
+      // Octave 7 (MIDI 96-107)
+      2093.005f, 2217.461f, 2349.318f, 2489.016f, 2637.020f, 2793.826f, 2959.955f, 3135.963f, 3322.438f, 3520.000f, 3729.310f, 3951.066f,
+      // Octave 8 (MIDI 108-119)
+      4186.009f, 4434.922f, 4698.636f, 4978.032f, 5274.041f, 5587.652f, 5919.911f, 6271.927f, 6644.875f, 7040.000f, 7458.620f, 7902.133f,
+      // Octave 9 (MIDI 120-127) - Last 8 notes
+      8372.018f, 8869.844f, 9397.273f, 9956.063f, 10548.082f, 11175.303f, 11839.822f, 12543.854f
+    };
+
+    if (note > 127) return 440.0f;  // Safety clamp
+    
+    float freq = note_freq_table[note];
+    
+#ifdef DEBUG
+    fprintf(stderr, "[MidiHelper] Note %d (%s%d) -> %.3f Hz\n", 
+            note, NoteName(note), NoteOctave(note), freq);
+    fflush(stderr);
+#endif
+    
+    return freq;
   }
   
   /**

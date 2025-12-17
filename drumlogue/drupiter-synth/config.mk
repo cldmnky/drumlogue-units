@@ -60,6 +60,7 @@ ULIBS += -lc
 
 # Enable ARM NEON optimizations for better performance
 UDEFS = -DUSE_NEON
+UDEFS += -DENABLE_POLYBLEP
 
 # Optional: Enable debug profiling
 # UDEFS += -DENABLE_PROFILING

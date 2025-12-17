@@ -5,6 +5,7 @@ UNAME_M := $(shell uname -m)
 
 CC  ?= clang
 CXX ?= clang++
+DEBUG ?= 0
 CFLAGS   := -std=c11 -O2 -Wall -Wextra -fPIC
 CXXFLAGS := -std=c++17 -O2 -Wall -Wextra -fPIC
 LDFLAGS  :=
@@ -18,8 +19,14 @@ endif
 
 # Enable NEON on ARM hosts
 ifneq (,$(findstring arm64,$(UNAME_M)))
-  CFLAGS   += -march=armv8-a+simd -D__ARM_NEON
-  CXXFLAGS += -march=armv8-a+simd -D__ARM_NEON
+  CFLAGS   += -march=armv8-a+simd -D__ARM_NEON -DENABLE_POLYBLEP
+  CXXFLAGS += -march=armv8-a+simd -D__ARM_NEON -DENABLE_POLYBLEP
+endif
+
+# Optional DEBUG flag (use DEBUG=1 when building)
+ifneq ($(DEBUG),0)
+  CFLAGS   += -DDEBUG
+  CXXFLAGS += -DDEBUG
 endif
 
 ROOT_DIR := $(abspath ../..)

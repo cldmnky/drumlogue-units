@@ -36,6 +36,9 @@ void audio_engine_set_master_volume(audio_engine_t* engine, float volume);
 // Returns PortAudio stream CPU load (0..1), or -1 on error
 float audio_engine_cpu_load(audio_engine_t* engine);
 
+// Get detected pitch in Hz (0 if no pitch detected)
+float audio_engine_get_detected_pitch(audio_engine_t* engine);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

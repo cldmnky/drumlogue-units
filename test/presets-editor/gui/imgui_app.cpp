@@ -50,7 +50,9 @@ ImGuiApp::ImGuiApp(const std::string& unit_path,
       arp_step_(0),
       arp_last_step_time_(0.0),
       arp_note_off_time_(0.0),
-      arp_current_note_(0) {
+      arp_current_note_(0),
+      tuner_enabled_(false),
+      tuner_reference_freq_(440.0f) {
   memset(new_preset_name_, 0, sizeof(new_preset_name_));
   active_notes_.resize(128, false);
 }
@@ -436,6 +438,7 @@ void ImGuiApp::render_ui() {
   // Piano roll (only for synth units)
   if (hdr && (hdr->target & UNIT_TARGET_MODULE_MASK) == k_unit_module_synth) {
     render_piano_roll();
+    render_tuner();
   }
 }
 
@@ -524,19 +527,22 @@ void ImGuiApp::render_piano_roll() {
     {ImGuiKey_U, 10}   // A#
   };
   
-  // Octave control with Z/X keys
-  if (ImGui::IsKeyPressed(ImGuiKey_Z)) {
-    octave_offset_ = std::max(octave_offset_ - 1, -2);
-  }
-  if (ImGui::IsKeyPressed(ImGuiKey_X)) {
-    octave_offset_ = std::min(octave_offset_ + 1, 3);
-  }
-  
-  // Process key presses/releases for notes
-  int keyboard_base_note = 60 + (octave_offset_ * 12);  // Middle C + octave offset
-  
-  // White keys
-  for (const auto& km : white_keys) {
+  // Only process keyboard input if ImGui is not capturing it (e.g., typing in text fields)
+  ImGuiIO& io = ImGui::GetIO();
+  if (!io.WantCaptureKeyboard) {
+    // Octave control with Z/X keys
+    if (ImGui::IsKeyPressed(ImGuiKey_Z)) {
+      octave_offset_ = std::max(octave_offset_ - 1, -2);
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_X)) {
+      octave_offset_ = std::min(octave_offset_ + 1, 3);
+    }
+    
+    // Process key presses/releases for notes
+    int keyboard_base_note = 60 + (octave_offset_ * 12);  // Middle C + octave offset
+    
+    // White keys
+    for (const auto& km : white_keys) {
     uint8_t note = keyboard_base_note + km.note_offset;
     if (note < 128) {
       bool was_down = active_notes_[note];
@@ -599,38 +605,39 @@ void ImGuiApp::render_piano_roll() {
     }
   }
   
-  // Collect notes for arpeggiator (only when arp is enabled)
-  if (arp_enabled_) {
-    if (!arp_hold_) {
-      // In non-hold mode, update notes from currently held keys
-      arp_notes_.clear();
-      for (int i = 0; i < 128; ++i) {
-        if (active_notes_[i]) {
-          arp_notes_.push_back(i);
-        }
-      }
-    } else {
-      // In hold mode, only add new notes, don't remove
-      for (int i = 0; i < 128; ++i) {
-        if (active_notes_[i]) {
-          // Check if note is not already in the list
-          bool found = false;
-          for (auto note : arp_notes_) {
-            if (note == i) {
-              found = true;
-              break;
-            }
-          }
-          if (!found) {
+    // Collect notes for arpeggiator (only when arp is enabled)
+    if (arp_enabled_) {
+      if (!arp_hold_) {
+        // In non-hold mode, update notes from currently held keys
+        arp_notes_.clear();
+        for (int i = 0; i < 128; ++i) {
+          if (active_notes_[i]) {
             arp_notes_.push_back(i);
           }
         }
+      } else {
+        // In hold mode, only add new notes, don't remove
+        for (int i = 0; i < 128; ++i) {
+          if (active_notes_[i]) {
+            // Check if note is not already in the list
+            bool found = false;
+            for (auto note : arp_notes_) {
+              if (note == i) {
+                found = true;
+                break;
+              }
+            }
+            if (!found) {
+              arp_notes_.push_back(i);
+            }
+          }
+        }
       }
+    } else {
+      // When arp is disabled, clear the held notes
+      arp_notes_.clear();
     }
-  } else {
-    // When arp is disabled, clear the held notes
-    arp_notes_.clear();
-  }
+  }  // End of keyboard input check
   
   // Draw white keys first
   int white_key_index = 0;
@@ -840,6 +847,167 @@ void ImGuiApp::update_arpeggiator() {
     arp_step_++;
     arp_last_step_time_ = current_time;
   }
+}
+
+void ImGuiApp::render_tuner() {
+  ImGui::SetNextWindowPos(ImVec2(880, 30), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(ImVec2(360, 450), ImGuiCond_FirstUseEver);
+  ImGui::Begin("Tuner", &tuner_enabled_, ImGuiWindowFlags_NoCollapse);
+  
+  // Detected pitch display
+#ifdef PORTAUDIO_PRESENT
+  if (audio_running_ && audio_engine_) {
+    float detected_hz = audio_engine_get_detected_pitch(audio_engine_);
+    
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.1f, 0.1f, 0.15f, 1.0f));
+    ImGui::BeginChild("DetectedPitch", ImVec2(0, 120), true);
+    
+    if (detected_hz > 0.0f) {
+      // Convert frequency to nearest MIDI note
+      float midi_note_float = 69.0f + 12.0f * log2f(detected_hz / tuner_reference_freq_);
+      int midi_note = (int)roundf(midi_note_float);
+      float cents_off = (midi_note_float - midi_note) * 100.0f;
+      
+      // Get note name
+      const char* note_names[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+      int octave = (midi_note / 12) - 1;
+      int note_index = midi_note % 12;
+      
+      // Large note display
+      ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 10);
+      ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - 100) * 0.5f);
+      ImGui::PushFont(ImGui::GetIO().Fonts->Fonts[0]);  // Default font, could be larger
+      ImGui::Text("%s%d", note_names[note_index], octave);
+      ImGui::PopFont();
+      
+      // Frequency
+      ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - 100) * 0.5f);
+      ImGui::Text("%.2f Hz", detected_hz);
+      
+      // Cents deviation with color
+      ImVec4 cents_color;
+      if (fabsf(cents_off) < 5.0f) {
+        cents_color = ImVec4(0.2f, 1.0f, 0.2f, 1.0f);  // Green: in tune
+      } else if (fabsf(cents_off) < 15.0f) {
+        cents_color = ImVec4(1.0f, 1.0f, 0.2f, 1.0f);  // Yellow: close
+      } else {
+        cents_color = ImVec4(1.0f, 0.3f, 0.3f, 1.0f);  // Red: out of tune
+      }
+      
+      ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - 100) * 0.5f);
+      ImGui::TextColored(cents_color, "%+.1f cents", cents_off);
+      
+      // Cents meter (visual indicator)
+      ImGui::Spacing();
+      const float meter_width = ImGui::GetContentRegionAvail().x - 20;
+      const float meter_height = 20;
+      ImVec2 meter_pos = ImGui::GetCursorScreenPos();
+      meter_pos.x += 10;
+      
+      ImDrawList* draw_list = ImGui::GetWindowDrawList();
+      
+      // Background
+      draw_list->AddRectFilled(meter_pos, 
+                               ImVec2(meter_pos.x + meter_width, meter_pos.y + meter_height),
+                               IM_COL32(30, 30, 40, 255));
+      
+      // Center line
+      float center_x = meter_pos.x + meter_width * 0.5f;
+      draw_list->AddLine(ImVec2(center_x, meter_pos.y),
+                        ImVec2(center_x, meter_pos.y + meter_height),
+                        IM_COL32(100, 100, 100, 255), 2.0f);
+      
+      // Cents indicator (-50 to +50 cents range)
+      float cents_norm = cents_off / 50.0f;  // Normalize to -1..1
+      if (cents_norm < -1.0f) cents_norm = -1.0f;
+      if (cents_norm > 1.0f) cents_norm = 1.0f;
+      float indicator_x = center_x + cents_norm * (meter_width * 0.4f);
+      
+      ImU32 indicator_color = fabsf(cents_off) < 5.0f ? IM_COL32(50, 255, 50, 255) : IM_COL32(255, 100, 100, 255);
+      draw_list->AddCircleFilled(ImVec2(indicator_x, meter_pos.y + meter_height * 0.5f), 8, indicator_color);
+      
+      ImGui::Dummy(ImVec2(0, meter_height + 5));
+      
+    } else {
+      ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 30);
+      ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - 150) * 0.5f);
+      ImGui::TextDisabled("No signal detected");
+      ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 30);
+    }
+    
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    
+    ImGui::Separator();
+  } else {
+    ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.2f, 1.0f), "Audio not running");
+    ImGui::TextDisabled("Start audio to enable pitch detection");
+    ImGui::Separator();
+  }
+#else
+  ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.2f, 1.0f), "PortAudio not available");
+  ImGui::Separator();
+#endif
+  
+  ImGui::Text("Reference Tuning");
+  ImGui::SameLine();
+  ImGui::TextDisabled("(?)");
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Standard concert pitch A4 = 440Hz");
+  }
+  
+  if (ImGui::SliderFloat("##RefFreq", &tuner_reference_freq_, 430.0f, 450.0f, "A4 = %.1f Hz", ImGuiSliderFlags_AlwaysClamp)) {
+    // Reference frequency changed
+  }
+  
+  if (ImGui::Button("Reset to 440Hz")) {
+    tuner_reference_freq_ = 440.0f;
+  }
+  
+  ImGui::Separator();
+  ImGui::Spacing();
+  
+  // Display all 12 chromatic notes with their frequencies
+  ImGui::Text("Note Frequencies (Octave 4)");
+  ImGui::Separator();
+  
+  const char* note_names[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+  const int base_midi_note = 60; // C4
+  
+  ImGui::BeginTable("Frequencies", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg);
+  ImGui::TableSetupColumn("Note", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+  ImGui::TableSetupColumn("Frequency", ImGuiTableColumnFlags_WidthStretch);
+  ImGui::TableHeadersRow();
+  
+  for (int i = 0; i < 12; i++) {
+    int midi_note = base_midi_note + i;
+    // f = A4_freq * 2^((note - 69) / 12)
+    float freq = tuner_reference_freq_ * powf(2.0f, (midi_note - 69) / 12.0f);
+    
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    ImGui::Text("%s4", note_names[i]);
+    ImGui::TableNextColumn();
+    ImGui::Text("%.2f Hz", freq);
+  }
+  ImGui::EndTable();
+  
+  ImGui::Spacing();
+  ImGui::Separator();
+  ImGui::Spacing();
+  
+  // Cents deviation calculator
+  ImGui::Text("Cents Calculator");
+  static float cents_input = 0.0f;
+  ImGui::SliderFloat("##Cents", &cents_input, -100.0f, 100.0f, "%.1f cents", ImGuiSliderFlags_AlwaysClamp);
+  
+  if (cents_input != 0.0f) {
+    float ratio = powf(2.0f, cents_input / 1200.0f);
+    float a4_detuned = tuner_reference_freq_ * ratio;
+    ImGui::Text("A4 with %+.1f cents: %.2f Hz", cents_input, a4_detuned);
+  }
+  
+  ImGui::End();
 }
 
 void ImGuiApp::render_presets_panel() {
