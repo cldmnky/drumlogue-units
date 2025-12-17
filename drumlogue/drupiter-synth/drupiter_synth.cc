@@ -9,6 +9,7 @@
 #include "drupiter_synth.h"
 #include "../common/hub_control.h"
 #include "../common/param_format.h"
+#include "../common/midi_helper.h"
 #include "dsp/jupiter_dco.h"
 #include "dsp/jupiter_vcf.h"
 #include "dsp/jupiter_env.h"
@@ -251,9 +252,10 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     const float dco1_oct_mult = OctaveToMultiplier(current_preset_.params[PARAM_DCO1_OCT]);
     const float dco2_oct_mult = OctaveToMultiplier(current_preset_.params[PARAM_DCO2_OCT]);
     
-    // Detune: convert cents to frequency ratio (from DCO2 TUNE param)
-    // Map 0..100 (50=center) to ±200 cents (±2 semitones)
-    const float detune_cents = static_cast<float>(current_preset_.params[PARAM_DCO2_TUNE]) * 4.0f;
+    // Detune: convert 0-100 parameter to ±50 cents (50=center/no detune)
+    // Jupiter-8 has +50 cents unipolar, but we implement ±50 for more flexibility
+    const int32_t detune_param = current_preset_.params[PARAM_DCO2_TUNE];
+    const float detune_cents = (static_cast<float>(detune_param) - 50.0f);  // Maps 0-100 to -50 to +50
     const float detune_ratio = cents_to_ratio(detune_cents);  // Fast approximation
     
     // Cross-modulation depth from direct XMOD param
@@ -279,8 +281,24 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     // Apply LFO waveform (0-3: TRI/RAMP/SQR/S&H)
     lfo_->SetWaveform(static_cast<dsp::JupiterLFO::Waveform>(lfo_wave & 0x03));
     
-    // Keyboard tracking from new KEYFLW parameter
-    const float key_track = current_preset_.params[PARAM_VCF_KEYFLW] / 100.0f;
+    // Apply VCF filter type (12dB or 24dB slope) - Jupiter-8 switchable
+    // 0-49 = 12dB/oct (2-pole), 50-100 = 24dB/oct (4-pole)
+    if (vcf_type < 50) {
+        vcf_->SetMode(dsp::JupiterVCF::MODE_LP12);
+    } else {
+        vcf_->SetMode(dsp::JupiterVCF::MODE_LP24);
+    }
+    
+    // Apply HPF cutoff (non-resonant high-pass before low-pass)
+    // Jupiter-8 has fixed HPF, we make it adjustable
+    // TODO: VCF needs HPF support - currently only has LP modes
+    // For now, this is a placeholder for future HPF implementation
+    (void)hpf_cutoff;  // Suppress unused warning
+    
+    // Keyboard tracking from KEYFLW parameter
+    // Jupiter-8 spec: 0-120% range, with slider downward = reduced tracking
+    // Map 0-100 parameter to 0-1.2 multiplier (100 = 1.2 = 120%)
+    const float key_track = (current_preset_.params[PARAM_VCF_KEYFLW] / 100.0f) * 1.2f;
     
     // Velocity modulation (fixed value for now, TODO: make parameter)
     const float vel_mod = (current_velocity_ / 127.0f) * 0.5f;  // Fixed 50% velocity->VCF
@@ -335,9 +353,12 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         dco2_->SetFrequency(freq2);
         
         // Cross-modulation (DCO2 -> DCO1 FM) - Jupiter-8 style
-        // Uses direct XMOD parameter for control
+        // Jupiter-8 XMOD is subtle linear FM, not exponential
+        // Scale down heavily: full XMOD should be ~±1 semitone at most
         if (xmod_depth > 0.001f) {
-            dco1_->ApplyFM(dco2_out_ * xmod_depth * 0.5f);
+            // Scale: 100% XMOD = ±1 semitone = ±1/12 octave
+            // Further reduce by DCO2 amplitude (-1 to +1)
+            dco1_->ApplyFM(dco2_out_ * xmod_depth * 0.083f);  // 1/12 octave max
         } else {
             dco1_->ApplyFM(0.0f);
         }
@@ -365,37 +386,14 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         
         // Mix oscillators with smoothed levels
         if (unison_enabled) {
-            // Unison mode: Sum current voice with 3 additional detuned voices
-            // This creates a thick, chorus-like sound
-            // Base voice (no detune)
+            // Unison mode: Disabled for now due to implementation complexity
+            // TODO: Implement proper unison using separate oscillator instances
+            // or by modifying JupiterDCO to support multi-voice generation
+            // Current approach of calling Process() multiple times causes
+            // incorrect phase accumulation and pitch drift.
+            
+            // For now, just use the base voices
             mixed_ = dco1_out_ * dco1_level + dco2_out_ * dco2_level;
-            
-            // Voice 2: +10 cents detune
-            const float detune2 = cents_to_ratio(10.0f);
-            dco1_->SetFrequency(freq1 * detune2);
-            dco2_->SetFrequency(freq2 * detune2);
-            float voice2_dco1 = dco1_->Process();
-            float voice2_dco2 = dco2_->Process();
-            mixed_ += voice2_dco1 * dco1_level + voice2_dco2 * dco2_level;
-            
-            // Voice 3: -10 cents detune
-            const float detune3 = cents_to_ratio(-10.0f);
-            dco1_->SetFrequency(freq1 * detune3);
-            dco2_->SetFrequency(freq2 * detune3);
-            float voice3_dco1 = dco1_->Process();
-            float voice3_dco2 = dco2_->Process();
-            mixed_ += voice3_dco1 * dco1_level + voice3_dco2 * dco2_level;
-            
-            // Voice 4: +20 cents detune
-            const float detune4 = cents_to_ratio(20.0f);
-            dco1_->SetFrequency(freq1 * detune4);
-            dco2_->SetFrequency(freq2 * detune4);
-            float voice4_dco1 = dco1_->Process();
-            float voice4_dco2 = dco2_->Process();
-            mixed_ += voice4_dco1 * dco1_level + voice4_dco2 * dco2_level;
-            
-            // Average the 4 voices to prevent clipping
-            mixed_ *= 0.25f;
         } else {
             // Normal single-voice mode
             mixed_ = dco1_out_ * dco1_level + dco2_out_ * dco2_level;
@@ -446,7 +444,12 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         // Apply filter mode from hub (0=LP12, 1=LP24, 2=HP12, 3=BP12)
         vcf_->SetMode(static_cast<dsp::JupiterVCF::Mode>(vcf_type & 0x03));
         
-        filtered_ = vcf_->Process(mixed_);
+        // Bypass VCF when cutoff is at maximum (100) to avoid filter ringing artifacts
+        if (current_preset_.params[PARAM_VCF_CUTOFF] >= 100) {
+            filtered_ = mixed_;  // Bypass filter completely
+        } else {
+            filtered_ = vcf_->Process(mixed_);
+        }
         
         // Apply HPF (high-pass filter) from hub - Jupiter-8 style
         // HPF value: 0-100 maps to 20Hz-2kHz cutoff
@@ -469,6 +472,18 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         
         // Apply VCA with envelope, store to intermediate buffer
         mix_buffer_[i] = filtered_ * vca_env_out_ * 0.5f;  // Scale to prevent clipping
+        
+#ifdef DEBUG
+        static int debug_output_counter = 0;
+        
+        // Periodic output (once per second)
+        if (++debug_output_counter >= 48000 && i == 0) {  // Log once per second, first frame only
+            debug_output_counter = 0;
+            fprintf(stderr, "[Synth Output] DCO1=%.6f, mixed=%.6f, filtered=%.6f, env=%.6f, final=%.6f\n",
+                    dco1_out_, mixed_, filtered_, vca_env_out_, mix_buffer_[i]);
+            fflush(stderr);
+        }
+#endif
     }
     
     // ============ Output stage with chorus/space effect ============
@@ -674,15 +689,27 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
         
         // ======== Page 5: VCA Envelope ========
         case PARAM_VCA_ATTACK:
+#ifdef DEBUG
+            fprintf(stderr, "[Param] VCA_ATTACK value=%d -> time=%.6fs\n", v, ParameterToEnvelopeTime(v));
+            fflush(stderr);
+#endif
             env_vca_->SetAttack(ParameterToEnvelopeTime(v));
             break;
         case PARAM_VCA_DECAY:
+#ifdef DEBUG
+            fprintf(stderr, "[Param] VCA_DECAY value=%d -> time=%.6fs\n", v, ParameterToEnvelopeTime(v));
+            fflush(stderr);
+#endif
             env_vca_->SetDecay(ParameterToEnvelopeTime(v));
             break;
         case PARAM_VCA_SUSTAIN:
             env_vca_->SetSustain(v / 100.0f);
             break;
         case PARAM_VCA_RELEASE:
+#ifdef DEBUG
+            fprintf(stderr, "[Param] VCA_RELEASE value=%d -> time=%.6fs\n", v, ParameterToEnvelopeTime(v));
+            fflush(stderr);
+#endif
             env_vca_->SetRelease(ParameterToEnvelopeTime(v));
             break;
         
@@ -730,6 +757,12 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
             return kOctaveNames[value < 3 ? value : 0];
         case PARAM_DCO2_WAVE:
             return kDco2WaveNames[value < 4 ? value : 0];
+        case PARAM_DCO2_TUNE: {
+            // Map 0-100 to -50 to +50 cents
+            int32_t cents = value - 50;
+            snprintf(str_buf, sizeof(str_buf), "%+d ct", static_cast<int>(cents));
+            return str_buf;
+        }
         case PARAM_SYNC:
             return kSyncNames[value < 3 ? value : 0];
         
@@ -774,9 +807,28 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
 }
 
 void DrupiterSynth::NoteOn(uint8_t note, uint8_t velocity) {
+#ifdef DEBUG
+    static uint8_t last_note = 255;
+    static int note_on_counter = 0;
+    if (note == last_note) {
+        note_on_counter++;
+        if (note_on_counter % 100 == 0) {
+            fprintf(stderr, "[Synth] NoteOn RETRIGGER! Same note %d called %d times\n", note, note_on_counter);
+            fflush(stderr);
+        }
+    } else {
+        if (note_on_counter > 1) {
+            fprintf(stderr, "[Synth] Previous note %d was retriggered %d times\n", last_note, note_on_counter);
+            fflush(stderr);
+        }
+        last_note = note;
+        note_on_counter = 1;
+    }
+#endif
+
     current_note_ = note;
     current_velocity_ = velocity;
-    current_freq_hz_ = NoteToFrequency(note);
+    current_freq_hz_ = common::MidiHelper::NoteToFreq(note);
     gate_ = true;
     
     // Trigger envelopes
@@ -790,6 +842,10 @@ void DrupiterSynth::NoteOn(uint8_t note, uint8_t velocity) {
 
 void DrupiterSynth::NoteOff(uint8_t note) {
     if (note == current_note_ || note == 255) {  // 255 = all notes
+#ifdef DEBUG
+        fprintf(stderr, "[Synth] NoteOff: note=%d (current=%d)\n", note, current_note_);
+        fflush(stderr);
+#endif
         gate_ = false;
         env_vcf_->NoteOff();
         env_vca_->NoteOff();
@@ -848,11 +904,6 @@ void DrupiterSynth::SavePreset(uint8_t preset_id) {
     }
 }
 
-float DrupiterSynth::NoteToFrequency(uint8_t note) const {
-    // MIDI note to frequency: f = 440 * 2^((note - 69) / 12)
-    return 440.0f * powf(2.0f, (note - 69) / 12.0f);
-}
-
 float DrupiterSynth::OctaveToMultiplier(uint8_t octave_param) const {
     // Preferred mapping: 0..2 => 16' (0.5x), 8' (1.0x), 4' (2.0x)
     if (octave_param <= 2) {
@@ -873,7 +924,10 @@ float DrupiterSynth::GenerateNoise() {
 
 float DrupiterSynth::ParameterToEnvelopeTime(uint8_t value) {
     // Quadratic scaling for envelope times (better control at low values)
-    // 0 = 1ms, 32 = ~319ms, 64 = ~1.28s, 127 = 5s
+    // 0 = instant (0.0001s min for stability), 32 = ~320ms, 64 = ~1.28s, 100 = 5s
+    if (value == 0) {
+        return 0.0001f;  // Nearly instant: 0.1ms = ~5 samples at 48kHz
+    }
     float normalized = value / 100.0f;
     return 0.001f + normalized * normalized * 4.999f;
 }

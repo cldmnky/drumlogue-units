@@ -34,7 +34,7 @@ const __unit_header unit_header_t unit_header = {
 
         // ==================== Page 1: DCO-1 ====================
         // DCO-1 Range: Octave (0=16', 1=8', 2=4')
-        {0, 2, 0, 1, k_unit_param_type_strings, 0, 0, 0, {"D1 OCT"}},
+        {0, 2, 1, 1, k_unit_param_type_strings, 0, 0, 0, {"D1 OCT"}},
         // DCO-1 Waveform: SAW/SQR/PULSE/TRI
         {0, 3, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"D1 WAVE"}},
         // DCO-1 Pulse Width: 0-100%
@@ -44,22 +44,22 @@ const __unit_header unit_header_t unit_header = {
 
         // ==================== Page 2: DCO-2 ====================
         // DCO-2 Range: Octave (0=16', 1=8', 2=4')
-        {0, 2, 0, 1, k_unit_param_type_strings, 0, 0, 0, {"D2 OCT"}},
+        {0, 2, 1, 1, k_unit_param_type_strings, 0, 0, 0, {"D2 OCT"}},
         // DCO-2 Waveform: SAW/NOISE/PULSE/SINE
         {0, 3, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"D2 WAVE"}},
-        // DCO-2 Detune: -50 to +50 cents
-        {-50, 50, 0, 0, k_unit_param_type_cents, 0, 0, 0, {"D2 TUNE"}},
-        // DCO-2 Sync: OFF/SOFT/HARD (Jupiter-8 sync to DCO1)
+        // DCO-2 Detune: 0-100 maps to -50 to +50 cents (50=center/no detune)
+        {0, 100, 50, 50, k_unit_param_type_strings, 0, 0, 0, {"D2 TUNE"}},
+        // DCO-2 Sync: OFF/SOFT/HARD (VCO2 syncs to VCO1)
         {0, 2, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"SYNC"}},
 
         // ==================== Page 3: MIX & VCF ====================
         // Oscillator Mix: 0=D1 only, 50=equal, 100=D2 only
-        {0, 100, 50, 79, k_unit_param_type_percent, 0, 0, 0, {"MIX"}},
+        {0, 100, 50, 50, k_unit_param_type_percent, 0, 0, 0, {"MIX"}},
         // VCF Cutoff: Filter cutoff frequency
         {0, 100, 0, 79, k_unit_param_type_percent, 0, 0, 0, {"CUTOFF"}},
         // VCF Resonance: Filter resonance/Q
         {0, 100, 0, 16, k_unit_param_type_percent, 0, 0, 0, {"RESO"}},
-        // VCF Keyboard Tracking: 0-100% (50%=standard)
+        // VCF Keyboard Tracking: 0-100% maps to 0-120% (50=half tracking, 100=full tracking)
         {0, 100, 50, 50, k_unit_param_type_percent, 0, 0, 0, {"KEYFLW"}},
 
         // ==================== Page 4: VCF Envelope ====================

@@ -80,7 +80,7 @@ enum ModDestination {
     MOD_VCF_TYPE,          // Filter type selection (LP12/LP24/HP12/BP)
     MOD_LFO_DELAY,         // LFO delay (fade-in time)
     MOD_LFO_WAVE,          // LFO waveform selection
-    MOD_UNISON,            // Unison mode (4 voices for thicker sound)
+    MOD_UNISON,            // Unison mode (DISABLED - reserved for future)
     MOD_NUM_DESTINATIONS
 };
 
@@ -105,7 +105,7 @@ static constexpr common::HubControl<MOD_NUM_DESTINATIONS>::Destination kModDesti
     {"VCF TYP", "",    0, 3,   1,  false, kVcfTypeNames},  // Filter type (enum)
     {"LFO DLY", "ms",  0, 100, 0,  false, nullptr},        // LFO delay
     {"LFO WAV", "",    0, 3,   0,  false, kLfoWaveNames},  // LFO waveform (TRI/RAMP/SQR/S&H)
-    {"UNISON",  "",    0, 1,   0,  false, nullptr}         // Unison mode (OFF/ON) - uses ParamFormat::OnOff
+    {"UNISON",  "",    0, 1,   0,  false, nullptr}         // Unison mode (DISABLED - has no effect)
 };
 
 // Effect mode names
@@ -339,13 +339,6 @@ private:
     
     // Cached filter cutoff for coefficient update optimization
     float last_cutoff_hz_;
-    
-    /**
-     * @brief Convert MIDI note to frequency
-     * @param note MIDI note number
-     * @return Frequency in Hz
-     */
-    float NoteToFrequency(uint8_t note) const;
     
     /**
      * @brief Convert octave parameter to multiplier

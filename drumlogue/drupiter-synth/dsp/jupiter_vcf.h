@@ -24,8 +24,8 @@ namespace dsp {
  */
 class JupiterVCF {
 public:
-    // Oversampling factor (4x for stability and extended frequency range)
-    static constexpr int kOversamplingFactor = 4;
+    // Oversampling factor (2x is sufficient with improved ladder topology)
+    static constexpr int kOversamplingFactor = 2;
     
     /**
      * @brief Filter modes
@@ -108,6 +108,7 @@ private:
     float resonance_;
     Mode mode_;
     float kbd_tracking_;        // Keyboard tracking amount
+    bool coefficients_dirty_;   // Flag to batch coefficient updates
 
     // Krajeski-style improved ladder filter states
     // 4 cascaded one-pole filters with delay elements for "compromise" poles
@@ -121,11 +122,10 @@ private:
     float ota_d4_;              // Delay for stage 4 (z^-1)
     float ota_y2_;              // LP12 output (after stage 2)
     float ota_y4_;              // LP24 output (after stage 4)
-    float ota_a_;               // Filter coefficient (g) with polynomial correction
+    float ota_g_;               // Filter coefficient (g) with polynomial correction
     float ota_res_k_;           // Resonance feedback gain with decoupling
     float ota_gain_comp_;       // Resonance gain compensation factor
     float ota_output_gain_;     // Output gain to compensate passband loss
-    float ota_drive_;           // Input drive (unused in current impl)
 
     // Non-resonant 6dB high-pass (implemented as 1-pole low-pass + subtraction)
     float hp_lp_state_;
@@ -139,10 +139,6 @@ private:
     // Filter coefficients (SVF)
     float f_;                   // Frequency coefficient
     float q_;                   // Q coefficient (resonance)
-    
-    // For 24dB/oct mode (cascaded filters)
-    float lp2_;
-    float bp2_;
     
     /**
      * @brief Update filter coefficients from cutoff/resonance
