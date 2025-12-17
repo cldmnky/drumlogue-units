@@ -112,6 +112,8 @@ DrupiterSynth::DrupiterSynth()
     , mod_hub_(kModDestinations)  // Initialize HubControl
     , effect_mode_(0)  // CHORUS by default
     , current_preset_idx_(0)
+    , hpf_prev_output_(0.0f)
+    , hpf_prev_input_(0.0f)
 {
     // Initialize preset to defaults
     std::memset(&current_preset_, 0, sizeof(Preset));
@@ -173,9 +175,6 @@ int8_t DrupiterSynth::Init(const unit_runtime_desc_t* desc) {
     space_widener_->SetModDepth(3.0f);        // ±3ms modulation
     space_widener_->SetLfoRate(0.5f);         // 0.5 Hz LFO
     space_widener_->SetMix(0.5f);             // 50% wet/dry mix
-    
-    // Initialize factory presets
-    InitFactoryPresets();
     
     // Load init preset (this will set all parameters including smoothed values)
     LoadPreset(0);
@@ -388,19 +387,10 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         dco2_out_ = dco2_->Process();
         
         // Mix oscillators with smoothed levels
-        if (unison_enabled) {
-            // Unison mode: Disabled for now due to implementation complexity
-            // TODO: Implement proper unison using separate oscillator instances
-            // or by modifying JupiterDCO to support multi-voice generation
-            // Current approach of calling Process() multiple times causes
-            // incorrect phase accumulation and pitch drift.
-            
-            // For now, just use the base voices
-            mixed_ = dco1_out_ * dco1_level + dco2_out_ * dco2_level;
-        } else {
-            // Normal single-voice mode
-            mixed_ = dco1_out_ * dco1_level + dco2_out_ * dco2_level;
-        }
+        // NOTE: Unison mode is disabled - would require separate oscillator instances
+        // to avoid incorrect phase accumulation when calling Process() multiple times
+        (void)unison_enabled;  // Suppress unused variable warning
+        mixed_ = dco1_out_ * dco1_level + dco2_out_ * dco2_level;
         
         // Apply filter with smoothed cutoff, envelope, and LFO modulation
         const float cutoff_norm = cutoff_smooth_->Process();
@@ -464,13 +454,10 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
             const float dt = 1.0f / sample_rate_;
             const float alpha = rc / (rc + dt);
             
-            // Static state variables for HPF
-            static float hpf_prev_output = 0.0f;
-            static float hpf_prev_input = 0.0f;
-            
-            filtered_ = alpha * (hpf_prev_output + filtered_ - hpf_prev_input);
-            hpf_prev_output = filtered_;
-            hpf_prev_input = filtered_;
+            // Use instance state variables for HPF (initialized in constructor)
+            filtered_ = alpha * (hpf_prev_output_ + filtered_ - hpf_prev_input_);
+            hpf_prev_output_ = filtered_;
+            hpf_prev_input_ = filtered_;
         }
         
         // Apply VCA with envelope, store to intermediate buffer

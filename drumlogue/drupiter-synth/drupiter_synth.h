@@ -351,6 +351,10 @@ private:
     // Cached filter cutoff for coefficient update optimization
     float last_cutoff_hz_;
     
+    // HPF state variables (must be instance members, not static)
+    float hpf_prev_output_;
+    float hpf_prev_input_;
+    
     /**
      * @brief Convert octave parameter to multiplier
      * @param octave_param Parameter value 0-127
@@ -387,9 +391,4 @@ private:
     void UpdateVCFParameters();
     void UpdateEnvelopeParameters();
     void UpdateLFOParameters();
-    
-    /**
-     * @brief Initialize factory presets
-     */
-    void InitFactoryPresets();
 };
