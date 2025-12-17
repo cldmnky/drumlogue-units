@@ -14,7 +14,7 @@
 #include "dsp/jupiter_vcf.h"
 #include "dsp/jupiter_env.h"
 #include "dsp/jupiter_lfo.h"
-#include "dsp/smoothed_value.h"
+#include "../common/smoothed_value.h"
 #include <cmath>
 #include <cstring>
 #include <cstdio>
