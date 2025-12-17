@@ -27,7 +27,6 @@ namespace {
 constexpr float kMaxPhaseIncrement = 0.48f;
 constexpr float kFmModRange = 1.0f;  // Exponential FM: fm_amount=±1 -> ±1 octave
 
-#ifdef ENABLE_POLYBLEP
 // PolyBLEP (polynomial band-limited step) to smooth discontinuities.
 // t = current phase [0,1), dt = phase increment (controls transition width).
 inline float PolyBlep(float t, float dt) {
@@ -48,7 +47,6 @@ inline float PolyBlep(float t, float dt) {
     }
     return 0.0f;
 }
-#endif  // ENABLE_POLYBLEP
 
 inline float WrapPhase(float phase) {
     // Efficient wrapping to [0, 1) using floorf
@@ -178,39 +176,29 @@ bool JupiterDCO::DidWrap() const {
 }
 
 float JupiterDCO::GenerateWaveform(float phase, float phase_inc) {
-#ifdef ENABLE_POLYBLEP
     const float dt = std::min(phase_inc, 1.0f);
-#else
-    (void)phase_inc;  // Unused when PolyBLEP is disabled
-#endif
     
     switch (waveform_) {
         case WAVEFORM_SAW:
         {
             float value = LookupWavetable(ramp_table_, phase);
-#ifdef ENABLE_POLYBLEP
             value -= PolyBlep(phase, dt);
-#endif
             return value;
         }
         
         case WAVEFORM_SQUARE:
         {
             float value = LookupWavetable(square_table_, phase);
-#ifdef ENABLE_POLYBLEP
             value += PolyBlep(phase, dt);                           // rising edge at 0
             value -= PolyBlep(WrapPhase(phase + 0.5f), dt);         // falling edge at 0.5
-#endif
             return value;
         }
         
         case WAVEFORM_PULSE: {
             // Comparator-style PWM for Jupiter character
             float value = (phase < pulse_width_) ? 1.0f : -1.0f;
-#ifdef ENABLE_POLYBLEP
             value += PolyBlep(phase, dt);                            // rising edge at reset
             value -= PolyBlep(WrapPhase(phase + (1.0f - pulse_width_)), dt);  // falling edge at PW
-#endif
             return value;
         }
         
