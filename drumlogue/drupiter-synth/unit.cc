@@ -114,21 +114,9 @@ __unit_callback void unit_load_preset(uint8_t idx) {
 }
 
 __unit_callback uint8_t unit_get_preset_index() {
-    return 0;  // Return current preset index (TODO: track in synth)
+    return s_synth_instance.GetPresetIndex();
 }
 
 __unit_callback const char* unit_get_preset_name(uint8_t idx) {
-    static const char* preset_names[] = {
-        "Init",
-        "Bass",
-        "Lead",
-        "Pad",
-        "Brass",
-        "Strings"
-    };
-    
-    if (idx < 6) {
-        return preset_names[idx];
-    }
-    return "Unknown";
+    return s_synth_instance.GetPresetName(idx);
 }

@@ -7,9 +7,11 @@
  */
 
 #include "drupiter_synth.h"
+#include "presets.h"
 #include "../common/hub_control.h"
 #include "../common/param_format.h"
 #include "../common/midi_helper.h"
+#include "../common/preset_manager.h"
 #include "dsp/jupiter_dco.h"
 #include "dsp/jupiter_vcf.h"
 #include "dsp/jupiter_env.h"
@@ -109,6 +111,7 @@ DrupiterSynth::DrupiterSynth()
     , last_cutoff_hz_(1000.0f)
     , mod_hub_(kModDestinations)  // Initialize HubControl
     , effect_mode_(0)  // CHORUS by default
+    , current_preset_idx_(0)
 {
     // Initialize preset to defaults
     std::memset(&current_preset_, 0, sizeof(Preset));
@@ -863,7 +866,13 @@ void DrupiterSynth::LoadPreset(uint8_t preset_id) {
         preset_id = 0;
     }
     
-    current_preset_ = factory_presets_[preset_id];
+    current_preset_idx_ = preset_id;
+    
+    // Load from factory presets (defined in presets.h)
+    const auto& factory = presets::kFactoryPresets[preset_id];
+    std::memcpy(current_preset_.params, factory.params, sizeof(current_preset_.params));
+    std::memcpy(current_preset_.hub_values, factory.hub_values, sizeof(current_preset_.hub_values));
+    std::strcpy(current_preset_.name, factory.name);
     
     // Set smoothed parameters immediately (no smoothing during preset load)
     if (cutoff_smooth_) {
@@ -895,13 +904,9 @@ void DrupiterSynth::LoadPreset(uint8_t preset_id) {
 }
 
 void DrupiterSynth::SavePreset(uint8_t preset_id) {
-    if (preset_id < 6) {
-        // Save current MOD HUB values to preset
-        for (uint8_t dest = 0; dest < MOD_NUM_DESTINATIONS; ++dest) {
-            current_preset_.hub_values[dest] = mod_hub_.GetValue(dest);
-        }
-        factory_presets_[preset_id] = current_preset_;
-    }
+    // Note: drumlogue SDK doesn't support user preset storage
+    // This is a placeholder for potential future implementation
+    (void)preset_id;
 }
 
 float DrupiterSynth::OctaveToMultiplier(uint8_t octave_param) const {
@@ -938,211 +943,10 @@ float DrupiterSynth::ParameterToExponentialFreq(uint8_t value, float min_freq, f
     return min_freq + normalized * normalized * (max_freq - min_freq);
 }
 
-void DrupiterSynth::InitFactoryPresets() {
-    // Factory presets now use hub control for modulation routing
-    
-    // Initialize all presets with default hub values
-    for (uint8_t p = 0; p < 6; ++p) {
-        for (uint8_t dest = 0; dest < MOD_NUM_DESTINATIONS; ++dest) {
-            factory_presets_[p].hub_values[dest] = kModDestinations[dest].default_value;
-        }
+const char* DrupiterSynth::GetPresetName(uint8_t preset_id) const {
+    if (preset_id >= 6) {
+        return "Invalid";
     }
-    
-    // Preset 0: Init - Basic sound
-    std::memset(&factory_presets_[0], 0, sizeof(Preset));
-    // Reinit hub values after memset
-    for (uint8_t dest = 0; dest < MOD_NUM_DESTINATIONS; ++dest) {
-        factory_presets_[0].hub_values[dest] = kModDestinations[dest].default_value;
-    }
-    // Page 1: DCO-1
-    factory_presets_[0].params[PARAM_DCO1_OCT] = 1;       // 8'
-    factory_presets_[0].params[PARAM_DCO1_WAVE] = 0;      // SAW
-    factory_presets_[0].params[PARAM_DCO1_PW] = 50;       // 50%
-    factory_presets_[0].params[PARAM_XMOD] = 0;           // No cross-mod
-    // Page 2: DCO-2
-    factory_presets_[0].params[PARAM_DCO2_OCT] = 1;       // 8'
-    factory_presets_[0].params[PARAM_DCO2_WAVE] = 0;      // SAW
-    factory_presets_[0].params[PARAM_DCO2_TUNE] = 0;     // Center (no detune)
-    factory_presets_[0].params[PARAM_SYNC] = 0;           // OFF
-    // Page 3: MIX & VCF
-    factory_presets_[0].params[PARAM_OSC_MIX] = 0;        // DCO1 only
-    factory_presets_[0].params[PARAM_VCF_CUTOFF] = 79;
-    factory_presets_[0].params[PARAM_VCF_RESONANCE] = 16;
-    factory_presets_[0].params[PARAM_VCF_KEYFLW] = 50;    // 50% keyboard tracking
-    // Page 4: VCF Envelope
-    factory_presets_[0].params[PARAM_VCF_ATTACK] = 4;
-    factory_presets_[0].params[PARAM_VCF_DECAY] = 31;
-    factory_presets_[0].params[PARAM_VCF_SUSTAIN] = 50;
-    factory_presets_[0].params[PARAM_VCF_RELEASE] = 24;
-    // Page 5: VCA Envelope
-    factory_presets_[0].params[PARAM_VCA_ATTACK] = 1;
-    factory_presets_[0].params[PARAM_VCA_DECAY] = 39;
-    factory_presets_[0].params[PARAM_VCA_SUSTAIN] = 79;
-    factory_presets_[0].params[PARAM_VCA_RELEASE] = 16;
-    // Page 6: LFO, MOD HUB & Effects
-    factory_presets_[0].params[PARAM_LFO_RATE] = 32;      // Moderate LFO rate
-    factory_presets_[0].params[PARAM_MOD_HUB] = MOD_VCF_TYPE;  // VCF Type by default
-    factory_presets_[0].hub_values[MOD_VCF_TYPE] = 1;     // LP24 filter
-    factory_presets_[0].params[PARAM_EFFECT] = 0;         // Chorus
-    std::strcpy(factory_presets_[0].name, "Init 1");
-    
-    // Preset 1: Bass - Punchy bass with filter envelope
-    std::memset(&factory_presets_[1], 0, sizeof(Preset));
-    // Reinit hub values after memset
-    for (uint8_t dest = 0; dest < MOD_NUM_DESTINATIONS; ++dest) {
-        factory_presets_[1].hub_values[dest] = kModDestinations[dest].default_value;
-    }
-    factory_presets_[1].params[PARAM_DCO1_OCT] = 0;       // 16'
-    factory_presets_[1].params[PARAM_DCO1_WAVE] = 2;      // PULSE
-    factory_presets_[1].params[PARAM_DCO1_PW] = 31;       // Narrow pulse
-    factory_presets_[1].params[PARAM_XMOD] = 0;
-    factory_presets_[1].params[PARAM_DCO2_OCT] = 0;       // 16'
-    factory_presets_[1].params[PARAM_DCO2_WAVE] = 0;      // SAW
-    factory_presets_[1].params[PARAM_DCO2_TUNE] = 0;
-    factory_presets_[1].params[PARAM_SYNC] = 0;
-    factory_presets_[1].params[PARAM_OSC_MIX] = 0;        // DCO1 only
-    factory_presets_[1].params[PARAM_VCF_CUTOFF] = 39;
-    factory_presets_[1].params[PARAM_VCF_RESONANCE] = 39;
-    factory_presets_[1].params[PARAM_VCF_KEYFLW] = 75;    // High key tracking for bass
-    factory_presets_[1].params[PARAM_VCF_ATTACK] = 0;
-    factory_presets_[1].params[PARAM_VCF_DECAY] = 27;
-    factory_presets_[1].params[PARAM_VCF_SUSTAIN] = 16;
-    factory_presets_[1].params[PARAM_VCF_RELEASE] = 8;
-    factory_presets_[1].params[PARAM_VCA_ATTACK] = 0;
-    factory_presets_[1].params[PARAM_VCA_DECAY] = 31;
-    factory_presets_[1].params[PARAM_VCA_SUSTAIN] = 63;
-    factory_presets_[1].params[PARAM_VCA_RELEASE] = 12;
-    factory_presets_[1].params[PARAM_LFO_RATE] = 32;
-    factory_presets_[1].params[PARAM_MOD_HUB] = MOD_VCF_TYPE;
-    factory_presets_[1].hub_values[MOD_VCF_TYPE] = 1;     // LP24
-    factory_presets_[1].params[PARAM_EFFECT] = 0;
-    std::strcpy(factory_presets_[1].name, "Bass 1");
-    
-    // Preset 2: Lead - Sharp lead with sync
-    std::memset(&factory_presets_[2], 0, sizeof(Preset));
-    // Reinit hub values after memset
-    for (uint8_t dest = 0; dest < MOD_NUM_DESTINATIONS; ++dest) {
-        factory_presets_[2].hub_values[dest] = kModDestinations[dest].default_value;
-    }
-    factory_presets_[2].params[PARAM_DCO1_OCT] = 1;       // 8'
-    factory_presets_[2].params[PARAM_DCO1_WAVE] = 0;      // SAW
-    factory_presets_[2].params[PARAM_DCO1_PW] = 50;
-    factory_presets_[2].params[PARAM_XMOD] = 0;
-    factory_presets_[2].params[PARAM_DCO2_OCT] = 2;       // 4' (one octave up)
-    factory_presets_[2].params[PARAM_DCO2_WAVE] = 0;      // SAW
-    factory_presets_[2].params[PARAM_DCO2_TUNE] = 0;
-    factory_presets_[2].params[PARAM_SYNC] = 2;           // HARD sync for classic lead
-    factory_presets_[2].params[PARAM_OSC_MIX] = 30;       // Mostly DCO1 with some DCO2
-    factory_presets_[2].params[PARAM_VCF_CUTOFF] = 71;
-    factory_presets_[2].params[PARAM_VCF_RESONANCE] = 55;
-    factory_presets_[2].params[PARAM_VCF_KEYFLW] = 40;
-    factory_presets_[2].params[PARAM_VCF_ATTACK] = 4;
-    factory_presets_[2].params[PARAM_VCF_DECAY] = 24;
-    factory_presets_[2].params[PARAM_VCF_SUSTAIN] = 47;
-    factory_presets_[2].params[PARAM_VCF_RELEASE] = 20;
-    factory_presets_[2].params[PARAM_VCA_ATTACK] = 2;
-    factory_presets_[2].params[PARAM_VCA_DECAY] = 24;
-    factory_presets_[2].params[PARAM_VCA_SUSTAIN] = 79;
-    factory_presets_[2].params[PARAM_VCA_RELEASE] = 16;
-    factory_presets_[2].params[PARAM_LFO_RATE] = 50;
-    factory_presets_[2].params[PARAM_MOD_HUB] = MOD_LFO_TO_VCF;
-    factory_presets_[2].hub_values[MOD_LFO_TO_VCF] = 30;
-    factory_presets_[2].params[PARAM_EFFECT] = 0;
-    std::strcpy(factory_presets_[2].name, "Lead 1");
-    
-    // Preset 3: Pad - Warm pad with detuned oscillators
-    std::memset(&factory_presets_[3], 0, sizeof(Preset));
-    // Reinit hub values after memset
-    for (uint8_t dest = 0; dest < MOD_NUM_DESTINATIONS; ++dest) {
-        factory_presets_[3].hub_values[dest] = kModDestinations[dest].default_value;
-    }
-    factory_presets_[3].params[PARAM_DCO1_OCT] = 1;       // 8'
-    factory_presets_[3].params[PARAM_DCO1_WAVE] = 0;      // SAW
-    factory_presets_[3].params[PARAM_DCO1_PW] = 50;
-    factory_presets_[3].params[PARAM_XMOD] = 0;
-    factory_presets_[3].params[PARAM_DCO2_OCT] = 1;       // 8'
-    factory_presets_[3].params[PARAM_DCO2_WAVE] = 0;      // SAW
-    factory_presets_[3].params[PARAM_DCO2_TUNE] = 3;     // Slight detune
-    factory_presets_[3].params[PARAM_SYNC] = 0;
-    factory_presets_[3].params[PARAM_OSC_MIX] = 50;       // Equal mix
-    factory_presets_[3].params[PARAM_VCF_CUTOFF] = 63;
-    factory_presets_[3].params[PARAM_VCF_RESONANCE] = 20;
-    factory_presets_[3].params[PARAM_VCF_KEYFLW] = 20;
-    factory_presets_[3].params[PARAM_VCF_ATTACK] = 35;
-    factory_presets_[3].params[PARAM_VCF_DECAY] = 39;
-    factory_presets_[3].params[PARAM_VCF_SUSTAIN] = 55;
-    factory_presets_[3].params[PARAM_VCF_RELEASE] = 39;
-    factory_presets_[3].params[PARAM_VCA_ATTACK] = 39;
-    factory_presets_[3].params[PARAM_VCA_DECAY] = 39;
-    factory_presets_[3].params[PARAM_VCA_SUSTAIN] = 79;
-    factory_presets_[3].params[PARAM_VCA_RELEASE] = 55;
-    factory_presets_[3].params[PARAM_LFO_RATE] = 35;
-    factory_presets_[3].params[PARAM_MOD_HUB] = MOD_VCF_TYPE;
-    factory_presets_[3].hub_values[MOD_VCF_TYPE] = 1;     // LP24
-    factory_presets_[3].params[PARAM_EFFECT] = 0;
-    std::strcpy(factory_presets_[3].name, "Pad 1");
-    
-    // Preset 4: Brass - Bright brass with XMOD
-    std::memset(&factory_presets_[4], 0, sizeof(Preset));
-    // Reinit hub values after memset
-    for (uint8_t dest = 0; dest < MOD_NUM_DESTINATIONS; ++dest) {
-        factory_presets_[4].hub_values[dest] = kModDestinations[dest].default_value;
-    }
-    factory_presets_[4].params[PARAM_DCO1_OCT] = 1;       // 8'
-    factory_presets_[4].params[PARAM_DCO1_WAVE] = 0;      // SAW
-    factory_presets_[4].params[PARAM_DCO1_PW] = 50;
-    factory_presets_[4].params[PARAM_XMOD] = 15;          // Subtle cross-mod
-    factory_presets_[4].params[PARAM_DCO2_OCT] = 1;       // 8'
-    factory_presets_[4].params[PARAM_DCO2_WAVE] = 0;      // SAW
-    factory_presets_[4].params[PARAM_DCO2_TUNE] = 0;
-    factory_presets_[4].params[PARAM_SYNC] = 0;
-    factory_presets_[4].params[PARAM_OSC_MIX] = 40;
-    factory_presets_[4].params[PARAM_VCF_CUTOFF] = 59;
-    factory_presets_[4].params[PARAM_VCF_RESONANCE] = 24;
-    factory_presets_[4].params[PARAM_VCF_KEYFLW] = 60;
-    factory_presets_[4].params[PARAM_VCF_ATTACK] = 12;
-    factory_presets_[4].params[PARAM_VCF_DECAY] = 35;
-    factory_presets_[4].params[PARAM_VCF_SUSTAIN] = 51;
-    factory_presets_[4].params[PARAM_VCF_RELEASE] = 27;
-    factory_presets_[4].params[PARAM_VCA_ATTACK] = 12;
-    factory_presets_[4].params[PARAM_VCA_DECAY] = 35;
-    factory_presets_[4].params[PARAM_VCA_SUSTAIN] = 71;
-    factory_presets_[4].params[PARAM_VCA_RELEASE] = 24;
-    factory_presets_[4].params[PARAM_LFO_RATE] = 40;
-    factory_presets_[4].params[PARAM_MOD_HUB] = MOD_ENV_TO_VCF;
-    factory_presets_[4].hub_values[MOD_ENV_TO_VCF] = 40;
-    factory_presets_[4].params[PARAM_EFFECT] = 0;
-    std::strcpy(factory_presets_[4].name, "Brass 1");
-    
-    // Preset 5: Strings - Lush strings with detuned oscillators
-    std::memset(&factory_presets_[5], 0, sizeof(Preset));
-    // Reinit hub values after memset
-    for (uint8_t dest = 0; dest < MOD_NUM_DESTINATIONS; ++dest) {
-        factory_presets_[5].hub_values[dest] = kModDestinations[dest].default_value;
-    }
-    factory_presets_[5].params[PARAM_DCO1_OCT] = 1;       // 8'
-    factory_presets_[5].params[PARAM_DCO1_WAVE] = 0;      // SAW
-    factory_presets_[5].params[PARAM_DCO1_PW] = 50;
-    factory_presets_[5].params[PARAM_XMOD] = 0;
-    factory_presets_[5].params[PARAM_DCO2_OCT] = 1;       // 8'
-    factory_presets_[5].params[PARAM_DCO2_WAVE] = 0;      // SAW
-    factory_presets_[5].params[PARAM_DCO2_TUNE] = 5;     // Detune for richness
-    factory_presets_[5].params[PARAM_SYNC] = 0;
-    factory_presets_[5].params[PARAM_OSC_MIX] = 50;       // Equal mix
-    factory_presets_[5].params[PARAM_VCF_CUTOFF] = 75;
-    factory_presets_[5].params[PARAM_VCF_RESONANCE] = 16;
-    factory_presets_[5].params[PARAM_VCF_KEYFLW] = 25;
-    factory_presets_[5].params[PARAM_VCF_ATTACK] = 47;
-    factory_presets_[5].params[PARAM_VCF_DECAY] = 43;
-    factory_presets_[5].params[PARAM_VCF_SUSTAIN] = 59;
-    factory_presets_[5].params[PARAM_VCF_RELEASE] = 47;
-    factory_presets_[5].params[PARAM_VCA_ATTACK] = 51;
-    factory_presets_[5].params[PARAM_VCA_DECAY] = 43;
-    factory_presets_[5].params[PARAM_VCA_SUSTAIN] = 79;
-    factory_presets_[5].params[PARAM_VCA_RELEASE] = 63;
-    factory_presets_[5].params[PARAM_LFO_RATE] = 38;
-    factory_presets_[5].params[PARAM_MOD_HUB] = MOD_LFO_TO_VCO;
-    factory_presets_[5].hub_values[MOD_LFO_TO_VCO] = 20;
-    factory_presets_[5].params[PARAM_EFFECT] = 0;
-    std::strcpy(factory_presets_[5].name, "String 1");
+    return presets::kFactoryPresets[preset_id].name;
 }
+

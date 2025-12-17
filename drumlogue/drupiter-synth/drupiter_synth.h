@@ -172,13 +172,11 @@ public:
         PARAM_COUNT = 24
     };
 
-    /**
-     * @brief Preset structure
-     */
+    // Preset type (forward declaration from presets.h)
     struct Preset {
-        uint8_t params[PARAM_COUNT];  // Continuous params are 0-100; discrete params are small enums
-        uint8_t hub_values[MOD_NUM_DESTINATIONS];  // Stored values for each MOD HUB destination
-        char name[14];                // 13 chars + null terminator
+        uint8_t params[PARAM_COUNT];
+        uint8_t hub_values[MOD_NUM_DESTINATIONS];
+        char name[14];
     };
 
     /**
@@ -276,6 +274,19 @@ public:
      * @param preset_id Preset index (0-5)
      */
     void SavePreset(uint8_t preset_id);
+    
+    /**
+     * @brief Get current preset index
+     * @return Current preset index (0-5)
+     */
+    uint8_t GetPresetIndex() const { return current_preset_idx_; }
+    
+    /**
+     * @brief Get preset name
+     * @param preset_id Preset index (0-5)
+     * @return Preset name
+     */
+    const char* GetPresetName(uint8_t preset_id) const;
 
 private:
     // DSP component instances (forward declared)
@@ -295,7 +306,7 @@ private:
     
     // Parameter storage
     Preset current_preset_;
-    Preset factory_presets_[6];
+    uint8_t current_preset_idx_;
     
     // Jupiter-8 specific oscillator controls
     uint8_t sync_mode_;            // 0=OFF, 1=SOFT, 2=HARD
