@@ -392,6 +392,24 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         (void)unison_enabled;  // Suppress unused variable warning
         mixed_ = dco1_out_ * dco1_level + dco2_out_ * dco2_level;
         
+        // Apply HPF (high-pass filter) FIRST - Jupiter-8 signal flow
+        // HPF comes before LPF in Jupiter-8 architecture
+        // HPF value: 0-100 maps to 20Hz-2kHz cutoff
+        float hpf_out = mixed_;
+        if (hpf_cutoff > 0) {
+            // Simple one-pole HPF: y[n] = alpha * (y[n-1] + x[n] - x[n-1])
+            // where alpha = 1 / (1 + 2*pi*fc/fs)
+            const float hpf_freq = 20.0f + (hpf_cutoff / 100.0f) * 1980.0f;  // 20Hz-2kHz
+            const float rc = 1.0f / (2.0f * M_PI * hpf_freq);
+            const float dt = 1.0f / sample_rate_;
+            const float alpha = rc / (rc + dt);
+            
+            // Use instance state variables for HPF (initialized in constructor)
+            hpf_out = alpha * (hpf_prev_output_ + mixed_ - hpf_prev_input_);
+            hpf_prev_output_ = hpf_out;
+            hpf_prev_input_ = mixed_;
+        }
+        
         // Apply filter with smoothed cutoff, envelope, and LFO modulation
         const float cutoff_norm = cutoff_smooth_->Process();
         
@@ -439,25 +457,9 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         
         // Bypass VCF when cutoff is at maximum (100) to avoid filter ringing artifacts
         if (current_preset_.params[PARAM_VCF_CUTOFF] >= 100) {
-            filtered_ = mixed_;  // Bypass filter completely
+            filtered_ = hpf_out;  // Bypass LPF, but keep HPF processing
         } else {
-            filtered_ = vcf_->Process(mixed_);
-        }
-        
-        // Apply HPF (high-pass filter) from hub - Jupiter-8 style
-        // HPF value: 0-100 maps to 20Hz-2kHz cutoff
-        if (hpf_cutoff > 0) {
-            // Simple one-pole HPF: y[n] = alpha * (y[n-1] + x[n] - x[n-1])
-            // where alpha = 1 / (1 + 2*pi*fc/fs)
-            const float hpf_freq = 20.0f + (hpf_cutoff / 100.0f) * 1980.0f;  // 20Hz-2kHz
-            const float rc = 1.0f / (2.0f * M_PI * hpf_freq);
-            const float dt = 1.0f / sample_rate_;
-            const float alpha = rc / (rc + dt);
-            
-            // Use instance state variables for HPF (initialized in constructor)
-            filtered_ = alpha * (hpf_prev_output_ + filtered_ - hpf_prev_input_);
-            hpf_prev_output_ = filtered_;
-            hpf_prev_input_ = filtered_;
+            filtered_ = vcf_->Process(hpf_out);  // Process HPF output through LPF
         }
         
         // Apply VCA with envelope, store to intermediate buffer
