@@ -34,8 +34,8 @@ endif
 
 # Enable NEON on ARM64 hosts (Apple Silicon / Linux aarch64)
 ifneq (,$(findstring arm64,$(UNAME_M)))
-  CXXFLAGS += -march=armv8-a+simd -DUSE_NEON -DENABLE_POLYBLEP
-  CFLAGS   += -march=armv8-a+simd -DUSE_NEON -DENABLE_POLYBLEP
+  CXXFLAGS += -march=armv8-a+simd -DUSE_NEON
+  CFLAGS   += -march=armv8-a+simd -DUSE_NEON
 endif
 
 # Optional DEBUG flag (use DEBUG=1 when building)

@@ -147,7 +147,8 @@ float JupiterDCO::Process() {
         }
         noise_seed_ = noise_seed_ * 1664525u + 1013904223u;
         float noise = ((noise_seed_ >> 9) & 0x7FFFFF) / float(0x7FFFFF) - 0.5f;
-        current_drift_ = 0.0003f * sinf(drift_phase_ * 2.0f * static_cast<float>(M_PI)) + 0.0002f * noise;
+        // Reduced drift: ~±0.005% (was ±0.05%) for better tuning stability
+        current_drift_ = 0.00003f * sinf(drift_phase_ * 2.0f * static_cast<float>(M_PI)) + 0.00002f * noise;
     }
     current_phase_inc *= (1.0f + current_drift_);
     
@@ -236,17 +237,9 @@ void JupiterDCO::InitWavetables() {
         // This matches the Roland/Jupiter sawtooth direction
         ramp_table_[i] = 1.0f - phase * 2.0f;
         
-        // Square wave with slight decay on plateaus (Bristol style)
-        // This adds warmth by simulating capacitor discharge
-        if (phase < 0.5f) {
-            // First half: start at +1 and decay slightly
-            float decay = 1.0f - (phase * 0.04f);  // ~2% decay per half cycle
-            square_table_[i] = decay;
-        } else {
-            // Second half: start at -1 and decay back toward 0
-            float decay = 1.0f - ((phase - 0.5f) * 0.04f);
-            square_table_[i] = -decay;
-        }
+        // Square wave: perfect symmetry for zero DC offset
+        // Must be exactly ±1.0 to avoid pitch drift
+        square_table_[i] = (phase < 0.5f) ? 1.0f : -1.0f;
         
         // Triangle wave: -1 to +1 to -1
         // Bristol uses this same approach

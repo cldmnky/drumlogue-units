@@ -354,43 +354,43 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         dco1_->SetFrequency(freq1);
         dco2_->SetFrequency(freq2);
         
-        // Cross-modulation (DCO2 -> DCO1 FM) - Jupiter-8 style
-        // Jupiter-8 XMOD is subtle linear FM, not exponential
-        // Scale down heavily: full XMOD should be ~±1 semitone at most
-        if (xmod_depth > 0.001f) {
-            // Scale: 100% XMOD = ±1 semitone = ±1/12 octave
-            // Further reduce by DCO2 amplitude (-1 to +1)
-            dco1_->ApplyFM(dco2_out_ * xmod_depth * 0.083f);  // 1/12 octave max
+        // Only process DCO2 if it's audible (level > 0) or needed for XMOD
+        const bool dco2_needed = (dco2_level > 0.001f) || (xmod_depth > 0.001f);
+        
+        if (dco2_needed) {
+            // Process DCO2 first to get fresh output for FM
+            dco2_out_ = dco2_->Process();
+            
+            // Cross-modulation (DCO2 -> DCO1 FM) - Jupiter-8 style
+            // Only apply FM if XMOD depth is significant
+            if (xmod_depth > 0.001f) {
+                // Scale: 100% XMOD = ±1 semitone = ±1/12 octave
+                dco1_->ApplyFM(dco2_out_ * xmod_depth * 0.083f);
+            } else {
+                dco1_->ApplyFM(0.0f);
+            }
         } else {
+            // DCO2 not needed - silence it and ensure no FM
+            dco2_out_ = 0.0f;
             dco1_->ApplyFM(0.0f);
         }
         
-        // Process DCO1 first (master for sync)
+        // Process DCO1 (optionally modulated by DCO2)
         dco1_out_ = dco1_->Process();
         
-        // Hard sync: Reset DCO2 phase when DCO1 wraps
-        // This is the classic Jupiter-8 sync sound
-        if (sync_mode_ == 2 && dco1_->DidWrap()) {  // HARD sync
-            dco2_->ResetPhase();
-        }
-        // Soft sync: Attenuate DCO2 when DCO1 wraps (gentler effect)
-        else if (sync_mode_ == 1 && dco1_->DidWrap()) {  // SOFT sync
-            // Soft sync gently pushes DCO2 toward phase reset
-            // Creates a more subtle timbral variation
-            float phase2 = dco2_->GetPhase();
-            if (phase2 > 0.5f) {
-                dco2_->ResetPhase();  // Only reset if past halfway
-            }
-        }
-
-        // Process DCO2 (slave)
-        dco2_out_ = dco2_->Process();
+        // Note: Sync disabled when XMOD is active
+        // Jupiter-8 doesn't support sync+xmod simultaneously due to processing order
+        // (DCO2 must be processed first for FM, breaking sync master/slave relationship)
         
         // Mix oscillators with smoothed levels
         // NOTE: Unison mode is disabled - would require separate oscillator instances
         // to avoid incorrect phase accumulation when calling Process() multiple times
         (void)unison_enabled;  // Suppress unused variable warning
         mixed_ = dco1_out_ * dco1_level + dco2_out_ * dco2_level;
+        
+        // Soft clamp mixed oscillators to prevent clipping (both at 100% = potential ±2.0)
+        if (mixed_ > 1.2f) mixed_ = 1.2f + 0.5f * (mixed_ - 1.2f);
+        else if (mixed_ < -1.2f) mixed_ = -1.2f + 0.5f * (mixed_ + 1.2f);
         
         // Apply HPF (high-pass filter) FIRST - Jupiter-8 signal flow
         // HPF comes before LPF in Jupiter-8 architecture
@@ -408,6 +408,10 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
             hpf_out = alpha * (hpf_prev_output_ + mixed_ - hpf_prev_input_);
             hpf_prev_output_ = hpf_out;
             hpf_prev_input_ = mixed_;
+            
+            // Soft clamp HPF output to prevent filter overload
+            if (hpf_out > 1.5f) hpf_out = 1.5f + 0.3f * (hpf_out - 1.5f);
+            else if (hpf_out < -1.5f) hpf_out = -1.5f + 0.3f * (hpf_out + 1.5f);
         }
         
         // Apply filter with smoothed cutoff, envelope, and LFO modulation
@@ -460,10 +464,15 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
             filtered_ = hpf_out;  // Bypass LPF, but keep HPF processing
         } else {
             filtered_ = vcf_->Process(hpf_out);  // Process HPF output through LPF
+            
+            // Soft clip filter output to prevent resonance spikes
+            if (filtered_ > 1.8f) filtered_ = 1.8f + 0.2f * (filtered_ - 1.8f);
+            else if (filtered_ < -1.8f) filtered_ = -1.8f + 0.2f * (filtered_ + 1.8f);
         }
         
-        // Apply VCA with envelope, store to intermediate buffer
-        mix_buffer_[i] = filtered_ * vca_env_out_ * 0.5f;  // Scale to prevent clipping
+        // Apply VCA with envelope and extra headroom to prevent clipping
+        // 0.6f scaling provides safe headroom for filter resonance peaks
+        mix_buffer_[i] = filtered_ * vca_env_out_ * 0.6f;
         
 #ifdef DEBUG
         static int debug_output_counter = 0;
