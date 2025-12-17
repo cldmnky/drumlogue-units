@@ -63,7 +63,7 @@ static const DrupiterPreset kFactoryPresets[6] = {
             0,    // PARAM_MOD_AMT: Will use hub_values
             0     // PARAM_EFFECT: Chorus
         },
-        {0, 0, 0, 0, 0, 0, 1, 0, 0, 0}  // hub_values: MOD_VCF_TYPE=1 (LP24)
+        {0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 100, 0, 0, 50}  // hub_values: VCF_TYPE=1 (LP24), VCA_LEVEL=100, ENV_KYBD=50
     },
     
     // Preset 1: Bass - Punchy bass with filter envelope
@@ -77,7 +77,7 @@ static const DrupiterPreset kFactoryPresets[6] = {
             0, 31, 63, 12,      // VCA env: punchy
             32, static_cast<uint8_t>(MOD_VCF_TYPE), 0, 0
         },
-        {0, 0, 0, 0, 0, 0, 1, 0, 0, 0}  // MOD_VCF_TYPE=1 (LP24)
+        {0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 100, 0, 0, 50}  // VCF_TYPE=1 (LP24), VCA_LEVEL=100, ENV_KYBD=50
     },
     
     // Preset 2: Lead - Sharp lead with sync
@@ -91,7 +91,7 @@ static const DrupiterPreset kFactoryPresets[6] = {
             2, 24, 79, 16,      // VCA env: slight attack
             50, static_cast<uint8_t>(MOD_LFO_TO_VCF), 0, 0
         },
-        {0, 30, 0, 0, 0, 0, 1, 0, 0, 0}  // MOD_LFO_TO_VCF=30
+        {0, 30, 0, 0, 0, 0, 1, 0, 0, 0, 100, 0, 0, 50}  // LFO_TO_VCF=30, VCF_TYPE=1, VCA_LEVEL=100, ENV_KYBD=50
     },
     
     // Preset 3: Pad - Warm pad with detuned oscillators
@@ -105,7 +105,7 @@ static const DrupiterPreset kFactoryPresets[6] = {
             39, 39, 79, 55,     // VCA env: slow attack, long release
             35, static_cast<uint8_t>(MOD_VCF_TYPE), 0, 0
         },
-        {0, 0, 0, 0, 0, 0, 1, 0, 0, 0}  // MOD_VCF_TYPE=1 (LP24)
+        {0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 100, 0, 0, 50}  // VCF_TYPE=1 (LP24), VCA_LEVEL=100, ENV_KYBD=50
     },
     
     // Preset 4: Brass - Bright brass with XMOD
@@ -119,7 +119,7 @@ static const DrupiterPreset kFactoryPresets[6] = {
             12, 35, 71, 24,     // VCA env: medium attack
             40, static_cast<uint8_t>(MOD_ENV_TO_VCF), 0, 0
         },
-        {0, 0, 0, 0, 40, 0, 1, 0, 0, 0}  // MOD_ENV_TO_VCF=40
+        {0, 0, 0, 0, 40, 0, 1, 0, 0, 0, 100, 0, 0, 50}  // ENV_TO_VCF=40, VCF_TYPE=1, VCA_LEVEL=100, ENV_KYBD=50
     },
     
     // Preset 5: Strings - Lush strings with detuned oscillators
@@ -133,7 +133,7 @@ static const DrupiterPreset kFactoryPresets[6] = {
             51, 43, 79, 63,     // VCA env: slow attack, very long release
             38, static_cast<uint8_t>(MOD_LFO_TO_VCO), 0, 0
         },
-        {0, 0, 20, 0, 0, 0, 1, 0, 0, 0}  // MOD_LFO_TO_VCO=20 (vibrato)
+        {0, 0, 20, 0, 0, 0, 1, 0, 0, 0, 100, 0, 0, 50}  // LFO_TO_VCO=20 (vibrato), VCF_TYPE=1, VCA_LEVEL=100, ENV_KYBD=50
     }
 };
 

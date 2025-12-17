@@ -13,6 +13,7 @@
 
 #define PARAM_QUEUE_CAPACITY 64
 #define PITCH_BUFFER_SIZE 4096  // ~85ms at 48kHz for pitch detection
+#define WAVEFORM_BUFFER_SIZE 96000  // ~2 seconds at 48kHz for waveform display (full bar at 120 BPM)
 
 typedef struct {
     uint8_t id;
@@ -35,6 +36,10 @@ struct audio_engine {
     float pitch_buffer[PITCH_BUFFER_SIZE];
     uint32_t pitch_buffer_pos;
     float detected_pitch;  // In Hz, 0 if no pitch detected
+    
+    // Waveform capture for visualization
+    float waveform_buffer[WAVEFORM_BUFFER_SIZE];
+    uint32_t waveform_buffer_pos;
 };
 
 #ifdef PORTAUDIO_PRESENT
@@ -190,9 +195,17 @@ static int audio_cb(const void* input,
     unit_loader_render(engine->loader, in ? in : out, out, frames);
     
     // Capture UNPROCESSED mono signal for pitch analysis BEFORE volume/clipping
+    // Also capture for waveform display
     for (uint32_t i = 0; i < frames; i++) {
-        engine->pitch_buffer[engine->pitch_buffer_pos] = out[i * engine->cfg.output_channels];
+        float sample = out[i * engine->cfg.output_channels];
+        
+        // Pitch buffer
+        engine->pitch_buffer[engine->pitch_buffer_pos] = sample;
         engine->pitch_buffer_pos = (engine->pitch_buffer_pos + 1) % PITCH_BUFFER_SIZE;
+        
+        // Waveform buffer
+        engine->waveform_buffer[engine->waveform_buffer_pos] = sample;
+        engine->waveform_buffer_pos = (engine->waveform_buffer_pos + 1) % WAVEFORM_BUFFER_SIZE;
     }
     
     // Apply master volume and soft-clipping to prevent distortion
@@ -232,6 +245,10 @@ audio_engine_t* audio_engine_create(const audio_config_t* cfg,
     memset(engine->pitch_buffer, 0, sizeof(engine->pitch_buffer));
     engine->pitch_buffer_pos = 0;
     engine->detected_pitch = 0.0f;
+    
+    // Initialize waveform capture
+    memset(engine->waveform_buffer, 0, sizeof(engine->waveform_buffer));
+    engine->waveform_buffer_pos = 0;
 
     if (ring_buffer_init(&engine->param_queue, PARAM_QUEUE_CAPACITY, sizeof(param_msg_t)) != 0) {
         free(engine);
@@ -340,6 +357,25 @@ float audio_engine_get_detected_pitch(audio_engine_t* engine) {
     return engine->detected_pitch;
 }
 
+uint32_t audio_engine_get_waveform_samples(audio_engine_t* engine, 
+                                           float* buffer, 
+                                           uint32_t buffer_size) {
+    if (!engine || !buffer || buffer_size == 0) return 0;
+    
+    uint32_t samples_to_copy = buffer_size < WAVEFORM_BUFFER_SIZE ? 
+                               buffer_size : WAVEFORM_BUFFER_SIZE;
+    
+    // Copy from circular buffer starting from current position (oldest sample)
+    // to get a continuous waveform
+    uint32_t start_pos = engine->waveform_buffer_pos;
+    for (uint32_t i = 0; i < samples_to_copy; i++) {
+        uint32_t src_idx = (start_pos + i) % WAVEFORM_BUFFER_SIZE;
+        buffer[i] = engine->waveform_buffer[src_idx];
+    }
+    
+    return samples_to_copy;
+}
+
 #else  // PORTAUDIO_PRESENT not available
 
 audio_engine_t* audio_engine_create(const audio_config_t* cfg,
@@ -367,5 +403,12 @@ void audio_engine_set_master_volume(audio_engine_t* engine, float volume) {
 float audio_engine_cpu_load(audio_engine_t* engine) { (void)engine; return -1.0f; }
 
 float audio_engine_get_detected_pitch(audio_engine_t* engine) { (void)engine; return 0.0f; }
+
+uint32_t audio_engine_get_waveform_samples(audio_engine_t* engine, 
+                                           float* buffer, 
+                                           uint32_t buffer_size) {
+    (void)engine; (void)buffer; (void)buffer_size; 
+    return 0;
+}
 
 #endif

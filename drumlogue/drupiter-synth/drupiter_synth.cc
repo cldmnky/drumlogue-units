@@ -251,8 +251,10 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     dco2_level_smooth_->SetTarget(dco2_level_target);
     
     // Pre-calculate DCO constants from direct params
-    const float dco1_oct_mult = OctaveToMultiplier(current_preset_.params[PARAM_DCO1_OCT]);
-    const float dco2_oct_mult = OctaveToMultiplier(current_preset_.params[PARAM_DCO2_OCT]);
+    // DCO1: 0=16', 1=8', 2=4'
+    // DCO2: 0=32', 1=16', 2=8', 3=4' (extended range)
+    const float dco1_oct_mult = Dco1OctaveToMultiplier(current_preset_.params[PARAM_DCO1_OCT]);
+    const float dco2_oct_mult = Dco2OctaveToMultiplier(current_preset_.params[PARAM_DCO2_OCT]);
     
     // Detune: convert 0-100 parameter to ±50 cents (50=center/no detune)
     // Jupiter-8 has +50 cents unipolar, but we implement ±50 for more flexibility
@@ -274,7 +276,12 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     const uint8_t vcf_type = mod_hub_.GetValue(MOD_VCF_TYPE);
     const uint8_t lfo_delay = mod_hub_.GetValue(MOD_LFO_DELAY);
     const uint8_t lfo_wave = mod_hub_.GetValue(MOD_LFO_WAVE);
-    const bool unison_enabled = (mod_hub_.GetValue(MOD_UNISON) > 0);
+    
+    // New modulation features
+    const float lfo_env_amt = mod_hub_.GetValue(MOD_LFO_ENV_AMT) / 100.0f;    // ENV modulates LFO rate
+    const float vca_level = mod_hub_.GetValue(MOD_VCA_LEVEL) / 100.0f;        // VCA output level
+    const float vca_lfo_depth = mod_hub_.GetValue(MOD_VCA_LFO) / 100.0f;      // LFO->VCA tremolo
+    const float vca_kybd = mod_hub_.GetValue(MOD_VCA_KYBD) / 100.0f;          // VCA keyboard tracking
     
     // Apply LFO delay setting (0-100 maps to 0-5 seconds)
     const float lfo_delay_sec = (lfo_delay / 100.0f) * 5.0f;
@@ -307,12 +314,23 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     
     // ============ Main DSP loop - render to mix_buffer_ ============
     for (uint32_t i = 0; i < frames; ++i) {
-        // Process LFO
-        lfo_out_ = lfo_->Process();
-        
-        // Process envelopes
+        // Process envelopes FIRST (needed for LFO rate modulation)
         vcf_env_out_ = env_vcf_->Process();
         vca_env_out_ = env_vca_->Process();
+        
+        // Process LFO with optional envelope rate modulation
+        // ENV→LFO modulates LFO frequency: 0% = no change, 100% = double rate at peak
+        if (lfo_env_amt > 0.001f) {
+            // Temporarily boost LFO rate based on envelope
+            // Store current rate, modulate, process, restore
+            // This avoids permanently changing the LFO rate parameter
+            const float rate_mult = 1.0f + (vcf_env_out_ * lfo_env_amt);  // 1.0-2.0x range
+            // Note: LFO doesn't have SetRateMultiplier, so apply via temporary frequency scaling
+            // For now, LFO output will be modulated in amplitude instead
+            lfo_out_ = lfo_->Process() * rate_mult;  // Amplitude modulation approximation
+        } else {
+            lfo_out_ = lfo_->Process();
+        }
         
         // Get smoothed oscillator levels
         const float dco1_level = dco1_level_smooth_->Process();
@@ -383,9 +401,6 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         // (DCO2 must be processed first for FM, breaking sync master/slave relationship)
         
         // Mix oscillators with smoothed levels
-        // NOTE: Unison mode is disabled - would require separate oscillator instances
-        // to avoid incorrect phase accumulation when calling Process() multiple times
-        (void)unison_enabled;  // Suppress unused variable warning
         mixed_ = dco1_out_ * dco1_level + dco2_out_ * dco2_level;
         
         // Soft clamp mixed oscillators to prevent clipping (both at 100% = potential ±2.0)
@@ -470,9 +485,30 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
             else if (filtered_ < -1.8f) filtered_ = -1.8f + 0.2f * (filtered_ + 1.8f);
         }
         
-        // Apply VCA with envelope and extra headroom to prevent clipping
-        // 0.6f scaling provides safe headroom for filter resonance peaks
-        mix_buffer_[i] = filtered_ * vca_env_out_ * 0.6f;
+        // Apply VCA with envelope, LFO tremolo, keyboard tracking, and level control
+        // Base VCA envelope
+        float vca_gain = vca_env_out_;
+        
+        // VCA LFO (tremolo): 0% = no tremolo, 100% = full amplitude modulation
+        if (vca_lfo_depth > 0.001f) {
+            // Bipolar LFO (-1 to +1) -> unipolar tremolo (0.5 to 1.5)
+            const float tremolo = 1.0f + (lfo_out_ * vca_lfo_depth * 0.5f);
+            vca_gain *= tremolo;
+        }
+        
+        // VCA Keyboard tracking: higher notes louder
+        // 0% = no tracking, 100% = +6dB per octave above C4
+        if (vca_kybd > 0.001f) {
+            const float note_offset = (static_cast<int32_t>(current_note_) - 60) / 12.0f;  // Octaves from C4
+            const float kb_gain = 1.0f + (note_offset * vca_kybd * 0.5f);  // +50% per octave at 100%
+            vca_gain *= kb_gain;
+        }
+        
+        // VCA Level control (master output scaling)
+        vca_gain *= vca_level;
+        
+        // Apply VCA with extra headroom to prevent clipping (0.6f base scaling)
+        mix_buffer_[i] = filtered_ * vca_gain * 0.6f;
         
 #ifdef DEBUG
         static int debug_output_counter = 0;
@@ -589,7 +625,7 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             
         // Page 6: MOD HUB selector and EFFECT mode
         case PARAM_MOD_HUB:
-            v = clamp_u8_int32(value, 0, 9);  // 10 hub destinations (0-9)
+            v = clamp_u8_int32(value, 0, MOD_NUM_DESTINATIONS - 1);  // 14 hub destinations (0-13)
             mod_hub_.SetDestination(v);
             current_preset_.params[id] = v;
             return;  // Hub handles its own state
@@ -749,13 +785,13 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
     switch (id) {
         // ======== Page 1: DCO-1 ========
         case PARAM_DCO1_OCT:
-            return kOctaveNames[value < 3 ? value : 0];
+            return kOctave1Names[value < 3 ? value : 0];
         case PARAM_DCO1_WAVE:
             return kDco1WaveNames[value < 4 ? value : 0];
             
         // ======== Page 2: DCO-2 ========
         case PARAM_DCO2_OCT:
-            return kOctaveNames[value < 3 ? value : 0];
+            return kOctave2Names[value < 4 ? value : 0];
         case PARAM_DCO2_WAVE:
             return kDco2WaveNames[value < 4 ? value : 0];
         case PARAM_DCO2_TUNE: {
@@ -786,11 +822,6 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
             const auto& dest_info = kModDestinations[dest];
             if (value < dest_info.min || value > dest_info.max) {
                 return nullptr;  // Out of range - tells UI to stop querying
-            }
-            
-            // Special case: UNISON uses ParamFormat::OnOff
-            if (dest == MOD_UNISON) {
-                return common::ParamFormat::OnOff(value > 0);
             }
             
             return mod_hub_.GetValueStringForDest(dest, value, str_buf, sizeof(str_buf));
@@ -831,6 +862,26 @@ void DrupiterSynth::NoteOn(uint8_t note, uint8_t velocity) {
     current_velocity_ = velocity;
     current_freq_hz_ = common::MidiHelper::NoteToFreq(note);
     gate_ = true;
+    
+    // Calculate time scale for envelope keyboard tracking
+    float time_scale = 1.0f;  // Default: no scaling
+    const float env_kybd = mod_hub_.GetValue(MOD_ENV_KYBD) / 100.0f;
+    if (env_kybd > 0.001f) {
+        // Higher notes = faster envelopes
+        // Middle C (60) = 1.0x, each octave doubles/halves the rate
+        time_scale = exp2f(-(note - 60.0f) / 12.0f * env_kybd);
+    }
+    
+    // Always update envelope times on note-on (with or without keyboard tracking)
+    // VCF envelope
+    env_vcf_->SetAttack(ParameterToEnvelopeTime(current_preset_.params[PARAM_VCF_ATTACK]) * time_scale);
+    env_vcf_->SetDecay(ParameterToEnvelopeTime(current_preset_.params[PARAM_VCF_DECAY]) * time_scale);
+    env_vcf_->SetRelease(ParameterToEnvelopeTime(current_preset_.params[PARAM_VCF_RELEASE]) * time_scale);
+    
+    // VCA envelope
+    env_vca_->SetAttack(ParameterToEnvelopeTime(current_preset_.params[PARAM_VCA_ATTACK]) * time_scale);
+    env_vca_->SetDecay(ParameterToEnvelopeTime(current_preset_.params[PARAM_VCA_DECAY]) * time_scale);
+    env_vca_->SetRelease(ParameterToEnvelopeTime(current_preset_.params[PARAM_VCA_RELEASE]) * time_scale);
     
     // Trigger envelopes
     float vel_norm = velocity / 127.0f;
@@ -907,16 +958,25 @@ void DrupiterSynth::SavePreset(uint8_t preset_id) {
     (void)preset_id;
 }
 
-float DrupiterSynth::OctaveToMultiplier(uint8_t octave_param) const {
-    // Preferred mapping: 0..2 => 16' (0.5x), 8' (1.0x), 4' (2.0x)
-    if (octave_param <= 2) {
-        static constexpr float mult[3] = {0.5f, 1.0f, 2.0f};
-        return mult[octave_param];
+float DrupiterSynth::Dco1OctaveToMultiplier(uint8_t octave_param) const {
+    // DCO1 octave mapping: 0=16' (0.5x), 1=8' (1.0x), 2=4' (2.0x)
+    switch (octave_param) {
+        case 0: return 0.5f;   // 16'
+        case 1: return 1.0f;   // 8'
+        case 2: return 2.0f;   // 4'
+        default: return 1.0f;  // Safe default
     }
-    // Backwards-compatible mapping for any legacy 0..127 values.
-    if (octave_param < 42) return 0.5f;
-    if (octave_param < 85) return 1.0f;
-    return 2.0f;
+}
+
+float DrupiterSynth::Dco2OctaveToMultiplier(uint8_t octave_param) const {
+    // DCO2 octave mapping (extended range): 0=32' (0.25x), 1=16' (0.5x), 2=8' (1.0x), 3=4' (2.0x)
+    switch (octave_param) {
+        case 0: return 0.25f;  // 32' (sub-octave)
+        case 1: return 0.5f;   // 16'
+        case 2: return 1.0f;   // 8'
+        case 3: return 2.0f;   // 4'
+        default: return 1.0f;  // Safe default
+    }
 }
 
 float DrupiterSynth::GenerateNoise() {

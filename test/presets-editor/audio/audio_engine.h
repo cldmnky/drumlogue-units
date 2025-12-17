@@ -39,6 +39,14 @@ float audio_engine_cpu_load(audio_engine_t* engine);
 // Get detected pitch in Hz (0 if no pitch detected)
 float audio_engine_get_detected_pitch(audio_engine_t* engine);
 
+// Get waveform samples for visualization
+// buffer: output buffer to copy samples to
+// buffer_size: size of output buffer
+// Returns: number of samples copied
+uint32_t audio_engine_get_waveform_samples(audio_engine_t* engine, 
+                                           float* buffer, 
+                                           uint32_t buffer_size);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

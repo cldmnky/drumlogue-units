@@ -43,8 +43,8 @@ const __unit_header unit_header_t unit_header = {
         {0, 100, 0, 0, k_unit_param_type_percent, 0, 0, 0, {"XMOD"}},
 
         // ==================== Page 2: DCO-2 ====================
-        // DCO-2 Range: Octave (0=16', 1=8', 2=4')
-        {0, 2, 1, 1, k_unit_param_type_strings, 0, 0, 0, {"D2 OCT"}},
+        // DCO-2 Range: Octave (0=32', 1=16', 2=8', 3=4')
+        {0, 3, 1, 1, k_unit_param_type_strings, 0, 0, 0, {"D2 OCT"}},
         // DCO-2 Waveform: SAW/NOISE/PULSE/SINE
         {0, 3, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"D2 WAVE"}},
         // DCO-2 Detune: 0-100 maps to -50 to +50 cents (50=center/no detune)

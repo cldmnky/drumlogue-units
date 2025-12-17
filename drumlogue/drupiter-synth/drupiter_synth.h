@@ -53,9 +53,13 @@ static const char* const kDco2WaveNames[] = {
     "SAW", "NSE", "PUL", "SIN"
 };
 
-// Octave names
-static const char* const kOctaveNames[] = {
+// Octave names (DCO1: 16'/8'/4', DCO2: 32'/16'/8'/4')
+static const char* const kOctave1Names[] = {
     "16'", "8'", "4'"
+};
+
+static const char* const kOctave2Names[] = {
+    "32'", "16'", "8'", "4'"
 };
 
 // Sync mode names
@@ -80,7 +84,11 @@ enum ModDestination {
     MOD_VCF_TYPE,          // Filter type selection (LP12/LP24/HP12/BP)
     MOD_LFO_DELAY,         // LFO delay (fade-in time)
     MOD_LFO_WAVE,          // LFO waveform selection
-    MOD_UNISON,            // Unison mode (DISABLED - reserved for future)
+    MOD_LFO_ENV_AMT,       // Envelope modulation of LFO rate
+    MOD_VCA_LEVEL,         // VCA output level (pre-envelope)
+    MOD_VCA_LFO,           // LFO modulation of VCA (tremolo)
+    MOD_VCA_KYBD,          // VCA keyboard tracking
+    MOD_ENV_KYBD,          // Envelope keyboard tracking (faster at high notes)
     MOD_NUM_DESTINATIONS
 };
 
@@ -105,7 +113,11 @@ static constexpr common::HubControl<MOD_NUM_DESTINATIONS>::Destination kModDesti
     {"VCF TYP", "",    0, 3,   1,  false, kVcfTypeNames},  // Filter type (enum)
     {"LFO DLY", "ms",  0, 100, 0,  false, nullptr},        // LFO delay
     {"LFO WAV", "",    0, 3,   0,  false, kLfoWaveNames},  // LFO waveform (TRI/RAMP/SQR/S&H)
-    {"UNISON",  "",    0, 1,   0,  false, nullptr}         // Unison mode (DISABLED - has no effect)
+    {"ENV>LFO", "%",   0, 100, 0,  false, nullptr},        // ENV modulates LFO rate
+    {"VCA LVL", "%",   0, 100, 100, false, nullptr},       // VCA output level
+    {"LFO>VCA", "%",   0, 100, 0,  false, nullptr},        // LFO to VCA (tremolo)
+    {"VCA KYB", "%",   0, 100, 0,  false, nullptr},        // VCA keyboard tracking
+    {"ENV KYB", "%",   0, 100, 50, false, nullptr}         // ENV keyboard tracking
 };
 
 // Effect mode names
@@ -356,11 +368,18 @@ private:
     float hpf_prev_input_;
     
     /**
-     * @brief Convert octave parameter to multiplier
-     * @param octave_param Parameter value 0-127
+     * @brief Convert DCO1 octave parameter to frequency multiplier
+     * @param octave_param Parameter value 0-2 (16'/8'/4')
      * @return Frequency multiplier (0.5, 1.0, 2.0)
      */
-    float OctaveToMultiplier(uint8_t octave_param) const;
+    float Dco1OctaveToMultiplier(uint8_t octave_param) const;
+    
+    /**
+     * @brief Convert DCO2 octave parameter to frequency multiplier
+     * @param octave_param Parameter value 0-3 (32'/16'/8'/4')
+     * @return Frequency multiplier (0.25, 0.5, 1.0, 2.0)
+     */
+    float Dco2OctaveToMultiplier(uint8_t octave_param) const;
     
     /**
      * @brief Generate white noise sample

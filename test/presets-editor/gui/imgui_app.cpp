@@ -52,7 +52,10 @@ ImGuiApp::ImGuiApp(const std::string& unit_path,
       arp_note_off_time_(0.0),
       arp_current_note_(0),
       tuner_enabled_(false),
-      tuner_reference_freq_(440.0f) {
+      tuner_reference_freq_(440.0f),
+      waveform_viewer_enabled_(false),
+      waveform_zoom_(1.0f),
+      waveform_freeze_(false) {
   memset(new_preset_name_, 0, sizeof(new_preset_name_));
   active_notes_.resize(128, false);
 }
@@ -273,6 +276,12 @@ void ImGuiApp::render_ui() {
       ImGui::EndMenu();
     }
     
+    if (ImGui::BeginMenu("View")) {
+      ImGui::MenuItem("Tuner", nullptr, &tuner_enabled_);
+      ImGui::MenuItem("Waveform Viewer", nullptr, &waveform_viewer_enabled_);
+      ImGui::EndMenu();
+    }
+    
     ImGui::SameLine(ImGui::GetWindowWidth() - 200);
     if (hdr) {
       ImGui::Text("%s", hdr->name);
@@ -439,6 +448,11 @@ void ImGuiApp::render_ui() {
   if (hdr && (hdr->target & UNIT_TARGET_MODULE_MASK) == k_unit_module_synth) {
     render_piano_roll();
     render_tuner();
+  }
+  
+  // Waveform viewer (available for all unit types)
+  if (waveform_viewer_enabled_) {
+    render_waveform_viewer();
   }
 }
 
@@ -1006,6 +1020,156 @@ void ImGuiApp::render_tuner() {
     float a4_detuned = tuner_reference_freq_ * ratio;
     ImGui::Text("A4 with %+.1f cents: %.2f Hz", cents_input, a4_detuned);
   }
+  
+  ImGui::End();
+}
+
+void ImGuiApp::render_waveform_viewer() {
+  ImGui::SetNextWindowPos(ImVec2(880, 500), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(ImVec2(600, 350), ImGuiCond_FirstUseEver);
+  ImGui::Begin("Waveform Viewer", &waveform_viewer_enabled_, ImGuiWindowFlags_NoCollapse);
+  
+  // Controls
+  ImGui::Checkbox("Freeze", &waveform_freeze_);
+  ImGui::SameLine();
+  
+  if (ImGui::Button("Reset Zoom")) {
+    waveform_zoom_ = 1.0f;
+  }
+  ImGui::SameLine();
+  
+  ImGui::SetNextItemWidth(150);
+  ImGui::SliderFloat("Zoom", &waveform_zoom_, 0.1f, 8.0f, "%.1fx");
+  ImGui::SameLine();
+  
+  // Bar zoom button (assumes 120 BPM, 4/4 time)
+  if (ImGui::Button("Zoom to Bar")) {
+    // 1 bar at 120 BPM = 2 seconds = 96000 samples at 48kHz
+    // Current buffer is 96000 samples, so zoom = 1.0 shows full bar
+    waveform_zoom_ = 0.1f;  // Show full 2-second window
+  }
+  
+  ImGui::Separator();
+  
+#ifdef PORTAUDIO_PRESENT
+  if (audio_running_ && audio_engine_) {
+    // Get waveform samples from audio engine
+    const uint32_t max_samples = 96000;
+    static float waveform_data[max_samples];
+    static float frozen_waveform[max_samples];
+    static uint32_t num_samples = 0;
+    
+    if (!waveform_freeze_) {
+      num_samples = audio_engine_get_waveform_samples(audio_engine_, 
+                                                      waveform_data, 
+                                                      max_samples);
+      // Save frozen copy
+      memcpy(frozen_waveform, waveform_data, sizeof(float) * num_samples);
+    } else {
+      // Use frozen waveform
+      memcpy(waveform_data, frozen_waveform, sizeof(float) * num_samples);
+    }
+    
+    if (num_samples > 0) {
+      // Calculate display range based on zoom
+      uint32_t display_samples = (uint32_t)(num_samples / waveform_zoom_);
+      if (display_samples < 64) display_samples = 64;
+      if (display_samples > num_samples) display_samples = num_samples;
+      
+      // Center the zoomed view
+      uint32_t start_idx = (num_samples - display_samples) / 2;
+      
+      // Find min/max for auto-scaling
+      float min_val = 1.0f;
+      float max_val = -1.0f;
+      for (uint32_t i = start_idx; i < start_idx + display_samples; i++) {
+        if (waveform_data[i] < min_val) min_val = waveform_data[i];
+        if (waveform_data[i] > max_val) max_val = waveform_data[i];
+      }
+      
+      // Add some padding to the range
+      float range = max_val - min_val;
+      if (range < 0.1f) range = 0.1f;
+      min_val -= range * 0.1f;
+      max_val += range * 0.1f;
+      
+      // Waveform display
+      ImVec2 canvas_p0 = ImGui::GetCursorScreenPos();
+      ImVec2 canvas_sz = ImGui::GetContentRegionAvail();
+      canvas_sz.y = canvas_sz.y - 60;  // Leave room for stats
+      
+      ImDrawList* draw_list = ImGui::GetWindowDrawList();
+      
+      // Background
+      draw_list->AddRectFilled(canvas_p0, 
+                               ImVec2(canvas_p0.x + canvas_sz.x, canvas_p0.y + canvas_sz.y),
+                               IM_COL32(10, 10, 15, 255));
+      
+      // Grid lines
+      const int num_h_lines = 5;
+      for (int i = 0; i <= num_h_lines; i++) {
+        float y = canvas_p0.y + (canvas_sz.y * i) / num_h_lines;
+        draw_list->AddLine(ImVec2(canvas_p0.x, y),
+                          ImVec2(canvas_p0.x + canvas_sz.x, y),
+                          IM_COL32(40, 40, 50, 255), 1.0f);
+      }
+      
+      // Zero line (highlighted)
+      float zero_y = canvas_p0.y + canvas_sz.y * (max_val / (max_val - min_val));
+      if (zero_y >= canvas_p0.y && zero_y <= canvas_p0.y + canvas_sz.y) {
+        draw_list->AddLine(ImVec2(canvas_p0.x, zero_y),
+                          ImVec2(canvas_p0.x + canvas_sz.x, zero_y),
+                          IM_COL32(100, 100, 120, 255), 2.0f);
+      }
+      
+      // Draw waveform
+      for (uint32_t i = 0; i < display_samples - 1; i++) {
+        uint32_t idx1 = start_idx + i;
+        uint32_t idx2 = start_idx + i + 1;
+        
+        float x1 = canvas_p0.x + (canvas_sz.x * i) / (display_samples - 1);
+        float x2 = canvas_p0.x + (canvas_sz.x * (i + 1)) / (display_samples - 1);
+        
+        float y1 = canvas_p0.y + canvas_sz.y * (1.0f - (waveform_data[idx1] - min_val) / (max_val - min_val));
+        float y2 = canvas_p0.y + canvas_sz.y * (1.0f - (waveform_data[idx2] - min_val) / (max_val - min_val));
+        
+        draw_list->AddLine(ImVec2(x1, y1), ImVec2(x2, y2), IM_COL32(50, 200, 255, 255), 1.5f);
+      }
+      
+      // Move cursor past canvas
+      ImGui::Dummy(canvas_sz);
+      
+      // Stats
+      ImGui::Separator();
+      ImGui::Text("Samples: %u / %u (%.1f ms @ %.0f kHz)", 
+                  display_samples, num_samples,
+                  (num_samples * 1000.0f) / sample_rate_,
+                  sample_rate_ / 1000.0f);
+      
+      // Show bar/beat information (assuming 120 BPM, 4/4)
+      float seconds = num_samples / sample_rate_;
+      float bars_at_120bpm = seconds / 2.0f;  // 1 bar = 2 seconds at 120 BPM
+      ImGui::Text("Duration: %.2f bars @ 120 BPM (%.3f sec)", bars_at_120bpm, seconds);
+      ImGui::Text("Range: %.3f to %.3f", min_val, max_val);
+      ImGui::Text("RMS: %.3f", [&]() {
+        float rms = 0.0f;
+        for (uint32_t i = start_idx; i < start_idx + display_samples; i++) {
+          rms += waveform_data[i] * waveform_data[i];
+        }
+        return sqrtf(rms / display_samples);
+      }());
+      
+    } else {
+      ImGui::TextDisabled("No waveform data");
+    }
+    
+  } else {
+    ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.2f, 1.0f), "Audio not running");
+    ImGui::TextDisabled("Start audio to capture waveform");
+  }
+#else
+  ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.2f, 1.0f), "PortAudio not available");
+#endif
   
   ImGui::End();
 }

@@ -42,6 +42,7 @@ class ImGuiApp {
   void render_presets_panel();
   void render_piano_roll();
   void render_tuner();
+  void render_waveform_viewer();
   void save_current_preset();
   void load_preset(const preset_t* preset);
 
@@ -87,6 +88,11 @@ class ImGuiApp {
   // Tuner state
   bool tuner_enabled_;
   float tuner_reference_freq_;      // A4 reference frequency (default 440Hz)
+  
+  // Waveform viewer state
+  bool waveform_viewer_enabled_;
+  float waveform_zoom_;             // Zoom level for waveform display
+  bool waveform_freeze_;            // Freeze waveform display
   
   void update_arpeggiator();
 };
