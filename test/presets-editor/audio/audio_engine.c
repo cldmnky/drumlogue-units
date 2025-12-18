@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #ifdef PORTAUDIO_PRESENT
 #include <portaudio.h>
@@ -31,6 +32,7 @@ struct audio_engine {
 #endif
     ring_buffer_t param_queue;
     float master_volume;  // Thread-safe read in audio callback
+    bool tuner_enabled;   // Thread-safe read in audio callback
     
     // Pitch detection
     float pitch_buffer[PITCH_BUFFER_SIZE];
@@ -40,6 +42,15 @@ struct audio_engine {
     // Waveform capture for visualization
     float waveform_buffer[WAVEFORM_BUFFER_SIZE];
     uint32_t waveform_buffer_pos;
+    
+    // Performance tracking
+    double render_time_sum_us;
+    double render_time_min_us;
+    double render_time_max_us;
+    double callback_time_sum_us;
+    uint64_t total_frames_processed;
+    uint64_t perf_sample_count;
+    uint32_t buffer_underruns;
 };
 
 #ifdef PORTAUDIO_PRESENT
@@ -163,13 +174,17 @@ static int audio_cb(const void* input,
                     const PaStreamCallbackTimeInfo* time_info,
                     PaStreamCallbackFlags status_flags,
                     void* user_data) {
-    (void)time_info;
     (void)status_flags;
 
     audio_engine_t* engine = (audio_engine_t*)user_data;
     if (!engine || !engine->loader) {
         return paContinue;
     }
+    
+    // Start performance timing
+    double callback_start = time_info ? time_info->currentTime : 0.0;
+    struct timespec render_start, render_end;
+    clock_gettime(CLOCK_MONOTONIC, &render_start);
 
     // Apply queued parameter updates
     param_msg_t msg;
@@ -194,18 +209,54 @@ static int audio_cb(const void* input,
 
     unit_loader_render(engine->loader, in ? in : out, out, frames);
     
-    // Capture UNPROCESSED mono signal for pitch analysis BEFORE volume/clipping
-    // Also capture for waveform display
+    // Measure render time
+    clock_gettime(CLOCK_MONOTONIC, &render_end);
+    double render_us = (render_end.tv_sec - render_start.tv_sec) * 1000000.0 +
+                       (render_end.tv_nsec - render_start.tv_nsec) / 1000.0;
+    
+    // Update performance statistics
+    engine->render_time_sum_us += render_us;
+    if (engine->perf_sample_count == 0 || render_us < engine->render_time_min_us) {
+        engine->render_time_min_us = render_us;
+    }
+    if (render_us > engine->render_time_max_us) {
+        engine->render_time_max_us = render_us;
+    }
+    engine->total_frames_processed += frames;
+    engine->perf_sample_count++;
+    
+    // Detect potential buffer underruns (render taking too long)
+    double buffer_time_us = (frames * 1000000.0) / engine->cfg.sample_rate;
+    if (render_us > buffer_time_us * 0.8) {  // Using >80% of buffer time
+        engine->buffer_underruns++;
+    }
+    
+    if (time_info) {
+        double callback_us = (time_info->currentTime - callback_start) * 1000000.0;
+        engine->callback_time_sum_us += callback_us;
+    }
+    
+    // Capture UNPROCESSED mono signal for waveform display BEFORE volume/clipping
+    // Always capture for waveform viewer (works independently of tuner)
     for (uint32_t i = 0; i < frames; i++) {
         float sample = out[i * engine->cfg.output_channels];
         
-        // Pitch buffer
+        // Pitch buffer (for tuner)
         engine->pitch_buffer[engine->pitch_buffer_pos] = sample;
         engine->pitch_buffer_pos = (engine->pitch_buffer_pos + 1) % PITCH_BUFFER_SIZE;
         
-        // Waveform buffer
+        // Waveform buffer (for waveform viewer)
         engine->waveform_buffer[engine->waveform_buffer_pos] = sample;
         engine->waveform_buffer_pos = (engine->waveform_buffer_pos + 1) % WAVEFORM_BUFFER_SIZE;
+    }
+    
+    // Only run pitch detection computation if tuner is enabled
+    if (engine->tuner_enabled) {
+        static uint32_t pitch_counter = 0;
+        if (++pitch_counter >= 24) {  // ~20 Hz update rate
+            pitch_counter = 0;
+            engine->detected_pitch = detect_pitch(engine->pitch_buffer, PITCH_BUFFER_SIZE, engine->cfg.sample_rate);
+        }
     }
     
     // Apply master volume and soft-clipping to prevent distortion
@@ -214,13 +265,6 @@ static int audio_cb(const void* input,
     for (uint32_t i = 0; i < total_samples; i++) {
         // Apply volume then soft-clip to prevent digital clipping
         out[i] = soft_clip(out[i] * volume);
-    }
-    
-    // Update pitch detection periodically (throttle to reduce CPU load)
-    static uint32_t pitch_counter = 0;
-    if (++pitch_counter >= 24) {  // ~20 Hz update rate
-        pitch_counter = 0;
-        engine->detected_pitch = detect_pitch(engine->pitch_buffer, PITCH_BUFFER_SIZE, engine->cfg.sample_rate);
     }
     
     return paContinue;
@@ -240,6 +284,7 @@ audio_engine_t* audio_engine_create(const audio_config_t* cfg,
     engine->loader = loader;
     engine->runtime_state = runtime_state;
     engine->master_volume = cfg->master_volume > 0.0f ? cfg->master_volume : 0.5f;
+    engine->tuner_enabled = false;  // Disabled by default to save CPU
     
     // Initialize pitch detection
     memset(engine->pitch_buffer, 0, sizeof(engine->pitch_buffer));
@@ -249,6 +294,15 @@ audio_engine_t* audio_engine_create(const audio_config_t* cfg,
     // Initialize waveform capture
     memset(engine->waveform_buffer, 0, sizeof(engine->waveform_buffer));
     engine->waveform_buffer_pos = 0;
+    
+    // Initialize performance tracking
+    engine->render_time_sum_us = 0.0;
+    engine->render_time_min_us = 0.0;
+    engine->render_time_max_us = 0.0;
+    engine->callback_time_sum_us = 0.0;
+    engine->total_frames_processed = 0;
+    engine->perf_sample_count = 0;
+    engine->buffer_underruns = 0;
 
     if (ring_buffer_init(&engine->param_queue, PARAM_QUEUE_CAPACITY, sizeof(param_msg_t)) != 0) {
         free(engine);
@@ -300,7 +354,7 @@ audio_engine_t* audio_engine_create(const audio_config_t* cfg,
     if (stream_info) {
         printf("[Audio Engine] Requested sample rate: %u Hz, Actual: %.0f Hz\n",
                cfg->sample_rate, stream_info->sampleRate);
-        if (fabsf(stream_info->sampleRate - cfg->sample_rate) > 100.0f) {
+        if (fabs(stream_info->sampleRate - cfg->sample_rate) > 100.0) {
             fprintf(stderr, "WARNING: Sample rate mismatch! This will cause tuning problems.\n");
         }
     }
@@ -376,6 +430,51 @@ uint32_t audio_engine_get_waveform_samples(audio_engine_t* engine,
     return samples_to_copy;
 }
 
+void audio_engine_set_tuner_enabled(audio_engine_t* engine, bool enabled) {
+    if (!engine) return;
+    engine->tuner_enabled = enabled;
+    // Clear pitch when disabling to avoid stale data
+    if (!enabled) {
+        engine->detected_pitch = 0.0f;
+    }
+}
+
+bool audio_engine_is_tuner_enabled(audio_engine_t* engine) {
+    if (!engine) return false;
+    return engine->tuner_enabled;
+}
+
+void audio_engine_get_perf_stats(audio_engine_t* engine, audio_perf_stats_t* stats) {
+    if (!engine || !stats) return;
+    
+    stats->total_frames_processed = engine->total_frames_processed;
+    stats->buffer_underruns = engine->buffer_underruns;
+    
+    if (engine->perf_sample_count > 0) {
+        stats->render_time_avg_us = engine->render_time_sum_us / engine->perf_sample_count;
+        stats->render_time_min_us = engine->render_time_min_us;
+        stats->render_time_max_us = engine->render_time_max_us;
+        stats->callback_time_avg_us = engine->callback_time_sum_us / engine->perf_sample_count;
+    } else {
+        stats->render_time_avg_us = 0.0;
+        stats->render_time_min_us = 0.0;
+        stats->render_time_max_us = 0.0;
+        stats->callback_time_avg_us = 0.0;
+    }
+}
+
+void audio_engine_reset_perf_stats(audio_engine_t* engine) {
+    if (!engine) return;
+    
+    engine->render_time_sum_us = 0.0;
+    engine->render_time_min_us = 0.0;
+    engine->render_time_max_us = 0.0;
+    engine->callback_time_sum_us = 0.0;
+    engine->total_frames_processed = 0;
+    engine->perf_sample_count = 0;
+    engine->buffer_underruns = 0;
+}
+
 #else  // PORTAUDIO_PRESENT not available
 
 audio_engine_t* audio_engine_create(const audio_config_t* cfg,
@@ -409,6 +508,26 @@ uint32_t audio_engine_get_waveform_samples(audio_engine_t* engine,
                                            uint32_t buffer_size) {
     (void)engine; (void)buffer; (void)buffer_size; 
     return 0;
+}
+
+void audio_engine_set_tuner_enabled(audio_engine_t* engine, bool enabled) {
+    (void)engine; (void)enabled;
+}
+
+bool audio_engine_is_tuner_enabled(audio_engine_t* engine) {
+    (void)engine;
+    return false;
+}
+
+void audio_engine_get_perf_stats(audio_engine_t* engine, audio_perf_stats_t* stats) {
+    (void)engine;
+    if (stats) {
+        memset(stats, 0, sizeof(audio_perf_stats_t));
+    }
+}
+
+void audio_engine_reset_perf_stats(audio_engine_t* engine) {
+    (void)engine;
 }
 
 #endif

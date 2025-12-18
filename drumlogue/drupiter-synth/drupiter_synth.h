@@ -404,6 +404,21 @@ private:
     static float ParameterToExponentialFreq(uint8_t value, float min_freq, float max_freq);
     
     /**
+     * @brief Update effect parameters when effect mode changes
+     * @param effect_mode 0=CHORUS, 1=SPACE, 2=DRY, 3=BOTH
+     * 
+     * Critical optimization: Called once on parameter change, not per-buffer
+     */
+    void UpdateEffectParameters(uint8_t effect_mode);
+    
+    /**
+     * @brief Update LFO settings from hub parameters
+     * 
+     * Called when MOD_LFO_DELAY or MOD_LFO_WAVE hub values change
+     */
+    void UpdateLfoSettings();
+    
+    /**
      * @brief Update DSP component parameters
      */
     void UpdateDCOParameters();

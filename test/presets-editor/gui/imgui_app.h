@@ -43,6 +43,7 @@ class ImGuiApp {
   void render_piano_roll();
   void render_tuner();
   void render_waveform_viewer();
+  void render_performance_view();
   void save_current_preset();
   void load_preset(const preset_t* preset);
 
@@ -93,6 +94,9 @@ class ImGuiApp {
   bool waveform_viewer_enabled_;
   float waveform_zoom_;             // Zoom level for waveform display
   bool waveform_freeze_;            // Freeze waveform display
+  
+  // Performance view state
+  bool performance_view_enabled_;
   
   void update_arpeggiator();
 };

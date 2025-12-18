@@ -131,6 +131,7 @@ private:
     static float ramp_table_[kWavetableSize + 1];     // +1 for interpolation
     static float square_table_[kWavetableSize + 1];
     static float triangle_table_[kWavetableSize + 1];
+    static float sine_table_[kWavetableSize + 1];     // Fast sine lookup
     static bool tables_initialized_;
     
     /**

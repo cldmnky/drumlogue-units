@@ -55,7 +55,8 @@ ImGuiApp::ImGuiApp(const std::string& unit_path,
       tuner_reference_freq_(440.0f),
       waveform_viewer_enabled_(false),
       waveform_zoom_(1.0f),
-      waveform_freeze_(false) {
+      waveform_freeze_(false),
+      performance_view_enabled_(false) {
   memset(new_preset_name_, 0, sizeof(new_preset_name_));
   active_notes_.resize(128, false);
 }
@@ -277,8 +278,15 @@ void ImGuiApp::render_ui() {
     }
     
     if (ImGui::BeginMenu("View")) {
-      ImGui::MenuItem("Tuner", nullptr, &tuner_enabled_);
+      if (ImGui::MenuItem("Tuner", nullptr, &tuner_enabled_)) {
+#ifdef PORTAUDIO_PRESENT
+        if (audio_engine_) {
+          audio_engine_set_tuner_enabled(audio_engine_, tuner_enabled_);
+        }
+#endif
+      }
       ImGui::MenuItem("Waveform Viewer", nullptr, &waveform_viewer_enabled_);
+      ImGui::MenuItem("Performance", nullptr, &performance_view_enabled_);
       ImGui::EndMenu();
     }
     
@@ -447,12 +455,21 @@ void ImGuiApp::render_ui() {
   // Piano roll (only for synth units)
   if (hdr && (hdr->target & UNIT_TARGET_MODULE_MASK) == k_unit_module_synth) {
     render_piano_roll();
+  }
+  
+  // Tuner (available for all unit types)
+  if (tuner_enabled_) {
     render_tuner();
   }
   
   // Waveform viewer (available for all unit types)
   if (waveform_viewer_enabled_) {
     render_waveform_viewer();
+  }
+  
+  // Performance view
+  if (performance_view_enabled_) {
+    render_performance_view();
   }
 }
 
@@ -866,7 +883,18 @@ void ImGuiApp::update_arpeggiator() {
 void ImGuiApp::render_tuner() {
   ImGui::SetNextWindowPos(ImVec2(880, 30), ImGuiCond_FirstUseEver);
   ImGui::SetNextWindowSize(ImVec2(360, 450), ImGuiCond_FirstUseEver);
+  
+  bool was_enabled = tuner_enabled_;
   ImGui::Begin("Tuner", &tuner_enabled_, ImGuiWindowFlags_NoCollapse);
+  
+  // Sync with audio engine when window is closed via X button
+  if (was_enabled && !tuner_enabled_) {
+#ifdef PORTAUDIO_PRESENT
+    if (audio_engine_) {
+      audio_engine_set_tuner_enabled(audio_engine_, false);
+    }
+#endif
+  }
   
   // Detected pitch display
 #ifdef PORTAUDIO_PRESENT
@@ -1327,4 +1355,107 @@ void ImGuiApp::Run() {
 
     SDL_GL_SwapWindow(window_);
   }
+}
+
+void ImGuiApp::render_performance_view() {
+  ImGui::SetNextWindowPos(ImVec2(470, 650), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(ImVec2(400, 200), ImGuiCond_FirstUseEver);
+  ImGui::Begin("Performance", &performance_view_enabled_, ImGuiWindowFlags_NoCollapse);
+  
+#ifdef PORTAUDIO_PRESENT
+  if (audio_running_ && audio_engine_) {
+    audio_perf_stats_t stats;
+    audio_engine_get_perf_stats(audio_engine_, &stats);
+    
+    // PortAudio CPU load
+    float pa_cpu_load = audio_engine_cpu_load(audio_engine_);
+    
+    ImGui::Text("Audio Engine Performance");
+    ImGui::Separator();
+    
+    // CPU usage with color coding
+    ImVec4 cpu_color;
+    if (pa_cpu_load < 0.5f) {
+      cpu_color = ImVec4(0.2f, 1.0f, 0.2f, 1.0f);  // Green: good
+    } else if (pa_cpu_load < 0.8f) {
+      cpu_color = ImVec4(1.0f, 1.0f, 0.2f, 1.0f);  // Yellow: warning
+    } else {
+      cpu_color = ImVec4(1.0f, 0.3f, 0.3f, 1.0f);  // Red: critical
+    }
+    
+    ImGui::Text("PortAudio CPU Load:");
+    ImGui::SameLine(200);
+    ImGui::TextColored(cpu_color, "%.1f%%", pa_cpu_load * 100.0f);
+    
+    ImGui::Spacing();
+    ImGui::Text("Unit Render Times:");
+    ImGui::Separator();
+    
+    // Calculate buffer time for reference
+    double buffer_time_us = (frames_per_buffer_ * 1000000.0) / sample_rate_;
+    
+    ImGui::Text("Average:");
+    ImGui::SameLine(200);
+    ImGui::Text("%.2f µs (%.1f%%)", stats.render_time_avg_us, 
+                (stats.render_time_avg_us / buffer_time_us) * 100.0);
+    
+    ImGui::Text("Minimum:");
+    ImGui::SameLine(200);
+    ImGui::Text("%.2f µs", stats.render_time_min_us);
+    
+    ImGui::Text("Maximum:");
+    ImGui::SameLine(200);
+    ImGui::Text("%.2f µs (%.1f%%)", stats.render_time_max_us,
+                (stats.render_time_max_us / buffer_time_us) * 100.0);
+    
+    ImGui::Text("Buffer time:");
+    ImGui::SameLine(200);
+    ImGui::Text("%.2f µs", buffer_time_us);
+    
+    ImGui::Spacing();
+    ImGui::Text("Statistics:");
+    ImGui::Separator();
+    
+    ImGui::Text("Frames processed:");
+    ImGui::SameLine(200);
+    ImGui::Text("%llu", (unsigned long long)stats.total_frames_processed);
+    
+    ImGui::Text("Buffer warnings:");
+    ImGui::SameLine(200);
+    if (stats.buffer_underruns > 0) {
+      ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.2f, 1.0f), "%u", stats.buffer_underruns);
+    } else {
+      ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f), "0");
+    }
+    
+    ImGui::Spacing();
+    if (ImGui::Button("Reset Statistics")) {
+      audio_engine_reset_perf_stats(audio_engine_);
+    }
+    
+    // Real-time performance graph
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Text("Real-time CPU Usage");
+    
+    // Store historical CPU load values for graphing
+    static float cpu_history[100] = {0};
+    static int history_offset = 0;
+    
+    cpu_history[history_offset] = pa_cpu_load * 100.0f;
+    history_offset = (history_offset + 1) % 100;
+    
+    ImGui::PlotLines("##CPUGraph", cpu_history, 100, history_offset, 
+                     nullptr, 0.0f, 100.0f, ImVec2(0, 60));
+    
+  } else {
+    ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.2f, 1.0f), "Audio engine not running");
+    ImGui::Text("Start audio to view performance metrics");
+  }
+#else
+  ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.2f, 1.0f), "PortAudio not available");
+  ImGui::Text("Rebuild with PortAudio support for performance monitoring");
+#endif
+  
+  ImGui::End();
 }

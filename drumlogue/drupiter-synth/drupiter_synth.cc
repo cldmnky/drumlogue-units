@@ -283,26 +283,30 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     const float vca_lfo_depth = mod_hub_.GetValue(MOD_VCA_LFO) / 100.0f;      // LFO->VCA tremolo
     const float vca_kybd = mod_hub_.GetValue(MOD_VCA_KYBD) / 100.0f;          // VCA keyboard tracking
     
-    // Apply LFO delay setting (0-100 maps to 0-5 seconds)
-    const float lfo_delay_sec = (lfo_delay / 100.0f) * 5.0f;
-    lfo_->SetDelay(lfo_delay_sec);
-    
-    // Apply LFO waveform (0-3: TRI/RAMP/SQR/S&H)
-    lfo_->SetWaveform(static_cast<dsp::JupiterLFO::Waveform>(lfo_wave & 0x03));
+    // NOTE: LFO delay and waveform are now set in UpdateLfoSettings()
+    // when MOD_HUB or MOD_AMT parameters change (not every buffer)
+    // This is a critical performance optimization.
+    (void)lfo_delay;  // Used in UpdateLfoSettings()
+    (void)lfo_wave;   // Used in UpdateLfoSettings()
     
     // Apply VCF filter type (12dB or 24dB slope) - Jupiter-8 switchable
     // 0-49 = 12dB/oct (2-pole), 50-100 = 24dB/oct (4-pole)
-    if (vcf_type < 50) {
-        vcf_->SetMode(dsp::JupiterVCF::MODE_LP12);
-    } else {
-        vcf_->SetMode(dsp::JupiterVCF::MODE_LP24);
-    }
+    // NOTE: Set mode ONCE per buffer, not per-sample (critical optimization)
+    const dsp::JupiterVCF::Mode vcf_mode = (vcf_type < 50) 
+        ? dsp::JupiterVCF::MODE_LP12 
+        : dsp::JupiterVCF::MODE_LP24;
+    vcf_->SetMode(vcf_mode);
     
-    // Apply HPF cutoff (non-resonant high-pass before low-pass)
+    // Pre-calculate HPF coefficient ONCE per buffer (not per-sample)
+    // HPF cutoff (non-resonant high-pass before low-pass)
     // Jupiter-8 has fixed HPF, we make it adjustable
-    // TODO: VCF needs HPF support - currently only has LP modes
-    // For now, this is a placeholder for future HPF implementation
-    (void)hpf_cutoff;  // Suppress unused warning
+    float hpf_alpha = 0.0f;  // 0 = bypass HPF
+    if (hpf_cutoff > 0) {
+        const float hpf_freq = 20.0f + (hpf_cutoff / 100.0f) * 1980.0f;  // 20Hz-2kHz
+        const float rc = 1.0f / (2.0f * static_cast<float>(M_PI) * hpf_freq);
+        const float dt = 1.0f / sample_rate_;
+        hpf_alpha = rc / (rc + dt);
+    }
     
     // Keyboard tracking from KEYFLW parameter
     // Jupiter-8 spec: 0-120% range, with slider downward = reduced tracking
@@ -409,18 +413,11 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         
         // Apply HPF (high-pass filter) FIRST - Jupiter-8 signal flow
         // HPF comes before LPF in Jupiter-8 architecture
-        // HPF value: 0-100 maps to 20Hz-2kHz cutoff
+        // HPF coefficient (hpf_alpha) pre-calculated before loop for efficiency
         float hpf_out = mixed_;
-        if (hpf_cutoff > 0) {
+        if (hpf_alpha > 0.0f) {
             // Simple one-pole HPF: y[n] = alpha * (y[n-1] + x[n] - x[n-1])
-            // where alpha = 1 / (1 + 2*pi*fc/fs)
-            const float hpf_freq = 20.0f + (hpf_cutoff / 100.0f) * 1980.0f;  // 20Hz-2kHz
-            const float rc = 1.0f / (2.0f * M_PI * hpf_freq);
-            const float dt = 1.0f / sample_rate_;
-            const float alpha = rc / (rc + dt);
-            
-            // Use instance state variables for HPF (initialized in constructor)
-            hpf_out = alpha * (hpf_prev_output_ + mixed_ - hpf_prev_input_);
+            hpf_out = hpf_alpha * (hpf_prev_output_ + mixed_ - hpf_prev_input_);
             hpf_prev_output_ = hpf_out;
             hpf_prev_input_ = mixed_;
             
@@ -471,8 +468,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
             last_cutoff_hz_ = cutoff_modulated;
         }
         
-        // Apply filter mode from hub (0=LP12, 1=LP24, 2=HP12, 3=BP12)
-        vcf_->SetMode(static_cast<dsp::JupiterVCF::Mode>(vcf_type & 0x03));
+        // Filter mode already set before loop (vcf_mode)
         
         // Bypass VCF when cutoff is at maximum (100) to avoid filter ringing artifacts
         if (current_preset_.params[PARAM_VCF_CUTOFF] >= 100) {
@@ -536,35 +532,21 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
             right_buffer_[i] = mix_buffer_[i];
         }
     } else {
-        // Configure effect based on EFFECT parameter
         // Effect mode: 0=Chorus, 1=Space, 2=Dry, 3=Both
+        // Effect parameters are now configured in UpdateEffectParameters() on change,
+        // not every buffer (critical optimization)
         const uint8_t effect_mode = current_preset_.params[PARAM_EFFECT];
     
-    if (effect_mode == 2) {
-        // DRY mode: Bypass all effects, just copy mono to stereo
-        for (uint32_t i = 0; i < frames; i++) {
-            left_buffer_[i] = mix_buffer_[i];
-            right_buffer_[i] = mix_buffer_[i];
+        if (effect_mode == 2) {
+            // DRY mode: Bypass all effects, just copy mono to stereo
+            for (uint32_t i = 0; i < frames; i++) {
+                left_buffer_[i] = mix_buffer_[i];
+                right_buffer_[i] = mix_buffer_[i];
+            }
+        } else {
+            // CHORUS/SPACE/BOTH: Process with pre-configured parameters
+            space_widener_->ProcessMonoBatch(mix_buffer_, left_buffer_, right_buffer_, frames);
         }
-    } else if (effect_mode == 3) {
-        // BOTH mode: Maximum effect (chorus + space combined)
-        space_widener_->SetModDepth(8.0f);      // 8ms modulation depth
-        space_widener_->SetMix(0.8f);           // 80% wet/dry mix
-        space_widener_->SetDelayTime(40.0f);    // 40ms delay time
-        space_widener_->ProcessMonoBatch(mix_buffer_, left_buffer_, right_buffer_, frames);
-    } else if (effect_mode == 0) {
-        // CHORUS mode: Moderate modulation depth, less delay time
-        space_widener_->SetModDepth(3.0f);      // 3ms modulation depth
-        space_widener_->SetMix(0.5f);           // 50% wet/dry mix
-        space_widener_->SetDelayTime(15.0f);    // 15ms delay time
-        space_widener_->ProcessMonoBatch(mix_buffer_, left_buffer_, right_buffer_, frames);
-    } else {
-        // SPACE mode (1): Wider stereo, more delay time
-        space_widener_->SetModDepth(6.0f);      // 6ms modulation depth
-        space_widener_->SetMix(0.7f);           // 70% wet/dry mix
-        space_widener_->SetDelayTime(35.0f);    // 35ms delay time for wide stereo
-        space_widener_->ProcessMonoBatch(mix_buffer_, left_buffer_, right_buffer_, frames);
-    }
     }
     
     // Add tiny DC offset for denormal protection before interleaving
@@ -757,9 +739,12 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
         case PARAM_MOD_HUB:
         case PARAM_MOD_AMT:
             // Hub updates handled in Render() by reading hub values
+            // Also update LFO settings if the hub affects LFO
+            UpdateLfoSettings();
             break;
         case PARAM_EFFECT:
-            // Effect mode (Chorus/Space) handled in Render()
+            // Effect mode changed - update effect parameters once
+            UpdateEffectParameters(v);
             break;
     }
 }
@@ -950,6 +935,10 @@ void DrupiterSynth::LoadPreset(uint8_t preset_id) {
     for (uint8_t i = 0; i < PARAM_COUNT; ++i) {
         SetParameter(i, current_preset_.params[i]);
     }
+    
+    // Initialize effect and LFO settings from preset (critical for preset load)
+    UpdateEffectParameters(current_preset_.params[PARAM_EFFECT]);
+    UpdateLfoSettings();
 }
 
 void DrupiterSynth::SavePreset(uint8_t preset_id) {
@@ -1008,3 +997,43 @@ const char* DrupiterSynth::GetPresetName(uint8_t preset_id) const {
     return presets::kFactoryPresets[preset_id].name;
 }
 
+void DrupiterSynth::UpdateEffectParameters(uint8_t effect_mode) {
+    // Configure effect parameters ONCE when mode changes (not every buffer)
+    // This is a critical performance optimization
+    if (!space_widener_) return;
+    
+    switch (effect_mode) {
+        case 0:  // CHORUS mode: Moderate modulation depth, less delay time
+            space_widener_->SetModDepth(3.0f);      // 3ms modulation depth
+            space_widener_->SetMix(0.5f);           // 50% wet/dry mix
+            space_widener_->SetDelayTime(15.0f);    // 15ms delay time
+            break;
+        case 1:  // SPACE mode: Wider stereo, more delay time
+            space_widener_->SetModDepth(6.0f);      // 6ms modulation depth
+            space_widener_->SetMix(0.7f);           // 70% wet/dry mix
+            space_widener_->SetDelayTime(35.0f);    // 35ms delay time for wide stereo
+            break;
+        case 2:  // DRY mode: No effect processing (handled in Render)
+            break;
+        case 3:  // BOTH mode: Maximum effect (chorus + space combined)
+            space_widener_->SetModDepth(8.0f);      // 8ms modulation depth
+            space_widener_->SetMix(0.8f);           // 80% wet/dry mix
+            space_widener_->SetDelayTime(40.0f);    // 40ms delay time
+            break;
+    }
+}
+
+void DrupiterSynth::UpdateLfoSettings() {
+    // Update LFO settings when hub parameters change
+    // Called from SetParameter when MOD_HUB or MOD_AMT changes
+    if (!lfo_) return;
+    
+    // Apply LFO delay setting (0-100 maps to 0-5 seconds)
+    const uint8_t lfo_delay = mod_hub_.GetValue(MOD_LFO_DELAY);
+    const float lfo_delay_sec = (lfo_delay / 100.0f) * 5.0f;
+    lfo_->SetDelay(lfo_delay_sec);
+    
+    // Apply LFO waveform (0-3: TRI/RAMP/SQR/S&H)
+    const uint8_t lfo_wave = mod_hub_.GetValue(MOD_LFO_WAVE);
+    lfo_->SetWaveform(static_cast<dsp::JupiterLFO::Waveform>(lfo_wave & 0x03));
+}

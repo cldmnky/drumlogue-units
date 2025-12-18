@@ -47,6 +47,29 @@ uint32_t audio_engine_get_waveform_samples(audio_engine_t* engine,
                                            float* buffer, 
                                            uint32_t buffer_size);
 
+// Enable or disable tuner (pitch detection)
+// When disabled, tuner completely bypasses pitch detection to save CPU
+void audio_engine_set_tuner_enabled(audio_engine_t* engine, bool enabled);
+
+// Check if tuner is enabled
+bool audio_engine_is_tuner_enabled(audio_engine_t* engine);
+
+// Performance statistics
+typedef struct {
+    double render_time_avg_us;      // Average render time in microseconds
+    double render_time_min_us;      // Minimum render time
+    double render_time_max_us;      // Maximum render time
+    double callback_time_avg_us;    // Total callback time
+    uint64_t total_frames_processed;
+    uint32_t buffer_underruns;      // Count of potential audio glitches
+} audio_perf_stats_t;
+
+// Get performance statistics
+void audio_engine_get_perf_stats(audio_engine_t* engine, audio_perf_stats_t* stats);
+
+// Reset performance statistics
+void audio_engine_reset_perf_stats(audio_engine_t* engine);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

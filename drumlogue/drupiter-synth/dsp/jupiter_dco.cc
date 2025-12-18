@@ -59,6 +59,7 @@ inline float WrapPhase(float phase) {
 float JupiterDCO::ramp_table_[kWavetableSize + 1];
 float JupiterDCO::square_table_[kWavetableSize + 1];
 float JupiterDCO::triangle_table_[kWavetableSize + 1];
+float JupiterDCO::sine_table_[kWavetableSize + 1];
 bool JupiterDCO::tables_initialized_ = false;
 
 JupiterDCO::JupiterDCO()
@@ -207,7 +208,8 @@ float JupiterDCO::GenerateWaveform(float phase, float phase_inc) {
             return LookupWavetable(triangle_table_, phase);
 
         case WAVEFORM_SINE:
-            return sinf(phase * 2.0f * static_cast<float>(M_PI));
+            // Use wavetable for fast sine (avoids expensive sinf() call)
+            return LookupWavetable(sine_table_, phase);
 
         case WAVEFORM_NOISE:
             // Simple white noise (VCO2 on JP-8 has NOISE instead of SQUARE).
@@ -248,6 +250,10 @@ void JupiterDCO::InitWavetables() {
         } else {
             triangle_table_[i] = 3.0f - phase * 4.0f;
         }
+        
+        // Sine wave: Critical optimization - avoids sinf() in Process()
+        // Pre-compute sin(2*PI*phase) for all table entries
+        sine_table_[i] = sinf(phase * 2.0f * static_cast<float>(M_PI));
     }
     
     tables_initialized_ = true;

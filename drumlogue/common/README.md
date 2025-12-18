@@ -5,23 +5,23 @@ This directory contains reusable components for developing drumlogue units. Thes
 ## Available Utilities
 
 ### Core DSP & Audio
-- **`dsp_utils.h`** - Common DSP math functions
-- **`fixed_mathq.h`** - Fixed-point arithmetic
-- **`neon_dsp.h`** - ARM NEON SIMD optimizations
-- **`arm_intrinsics.h`** - ARM intrinsics helpers
-- **`simd_utils.h`** - SIMD utilities
-- **`smoothed_value.h`** - Anti-zipper parameter smoothing
+- **`dsp_utils.h`**: Lightweight DSP helpers (clamp, lerp, crossfade) and one-pole dezipper.
+- **`fixed_mathq.h`**: Fixed-point arithmetic (Q formats) optimized for Cortex-A7 using ARM intrinsics.
+- **`neon_dsp.h`**: ARM NEON SIMD utilities for buffer operations, mixing, and gain control.
+- **`arm_intrinsics.h`**: Low-level ARM DSP intrinsics (smmul, smlawb, etc.) for Cortex-A7/M4/M7.
+- **`simd_utils.h`**: NEON SIMD helpers for common audio buffer operations (load/store, MAC, clamp).
+- **`smoothed_value.h`**: One-pole smoothed parameter class for zipper-free parameter changes.
 
 ### Oscillators & Effects
-- **`wavetable_osc.h`** - Wavetable oscillator
-- **`ppg_osc.h`** - PPG wavetable oscillator
-- **`stereo_widener.h`** - Stereo widening effect
+- **`wavetable_osc.h`**: Anti-aliased wavetable oscillator with smooth morphing and integration.
+- **`ppg_osc.h`**: PPG Wave style 8-bit wavetable oscillator with key-wave interpolation and NEON support.
+- **`stereo_widener.h`**: NEON-optimized Mid/Side stereo processing and width enhancement.
 
-### UI & Parameter Management (NEW)
-- **`hub_control.h`** - Hub parameter system for compressing multiple controls
-- **`param_format.h`** - Standard parameter value formatting (%, Hz, dB, etc.)
-- **`preset_manager.h`** - Generic preset management system
-- **`midi_helper.h`** - MIDI conversion utilities
+### UI & Parameter Management
+- **`hub_control.h`**: Hub system to control multiple parameters using a single selector + value pair.
+- **`param_format.h`**: Consistent string formatting for UI (Percent, Frequency, Time, dB, Pitch).
+- **`preset_manager.h`**: Generic template-based system for preset storage, loading, and validation.
+- **`midi_helper.h`**: MIDI conversion utilities (Note-to-Freq, velocity scaling, pitch bend).
 
 ---
 
@@ -198,7 +198,7 @@ Anti-zipper noise for parameter changes:
 
 class MySynth {
  private:
-  common::SmoothedValue cutoff_smooth_;
+  dsp::SmoothedValue cutoff_smooth_;
   
  public:
   void Init(float sample_rate) {
