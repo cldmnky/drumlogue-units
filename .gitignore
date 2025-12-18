@@ -28,6 +28,9 @@
 *.so.*
 *.dylib
 
+# Test presets-editor vendor dependencies
+test/presets-editor/vendor/
+
 # Executables
 *.exe
 *.out

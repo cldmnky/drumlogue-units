@@ -138,12 +138,32 @@ GUI_SRC := gui/main.cpp gui/imgui_app.cpp
 GUI_OBJS := $(patsubst %.cpp,build/%.o,$(GUI_SRC))
 GUI_INC := $(SDL_CFLAGS) $(IMGUI_CFLAGS) $(IMGUI_INC_LOCAL)
 
-.PHONY: all clean build-unit
+# ImGui version to use
+IMGUI_VERSION := 1.91.6
+IMGUI_URL := https://github.com/ocornut/imgui/archive/refs/tags/v$(IMGUI_VERSION).tar.gz
+VENDOR_DIR := vendor
+
+.PHONY: all clean build-unit setup-vendor
 
 all: $(TARGET)
 	@echo "Built $(TARGET)"
 
-gui: $(GUI_TARGET)
+setup-vendor:
+	@if [ ! -d "$(VENDOR_IMGUI_DIR)" ]; then \
+		echo "Setting up vendor dependencies..."; \
+		mkdir -p $(VENDOR_DIR); \
+		cd $(VENDOR_DIR) && \
+		if [ ! -f "v$(IMGUI_VERSION).tar.gz" ]; then \
+			echo "Downloading ImGui v$(IMGUI_VERSION)..."; \
+			curl -L -o v$(IMGUI_VERSION).tar.gz $(IMGUI_URL); \
+		fi && \
+		echo "Extracting ImGui..."; \
+		tar xzf v$(IMGUI_VERSION).tar.gz && \
+		mv imgui-$(IMGUI_VERSION) imgui && \
+		echo "ImGui setup complete"; \
+	fi
+
+gui: setup-vendor $(GUI_TARGET)
 
 $(TARGET): $(OBJS) | $(BIN_DIR)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
@@ -172,6 +192,9 @@ $(BIN_DIR):
 
 clean:
 	rm -rf build $(TARGET)
+
+clean-all: clean
+	rm -rf $(VENDOR_DIR)
 
 # Build a unit as native shared library
 build-unit:
