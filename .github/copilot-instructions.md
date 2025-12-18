@@ -3,6 +3,45 @@
 - **Purpose & layout**: This repo combines (a) Mutable Instruments eurorack module sources (`eurorack/…`, STM32/AVR) and (b) Korg logue SDK materials (`logue-sdk/…`) for building drumlogue user units.
 - **Main targets**: Most day-to-day work here is drumlogue unit development. Custom units live in `drumlogue/` at the repo root (not in the logue-sdk submodule). Templates for reference are in `logue-sdk/platform/drumlogue/` (`dummy-synth`, `dummy-delfx`, `dummy-revfx`, `dummy-masterfx`).
 
+## Quick Reference
+
+### Build & Test
+```bash
+./build.sh <unit-name>              # Build unit
+./build.sh <unit-name> clean        # Clean build
+cd test/<unit-name> && make test    # Desktop testing
+```
+
+### Release Management
+```bash
+make build UNIT=<name>                    # Build
+make version UNIT=<name> VERSION=1.0.0    # Update version
+make release UNIT=<name> VERSION=1.0.0    # Prepare release
+make tag UNIT=<name> VERSION=1.0.0        # Create git tag
+make list-units                           # List all units
+```
+
+## Specialized Instructions
+
+The following instruction files provide detailed guidance for specific areas:
+
+- [C/C++ Coding Standards](instructions/cpp.instructions.md) - DSP code style, real-time constraints, ARM optimization
+- [Build System](instructions/build-system.instructions.md) - Makefiles, config.mk, container builds
+- [Testing Standards](instructions/testing.instructions.md) - Desktop test harnesses, hardware validation
+
+## Reusable Prompts
+
+Use these prompts for common development tasks:
+
+- [Create New Unit](prompts/create-unit.prompt.md) - Template-based unit creation
+- [Debug Unit](prompts/debug-unit.prompt.md) - Build, runtime, and DSP debugging
+- [Port MI DSP](prompts/port-mi-dsp.prompt.md) - Porting Mutable Instruments modules
+- [Release Unit](prompts/release-unit.prompt.md) - Complete release workflow
+
+## Specialized Agents
+
+- [Drumlogue DSP Expert](agents/drumlogue-dsp-expert.agent.md) - Expert mode for DSP development
+
 ## Building Units
 
 - **Build script**: Use `./build.sh <project-name>` from the repo root:
@@ -49,6 +88,14 @@
 
 - **eurorack/**: Contains upstream modules (e.g., `braids`, `clouds`). Resource generation scripts live in `resources/` and run during make to emit lookup tables (`resources.cc/h`). DSP sources are designed to compile both on hardware and desktop for testing (`test/` emits WAVs). Bootloader code sits in `bootloader/`.
 - **Licensing**: Eurorack code is GPLv3 (AVR) / MIT (STM32); hardware CC-BY-SA. Respect the "Mutable Instruments" trademark notice in `eurorack/README.md` when producing derivatives.
+
+## Desktop Testing
+
+- **Test harnesses**: Each unit can have a desktop test harness in `test/<unit>/` for offline DSP validation
+- **Purpose**: Process WAV files through algorithms without hardware, enabling fast iteration and automated testing
+- **Build**: `cd test/<unit> && make`
+- **Run**: `./unit_test input.wav output.wav [options]`
+- **CI**: Automated tests run via `.github/workflows/dsp-test.yml`
 
 ## Guidelines
 
