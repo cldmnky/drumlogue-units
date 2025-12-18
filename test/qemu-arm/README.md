@@ -121,6 +121,26 @@ podman run --rm -it \
 **Podman errors on macOS**
 → Ensure Podman machine is running: `podman machine start`
 
+## CI Integration
+
+QEMU ARM tests run automatically on pull requests via GitHub Actions:
+- **Workflow:** `.github/workflows/qemu-test.yml`
+- **Trigger:** Any PR that modifies drumlogue units or build system
+- **Tests:** All units (clouds-revfx, elementish-synth, pepege-synth, drupiter-synth)
+- **Artifacts:** WAV output files available for download (7 day retention)
+
+The workflow:
+1. Builds each unit using the containerized build system
+2. Sets up QEMU ARM environment with dependencies
+3. Runs `test-unit.sh` for each unit
+4. Uploads test results and output WAV files
+
+To view results:
+1. Go to your PR on GitHub
+2. Click "Checks" tab
+3. Select "QEMU ARM Test" job for the unit you want to inspect
+4. Download artifacts to listen to output audio
+
 ## Performance
 
 QEMU ARM emulation is slower than native:

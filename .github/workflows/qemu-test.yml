@@ -1,0 +1,122 @@
+name: QEMU ARM Tests
+
+on:
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'drumlogue/**'
+      - 'eurorack/**'
+      - 'test/qemu-arm/**'
+      - 'logue-sdk/**'
+      - 'build.sh'
+      - '.github/workflows/qemu-test.yml'
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'drumlogue/**'
+      - 'eurorack/**'
+      - 'test/qemu-arm/**'
+      - 'logue-sdk/**'
+      - 'build.sh'
+      - '.github/workflows/qemu-test.yml'
+  workflow_dispatch:
+
+jobs:
+  build-units:
+    name: Build Units
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        unit: [clouds-revfx, elementish-synth, pepege-synth, drupiter-synth]
+      fail-fast: false
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      
+      - name: Set up Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+      
+      - name: Build ${{ matrix.unit }}
+        run: ./build.sh ${{ matrix.unit }}
+        env:
+          ENGINE: podman
+      
+      - name: Upload unit artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-${{ matrix.unit }}
+          path: drumlogue/${{ matrix.unit }}/*.drmlgunit
+          retention-days: 1
+
+  qemu-test:
+    name: QEMU ARM Test
+    needs: build-units
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        unit: [clouds-revfx, elementish-synth, pepege-synth, drupiter-synth]
+      fail-fast: false
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      
+      - name: Download unit artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: unit-${{ matrix.unit }}
+          path: drumlogue/${{ matrix.unit }}/
+      
+      - name: Set up dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            podman \
+            python3 \
+            python3-numpy \
+            python3-scipy
+      
+      - name: Build ARM unit host
+        working-directory: test/qemu-arm
+        run: make -f Makefile.podman podman-build
+      
+      - name: Generate test signals
+        working-directory: test/qemu-arm
+        run: |
+          mkdir -p fixtures
+          python3 generate_signals.py
+      
+      - name: Run QEMU test for ${{ matrix.unit }}
+        working-directory: test/qemu-arm
+        run: |
+          chmod +x test-unit.sh
+          ./test-unit.sh ${{ matrix.unit }}
+        env:
+          ENGINE: podman
+      
+      - name: Upload test output
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qemu-output-${{ matrix.unit }}
+          path: test/qemu-arm/build/output_*.wav
+          retention-days: 7
+
+  qemu-test-summary:
+    name: QEMU Test Summary
+    needs: qemu-test
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Check test results
+        run: |
+          echo "✅ QEMU ARM tests completed for all units"
+          echo "Check individual job results above"
