@@ -20,7 +20,7 @@ Custom DSP units for the **Korg drumlogue** drum machine, bringing high-quality 
     <h3>🌫️ Clouds Reverb FX</h3>
     <p class="unit-type">Reverb Effect</p>
     <p>Lush atmospheric reverb with texture processing, micro-granular effects, pitch shifting, and dual assignable LFOs.</p>
-    <p class="unit-version">v1.2.0</p>
+    <p class="unit-version">v1.1.0</p>
     <a href="{{ site.baseurl }}/units/clouds-revfx/" class="btn">Learn More →</a>
   </div>
   
@@ -28,8 +28,24 @@ Custom DSP units for the **Korg drumlogue** drum machine, bringing high-quality 
     <h3>🔔 Elementish Synth</h3>
     <p class="unit-type">Synthesizer</p>
     <p>Modal synthesis voice combining bow, blow, and strike exciters with versatile resonator models for rich, expressive timbres.</p>
-    <p class="unit-version">v1.1.0</p>
+    <p class="unit-version">v1.2.0</p>
     <a href="{{ site.baseurl }}/units/elementish-synth/" class="btn">Learn More →</a>
+  </div>
+  
+  <div class="unit-card">
+    <h3>🌊 Pepege-Synth</h3>
+    <p class="unit-type">Synthesizer</p>
+    <p>2-voice polyphonic PPG wavetable synthesizer with dual oscillators, comprehensive modulation, and authentic 8-bit character.</p>
+    <p class="unit-version">v1.0.0</p>
+    <a href="{{ site.baseurl }}/units/pepege-synth/" class="btn">Learn More →</a>
+  </div>
+  
+  <div class="unit-card">
+    <h3>🪐 Drupiter Synth</h3>
+    <p class="unit-type">Synthesizer</p>
+    <p>Jupiter-8 inspired monophonic synthesizer with dual DCOs, multi-mode filter, hard sync, and cross-modulation.</p>
+    <p class="unit-version">v1.0.0</p>
+    <a href="{{ site.baseurl }}/units/drupiter-synth/" class="btn">Learn More →</a>
   </div>
 </div>
 
