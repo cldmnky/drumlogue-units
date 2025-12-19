@@ -14,7 +14,7 @@ on:
 
 permissions: read-all
 
-network: defaults
+# network: defaults  # Temporarily disabled - causes workspace mounting issues with awf
 
 safe-outputs:
   create-pull-request:
