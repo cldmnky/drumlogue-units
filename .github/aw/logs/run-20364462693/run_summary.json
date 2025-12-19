@@ -1,0 +1,98 @@
+{
+  "cli_version": "v0.33.4",
+  "run_id": 20364462693,
+  "processed_at": "2025-12-19T09:35:48.366854+01:00",
+  "run": {
+    "databaseId": 20364462693,
+    "number": 2,
+    "url": "https://github.com/cldmnky/drumlogue-units/actions/runs/20364462693",
+    "status": "in_progress",
+    "conclusion": "",
+    "workflowName": "Update Docs",
+    "workflowPath": ".github/workflows/update-docs.lock.yml",
+    "createdAt": "2025-12-19T08:34:34Z",
+    "startedAt": "2025-12-19T08:34:34Z",
+    "updatedAt": "2025-12-19T08:35:44Z",
+    "event": "workflow_dispatch",
+    "headBranch": "main",
+    "headSha": "f215bdf4c04ce087d48c31f639f5a9f2634c025c",
+    "displayTitle": "Update Docs",
+    "Duration": 70000000000,
+    "TokenUsage": 0,
+    "EstimatedCost": 0,
+    "Turns": 0,
+    "ErrorCount": 1,
+    "WarningCount": 0,
+    "MissingToolCount": 0,
+    "NoopCount": 0,
+    "LogsPath": ".github/aw/logs/run-20364462693"
+  },
+  "metrics": {
+    "TokenUsage": 0,
+    "EstimatedCost": 0,
+    "Errors": null,
+    "Turns": 0,
+    "ToolCalls": null,
+    "ToolSequences": null
+  },
+  "access_analysis": null,
+  "firewall_analysis": null,
+  "redacted_domains_analysis": null,
+  "missing_tools": null,
+  "noops": null,
+  "mcp_failures": null,
+  "artifacts_list": [
+    "aw_info.json/aw_info.json",
+    "prompt.txt/prompt.txt"
+  ],
+  "job_details": [
+    {
+      "name": "pre_activation",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2025-12-19T08:34:38Z",
+      "completed_at": "2025-12-19T08:34:44Z",
+      "Duration": 6000000000
+    },
+    {
+      "name": "activation",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2025-12-19T08:34:46Z",
+      "completed_at": "2025-12-19T08:34:51Z",
+      "Duration": 5000000000
+    },
+    {
+      "name": "agent",
+      "status": "completed",
+      "conclusion": "failure",
+      "started_at": "2025-12-19T08:34:53Z",
+      "completed_at": "2025-12-19T08:35:40Z",
+      "Duration": 47000000000
+    },
+    {
+      "name": "detection",
+      "status": "completed",
+      "conclusion": "skipped",
+      "started_at": "2025-12-19T08:35:40Z",
+      "completed_at": "2025-12-19T08:35:40Z",
+      "Duration": 0
+    },
+    {
+      "name": "conclusion",
+      "status": "in_progress",
+      "conclusion": "",
+      "started_at": "2025-12-19T08:35:43Z",
+      "completed_at": "0001-01-01T00:00:00Z",
+      "Duration": 0
+    },
+    {
+      "name": "safe_outputs",
+      "status": "completed",
+      "conclusion": "skipped",
+      "started_at": "2025-12-19T08:35:41Z",
+      "completed_at": "2025-12-19T08:35:40Z",
+      "Duration": -1000000000
+    }
+  ]
+}
