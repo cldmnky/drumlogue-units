@@ -29,7 +29,7 @@ Feature and performance release with NEON optimizations and refined presets.
 
 ### Bug Fixes
 
-- Fixed preset handling: `getPresetName()` now returns `nullptr` for invalid indices
+- **Fixed critical preset selector bug** (#24): `getPresetName()` now returns "Invalid" instead of `nullptr` for out-of-range indices. This prevents the drumlogue firmware from treating the unit as having no presets, which was causing the preset selector to lock at index 0.
 - Fixed preset loading: moved preset data to file scope for stable memory addresses
 - Fixed preset loading: use `setParameter()` to ensure proper DSP state updates
 - Fixed missing symbol: added `stmlib/utils/random.cc` to build

@@ -461,7 +461,7 @@ uint8_t CloudsFx::getPresetIndex() const {
 
 const char * CloudsFx::getPresetName(uint8_t idx) {
   if (idx >= kNumPresets) {
-    return nullptr;
+    return "Invalid";
   }
   return kPresetNames[idx];
 }
