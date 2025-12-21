@@ -77,5 +77,5 @@ __unit_callback uint8_t unit_get_preset_index() {
 }
 
 __unit_callback const char * unit_get_preset_name(uint8_t idx) {
-  return CloudsFx::getPresetName(idx);
+  return s_clouds_fx.getPresetName(idx);
 }

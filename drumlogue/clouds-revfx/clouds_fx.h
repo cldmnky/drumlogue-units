@@ -8,6 +8,8 @@
 #include "micro_granular.h"
 #include "pitch_shifter.h"
 #include "lfo.h"
+#include "../common/preset_manager.h"
+#include "presets.h"
 
 #include <array>
 #include <cstdint>
@@ -92,6 +94,7 @@ class ParamSmoother {
 
 class CloudsFx {
  public:
+  CloudsFx();
   int8_t Init(const unit_runtime_desc_t * desc);
   void Teardown();
   void Reset();
@@ -106,7 +109,7 @@ class CloudsFx {
 
   void LoadPreset(uint8_t idx);
   uint8_t getPresetIndex() const;
-  static const char * getPresetName(uint8_t idx);
+  const char * getPresetName(uint8_t idx) const;
 
  private:
   void applyDefaults();
@@ -120,7 +123,7 @@ class CloudsFx {
   static int32_t clampToParam(uint8_t id, int32_t value);
 
   std::array<int32_t, UNIT_PARAM_MAX> params_{};
-  uint8_t preset_index_ = 0;
+  common::PresetManager<UNIT_PARAM_MAX> preset_mgr_;
   
   // Parameter smoothers to prevent zipper noise
   ParamSmoother smooth_dry_wet_;

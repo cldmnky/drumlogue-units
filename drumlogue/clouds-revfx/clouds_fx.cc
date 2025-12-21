@@ -1,4 +1,5 @@
 #include "clouds_fx.h"
+#include "presets.h"
 #include "dsp/neon_dsp.h"
 
 #ifdef USE_NEON
@@ -9,62 +10,22 @@
 #include <cstdio>
 #include <cstring>
 
-// Preset names - must be at file scope for stable memory addresses
-constexpr size_t kNumPresets = 8;
-static const char * const kPresetNames[kNumPresets] = {
-    "INIT",      // 0: Clean starting point
-    "HALL",      // 1: Large concert hall
-    "PLATE",     // 2: Bright plate reverb
-    "SHIMMER",   // 3: Pitched reverb with shimmer
-    "CLOUD",     // 4: Granular texture cloud
-    "FREEZE",    // 5: For frozen/pad sounds
-    "OCTAVER",   // 6: Pitch shifted reverb
-    "AMBIENT",   // 7: Lush ambient wash
-};
+// Define the number of factory presets
+static constexpr size_t kNumFactoryPresets = 8;
 
-// Preset data: {DRY/WET, TIME, DIFFUSION, LP_DAMP, IN_GAIN, TEXTURE, 
-//               GRAIN_AMT, GRAIN_SIZE, GRAIN_DENS, GRAIN_PITCH, GRAIN_POS, FREEZE,
-//               SHIFT_AMT, SHIFT_PITCH, SHIFT_SIZE, reserved,
-//               LFO1_ASSIGN, LFO1_SPEED, LFO1_DEPTH, LFO1_WAVE,
-//               LFO2_ASSIGN, LFO2_SPEED, LFO2_DEPTH, LFO2_WAVE}
-static const int32_t kPresets[kNumPresets][24] = {
-    // 0: INIT - Clean, neutral reverb starting point
-    // Medium mix, moderate decay, balanced diffusion, no extras
-    {100, 70, 70, 100, 50, 0, 0, 64, 64, 64, 64, 0, 0, 64, 64, 0, 0, 64, 0, 0, 0, 64, 0, 0},
-    
-    // 1: HALL - Large concert hall, natural and spacious
-    // Long decay, high diffusion, slightly dark (LP~80), subtle texture for air
-    {110, 115, 100, 80, 45, 20, 0, 64, 64, 64, 64, 0, 0, 64, 64, 0, 0, 64, 0, 0, 0, 64, 0, 0},
-    
-    // 2: PLATE - Classic bright plate reverb
-    // Short-medium decay, max diffusion (dense), very bright, no texture/grain
-    {100, 55, 127, 127, 55, 0, 0, 64, 64, 64, 64, 0, 0, 64, 64, 0, 0, 64, 0, 0, 0, 64, 0, 0},
-    
-    // 3: SHIMMER - Ethereal octave-up reverb
-    // Long decay, moderate diffusion, bright, strong pitch shift (+12 semis = 96)
-    // Subtle grain adds sparkle, slow LFO on shift pitch for movement
-    {120, 105, 85, 110, 40, 30, 25, 80, 50, 76, 64, 0, 90, 76, 85, 0, 13, 25, 40, 0, 0, 64, 0, 0},
-    
-    // 4: CLOUD - Dense granular texture cloud
-    // Heavy grain processing, moderate reverb, slow LFO on grain position
-    // Creates evolving, atmospheric textures
-    {90, 85, 80, 90, 45, 50, 100, 100, 85, 64, 64, 0, 0, 64, 64, 0, 11, 20, 60, 0, 9, 35, 45, 2},
-    
-    // 5: FREEZE - Infinite sustain pad machine
-    // Very long decay, high diffusion, texture for smoothness
-    // Designed to capture and sustain incoming audio infinitely
-    {130, 127, 110, 85, 35, 70, 40, 90, 45, 64, 64, 0, 0, 64, 64, 0, 6, 15, 35, 0, 0, 64, 0, 0},
-    
-    // 6: OCTAVER - Pitch-shifted reverb (octave down)
-    // Clear pitch shift effect (-12 semis = 32), moderate reverb, crisp
-    // Good for thickening bass or creating sub-octave drones
-    {100, 75, 75, 95, 55, 15, 0, 64, 64, 64, 64, 0, 100, 52, 75, 0, 0, 64, 0, 0, 0, 64, 0, 0},
-    
-    // 7: AMBIENT - Lush, evolving ambient wash
-    // Long decay, warm (LP lower), texture + light grain for movement
-    // Dual LFO: slow texture mod + slow grain density mod for organic evolution
-    {140, 110, 95, 70, 40, 55, 35, 85, 55, 64, 64, 0, 20, 71, 80, 0, 6, 18, 50, 0, 9, 22, 40, 0},
-};
+CloudsFx::CloudsFx() : preset_mgr_(presets::kFactoryPresets, kNumFactoryPresets) {
+  // Initialize all parameters to default values
+  for (size_t i = 0; i < UNIT_PARAM_MAX; ++i) {
+    params_[i] = 64;  // Default to mid-value
+  }
+  
+  // Set some sensible defaults
+  params_[0] = 100;  // DRY_WET: 100% wet
+  params_[1] = 70;   // TIME: moderate
+  params_[2] = 70;   // DIFFUSION: moderate  
+  params_[3] = 100;  // LP: full brightness
+  params_[4] = 50;   // HP: center
+}
 
 // Static buffer for reverb delay lines (~64KB for 32768 * 2 bytes)
 static uint16_t s_reverb_buffer[32768];
@@ -98,8 +59,10 @@ int8_t CloudsFx::Init(const unit_runtime_desc_t * desc) {
     return k_unit_err_samplerate;
   }
   
+  // Initialize preset manager with factory presets
+  preset_mgr_ = common::PresetManager<UNIT_PARAM_MAX>{presets::kFactoryPresets, 8};
+  
   applyDefaults();
-  preset_index_ = 0;
   
   // Initialize reverb with static buffer
   reverb_.Init(s_reverb_buffer);
@@ -431,39 +394,35 @@ const uint8_t * CloudsFx::getParameterBmpValue(uint8_t id, int32_t value) {
 }
 
 void CloudsFx::LoadPreset(uint8_t idx) {
-  if (idx >= kNumPresets) {
-    idx = 0;
+  // Load preset using PresetManager
+  if (preset_mgr_.LoadPreset(idx)) {
+    // Apply all parameters from loaded preset
+    const auto& preset = preset_mgr_.GetCurrentPreset();
+    for (uint8_t i = 0; i < UNIT_PARAM_MAX; ++i) {
+      setParameter(i, preset.params[i]);
+    }
+    
+    // Update DSP modules
+    if (reverb_initialized_) {
+      updateReverbParams();
+    }
+    if (granular_initialized_) {
+      updateGranularParams();
+    }
+    if (pitch_shifter_initialized_) {
+      updatePitchShifterParams();
+    }
+    // Update LFO parameters
+    updateLfoParams();
   }
-  preset_index_ = idx;
-  
-  // Load preset values using setParameter (ensures proper parameter handling)
-  for (uint8_t i = 0; i < 24; ++i) {
-    setParameter(i, kPresets[idx][i]);
-  }
-  
-  // Update DSP modules
-  if (reverb_initialized_) {
-    updateReverbParams();
-  }
-  if (granular_initialized_) {
-    updateGranularParams();
-  }
-  if (pitch_shifter_initialized_) {
-    updatePitchShifterParams();
-  }
-  // Update LFO parameters
-  updateLfoParams();
 }
 
 uint8_t CloudsFx::getPresetIndex() const {
-  return preset_index_;
+  return preset_mgr_.GetCurrentIndex();
 }
 
-const char * CloudsFx::getPresetName(uint8_t idx) {
-  if (idx >= kNumPresets) {
-    return "Invalid";
-  }
-  return kPresetNames[idx];
+const char * CloudsFx::getPresetName(uint8_t idx) const {
+  return preset_mgr_.GetPresetName(idx);
 }
 
 void CloudsFx::applyDefaults() {
