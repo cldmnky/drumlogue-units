@@ -60,7 +60,7 @@ int8_t CloudsFx::Init(const unit_runtime_desc_t * desc) {
   }
   
   // Initialize preset manager with factory presets
-  preset_mgr_ = common::PresetManager<UNIT_PARAM_MAX>{presets::kFactoryPresets, 8};
+  preset_mgr_ = common::PresetManager<UNIT_PARAM_MAX>{presets::kFactoryPresets, kNumFactoryPresets};
   
   applyDefaults();
   
