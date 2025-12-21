@@ -8,7 +8,7 @@
 #include "micro_granular.h"
 #include "pitch_shifter.h"
 #include "lfo.h"
-#include "presets.h"
+// presets.h removed - presets not supported on drumlogue hardware for effect units
 
 #include <array>
 #include <cstdint>
@@ -106,9 +106,7 @@ class CloudsFx {
   const char * getParameterStrValue(uint8_t id, int32_t value);
   const uint8_t * getParameterBmpValue(uint8_t id, int32_t value);
 
-  void LoadPreset(uint8_t idx);
-  uint8_t getPresetIndex() const;
-  const char * getPresetName(uint8_t idx) const;
+  // Preset methods removed - not supported on drumlogue for reverb/delay effects (hardware limitation)
 
  private:
   void applyDefaults();
@@ -122,7 +120,7 @@ class CloudsFx {
   static int32_t clampToParam(uint8_t id, int32_t value);
 
   std::array<int32_t, UNIT_PARAM_MAX> params_{};
-  uint8_t current_preset_idx_{0};  // Currently loaded preset index
+  // current_preset_idx_ removed - presets not supported on drumlogue for effect units
   
   // Parameter smoothers to prevent zipper noise
   ParamSmoother smooth_dry_wet_;

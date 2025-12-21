@@ -1,5 +1,5 @@
 #include "clouds_fx.h"
-#include "presets.h"
+// presets.h removed - presets not supported on drumlogue for reverb/delay effects
 #include "dsp/neon_dsp.h"
 
 #ifdef USE_NEON
@@ -10,8 +10,7 @@
 #include <cstdio>
 #include <cstring>
 
-// Define the number of factory presets
-static constexpr size_t kNumFactoryPresets = 8;
+// kNumFactoryPresets removed - presets not supported on drumlogue hardware
 
 CloudsFx::CloudsFx() {
   // Initialize all parameters to default values
@@ -103,7 +102,6 @@ void CloudsFx::Teardown() {
 }
 
 void CloudsFx::Reset() {
-  applyDefaults();
   if (reverb_initialized_) {
     reverb_.Clear();
   }
@@ -122,6 +120,12 @@ void CloudsFx::Reset() {
   if (lfo2_initialized_) {
     lfo2_.Reset();
   }
+
+  // IMPORTANT: Do not reset exposed parameters here.
+  // drumlogue may call unit_reset() during lifecycle transitions (including around
+  // preset selection for FX units). Wiping params_ would make presets appear to
+  // "load" (index/name changes) but sound would stay at defaults.
+  initSmoothers();
   updateReverbParams();
   updateGranularParams();
   updatePitchShifterParams();
@@ -390,47 +394,8 @@ const uint8_t * CloudsFx::getParameterBmpValue(uint8_t id, int32_t value) {
   return nullptr;
 }
 
-void CloudsFx::LoadPreset(uint8_t idx) {
-  // Bounds check
-  if (idx >= kNumFactoryPresets) {
-    idx = 0;  // Default to first preset
-  }
-  
-  // Load preset directly from factory array
-  const auto& factory_preset = presets::kFactoryPresets[idx];
-  
-  // Apply all parameters from loaded preset
-  for (uint8_t i = 0; i < UNIT_PARAM_MAX; ++i) {
-    setParameter(i, factory_preset.params[i]);
-  }
-  
-  // Update current preset index
-  current_preset_idx_ = idx;
-  
-  // Update DSP modules
-  if (reverb_initialized_) {
-    updateReverbParams();
-  }
-  if (granular_initialized_) {
-    updateGranularParams();
-  }
-  if (pitch_shifter_initialized_) {
-    updatePitchShifterParams();
-  }
-  // Update LFO parameters
-  updateLfoParams();
-}
-
-uint8_t CloudsFx::getPresetIndex() const {
-  return current_preset_idx_;
-}
-
-const char * CloudsFx::getPresetName(uint8_t idx) const {
-  if (idx >= kNumFactoryPresets) {
-    return "Invalid";
-  }
-  return presets::kFactoryPresets[idx].name;
-}
+// Preset methods removed - not supported on drumlogue for reverb/delay effects (hardware limitation)
+// This is a known firmware bug/limitation on drumlogue hardware
 
 void CloudsFx::applyDefaults() {
   for (uint8_t i = 0; i < UNIT_PARAM_MAX; ++i) {
