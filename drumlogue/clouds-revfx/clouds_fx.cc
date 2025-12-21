@@ -13,7 +13,7 @@
 // Define the number of factory presets
 static constexpr size_t kNumFactoryPresets = 8;
 
-CloudsFx::CloudsFx() : preset_mgr_(presets::kFactoryPresets, kNumFactoryPresets) {
+CloudsFx::CloudsFx() {
   // Initialize all parameters to default values
   for (size_t i = 0; i < UNIT_PARAM_MAX; ++i) {
     params_[i] = 64;  // Default to mid-value
@@ -58,9 +58,6 @@ int8_t CloudsFx::Init(const unit_runtime_desc_t * desc) {
   if (desc->samplerate != 48000) {
     return k_unit_err_samplerate;
   }
-  
-  // Initialize preset manager with factory presets
-  preset_mgr_ = common::PresetManager<UNIT_PARAM_MAX>{presets::kFactoryPresets, kNumFactoryPresets};
   
   applyDefaults();
   
@@ -394,35 +391,45 @@ const uint8_t * CloudsFx::getParameterBmpValue(uint8_t id, int32_t value) {
 }
 
 void CloudsFx::LoadPreset(uint8_t idx) {
-  // Load preset using PresetManager
-  if (preset_mgr_.LoadPreset(idx)) {
-    // Apply all parameters from loaded preset
-    const auto& preset = preset_mgr_.GetCurrentPreset();
-    for (uint8_t i = 0; i < UNIT_PARAM_MAX; ++i) {
-      setParameter(i, preset.params[i]);
-    }
-    
-    // Update DSP modules
-    if (reverb_initialized_) {
-      updateReverbParams();
-    }
-    if (granular_initialized_) {
-      updateGranularParams();
-    }
-    if (pitch_shifter_initialized_) {
-      updatePitchShifterParams();
-    }
-    // Update LFO parameters
-    updateLfoParams();
+  // Bounds check
+  if (idx >= kNumFactoryPresets) {
+    idx = 0;  // Default to first preset
   }
+  
+  // Load preset directly from factory array
+  const auto& factory_preset = presets::kFactoryPresets[idx];
+  
+  // Apply all parameters from loaded preset
+  for (uint8_t i = 0; i < UNIT_PARAM_MAX; ++i) {
+    setParameter(i, factory_preset.params[i]);
+  }
+  
+  // Update current preset index
+  current_preset_idx_ = idx;
+  
+  // Update DSP modules
+  if (reverb_initialized_) {
+    updateReverbParams();
+  }
+  if (granular_initialized_) {
+    updateGranularParams();
+  }
+  if (pitch_shifter_initialized_) {
+    updatePitchShifterParams();
+  }
+  // Update LFO parameters
+  updateLfoParams();
 }
 
 uint8_t CloudsFx::getPresetIndex() const {
-  return preset_mgr_.GetCurrentIndex();
+  return current_preset_idx_;
 }
 
 const char * CloudsFx::getPresetName(uint8_t idx) const {
-  return preset_mgr_.GetPresetName(idx);
+  if (idx >= kNumFactoryPresets) {
+    return "Invalid";
+  }
+  return presets::kFactoryPresets[idx].name;
 }
 
 void CloudsFx::applyDefaults() {

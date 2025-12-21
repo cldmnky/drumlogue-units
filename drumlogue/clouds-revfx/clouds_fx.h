@@ -8,7 +8,6 @@
 #include "micro_granular.h"
 #include "pitch_shifter.h"
 #include "lfo.h"
-#include "../common/preset_manager.h"
 #include "presets.h"
 
 #include <array>
@@ -123,7 +122,7 @@ class CloudsFx {
   static int32_t clampToParam(uint8_t id, int32_t value);
 
   std::array<int32_t, UNIT_PARAM_MAX> params_{};
-  common::PresetManager<UNIT_PARAM_MAX> preset_mgr_;
+  uint8_t current_preset_idx_{0};  // Currently loaded preset index
   
   // Parameter smoothers to prevent zipper noise
   ParamSmoother smooth_dry_wet_;
