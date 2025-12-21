@@ -15,13 +15,15 @@
 
 #pragma once
 
-#include "../common/preset_manager.h"
-#include <cstring>
+#include <cstdint>
 
 namespace presets {
 
-// Preset structure compatible with PresetManager (24 params)
-using CloudsPreset = common::PresetManager<24>::Preset;
+// Direct preset structure (no template dependency)
+struct CloudsPreset {
+    char name[14];              // Preset name (13 chars + null, drumlogue limit)
+    int32_t params[24];         // 24 parameter values
+};
 
 // Factory presets array - 8 presets covering diverse sonic territories
 static const CloudsPreset kFactoryPresets[8] = {
