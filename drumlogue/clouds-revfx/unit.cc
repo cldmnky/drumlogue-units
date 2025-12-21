@@ -68,14 +68,5 @@ __unit_callback void unit_set_tempo(uint32_t tempo) {
   (void)tempo;  // tempo not used yet
 }
 
-__unit_callback void unit_load_preset(uint8_t idx) {
-  s_clouds_fx.LoadPreset(idx);
-}
-
-__unit_callback uint8_t unit_get_preset_index() {
-  return s_clouds_fx.getPresetIndex();
-}
-
-__unit_callback const char * unit_get_preset_name(uint8_t idx) {
-  return CloudsFx::getPresetName(idx);
-}
+// Preset callbacks removed - presets not supported on drumlogue for reverb/delay effects
+// This is a known hardware limitation/bug in the drumlogue firmware

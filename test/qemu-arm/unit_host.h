@@ -44,6 +44,7 @@ typedef struct {
     uint8_t channels;           // Number of channels (1=mono, 2=stereo)
     bool verbose;               // Verbose logging
     bool profile;               // Enable CPU profiling
+    bool test_presets;          // Test preset loading/switching
 } unit_host_config_t;
 
 /**

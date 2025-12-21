@@ -2,22 +2,38 @@
 set -e
 
 # Simple test script for drumlogue units in QEMU ARM emulation
-# Usage: ./test-unit.sh <unit-name> [--profile]
-# Example: ./test-unit.sh clouds-revfx --profile
+# Usage: ./test-unit.sh <unit-name> [options]
+# Example: ./test-unit.sh clouds-revfx --profile --test-presets
 
 UNIT_NAME="$1"
 PROFILE_FLAG=""
+TEST_PRESETS_FLAG=""
 
-# Check for --profile flag
-if [ "$2" == "--profile" ]; then
-    PROFILE_FLAG="--profile"
-fi
+# Parse options
+shift
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --profile)
+            PROFILE_FLAG="--profile"
+            shift
+            ;;
+        --test-presets)
+            TEST_PRESETS_FLAG="--test-presets"
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
 
 if [ -z "$UNIT_NAME" ]; then
-    echo "Usage: $0 <unit-name> [--profile]"
+    echo "Usage: $0 <unit-name> [options]"
     echo ""
     echo "Options:"
-    echo "  --profile    Enable CPU profiling"
+    echo "  --profile        Enable CPU profiling"
+    echo "  --test-presets   Test preset loading and switching (requires preset support)"
     echo ""
     echo "Available units:"
     ls -1 ../../drumlogue/ | grep -v common
@@ -45,8 +61,8 @@ if [ ! -f "unit_host_arm" ]; then
     make -f Makefile.podman podman-build
 fi
 
-# Check if test signals exist
-if [ ! -f "$INPUT_WAV" ]; then
+# Check if test signals exist (skip if only testing presets)
+if [ -z "$TEST_PRESETS_FLAG" ] && [ ! -f "$INPUT_WAV" ]; then
     echo "⚙️  Generating test signals..."
     python3 generate_signals.py
 fi
@@ -54,7 +70,11 @@ fi
 # Create output directory
 mkdir -p build
 
-echo "🧪 Testing $UNIT_NAME in QEMU ARM emulation..."
+if [ -n "$TEST_PRESETS_FLAG" ]; then
+    echo "🧪 Testing $UNIT_NAME presets in QEMU ARM emulation..."
+else
+    echo "🧪 Testing $UNIT_NAME in QEMU ARM emulation..."
+fi
 echo ""
 
 # Run test
@@ -73,14 +93,16 @@ podman run --rm -it \
         /repo/drumlogue/${UNIT_NAME}/${UNIT_FILE_NAME}.drmlgunit \
         /workspace/${INPUT_WAV} \
         /workspace/${OUTPUT_WAV} \
-        --verbose $PROFILE_FLAG
+        --verbose $PROFILE_FLAG $TEST_PRESETS_FLAG
 "
 
 if [ $? -eq 0 ]; then
     echo ""
     echo "✅ Test passed!"
-    echo "📁 Output: $OUTPUT_WAV"
-    ls -lh "$OUTPUT_WAV"
+    if [ -z "$TEST_PRESETS_FLAG" ]; then
+        echo "📁 Output: $OUTPUT_WAV"
+        ls -lh "$OUTPUT_WAV"
+    fi
 else
     echo ""
     echo "❌ Test failed"

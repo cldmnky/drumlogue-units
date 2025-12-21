@@ -20,8 +20,9 @@ A lush, atmospheric reverb effect for the Korg drumlogue, inspired by **Mutable 
 - **Micro-granular processing** for ambient textures and freeze effects
 - **Pitch shifting** for shimmer and octave effects
 - **Dual assignable LFOs** with 16 modulation targets and 3 waveforms
-- **8 built-in presets** covering a range of reverb styles
 - **Smooth parameter changes** with zipper-noise-free transitions
+
+> **Note:** Presets are not supported for reverb/delay effects on drumlogue hardware due to a known firmware limitation.
 
 ---
 
@@ -128,23 +129,6 @@ The unit has 24 parameters organized across 6 pages:
 
 ---
 
-## Presets
-
-The unit includes 8 carefully crafted presets:
-
-| # | Name | Description |
-|---|------|-------------|
-| 0 | **INIT** | Clean starting point with moderate reverb settings |
-| 1 | **HALL** | Large concert hall with long decay and enhanced texture |
-| 2 | **PLATE** | Bright plate reverb with maximum diffusion |
-| 3 | **SHIMMER** | Pitched reverb with octave-up shimmer effect |
-| 4 | **CLOUD** | Granular texture combined with reverb for ambient clouds |
-| 5 | **FREEZE** | Long reverb optimized for frozen/pad sounds with heavy texture |
-| 6 | **OCTAVER** | Pitch-shifted reverb with subtle octave-down effect |
-| 7 | **AMBIENT** | Lush ambient wash combining reverb, texture, granular, and subtle shimmer. Includes LFO modulation on texture. |
-
----
-
 ## Usage Tips
 
 ### Using the LFOs
@@ -159,32 +143,24 @@ The dual LFOs add dynamic movement to your reverb sounds:
 
 ### Creating Ambient Pads
 
-1. Start with the **FREEZE** or **AMBIENT** preset
-2. Increase **TIME** and **DIFFUSION** for longer, smoother tails
-3. Add **TEXTURE** for additional density
-4. Enable **FREEZE** to capture and sustain a pad from your input
+1. Increase **TIME** and **DIFFUSION** for longer, smoother tails
+2. Add **TEXTURE** for additional density
+3. Enable **FREEZE** to capture and sustain a pad from your input
+4. Adjust **DRY/WET** to blend the effect with your source
 
 ### Adding Shimmer
 
-1. Start with the **SHIMMER** preset or the **INIT** preset
-2. Set **SHIFT AMT** to taste (60-100 for subtle, higher for obvious shimmer)
-3. Set **SHFT PTCH** to 88 (+12 semitones/1 octave up) for classic shimmer
-4. Adjust **SHFT SIZE** - smaller values sound more natural
+1. Set **SHIFT AMT** to taste (60-100 for subtle, higher for obvious shimmer)
+2. Set **SHFT PTCH** to 88 (+12 semitones/1 octave up) for classic shimmer
+3. Adjust **SHFT SIZE** - smaller values sound more natural
+4. Increase **TIME** and **DIFFUSION** for longer shimmer tails
 
 ### Granular Textures
 
 1. Increase **GRAIN AMT** to blend in granular processing
 2. Experiment with **GRN SIZE** and **GRN DENS** for different textures
 3. Use **GRN PITCH** to add pitch variation to grains
-4. Enable **FREEZE** to capture audio and manipulate it with the granular controls
-
-### Preventing Clipping
-
-- If the output distorts, reduce **IN GAIN**
-- High **TIME** values with high **DRY/WET** can build up level - reduce mix or input gain
-- The granular and pitch shifter stages add gain - reduce their amounts if clipping occurs
-
----
+4. Combine with reverb by increasing **TIME** for atmospheric results
 
 ## Technical Specifications
 
@@ -206,12 +182,11 @@ The dual LFOs add dynamic movement to your reverb sounds:
 - 3 waveforms: Sine, Saw, Random
 - Exponential speed mapping for musical control
 - 24 parameters across 6 pages
-- Updated AMBIENT preset with LFO example
+- Enhanced modulation capabilities
 
 ### v1.0.0-pre - Initial Pre-release
 
 - 16 parameters across 4 pages
-- 8 built-in presets
 - Parameter smoothing to prevent zipper noise
 - CPU optimization with automatic bypass for disabled effects
 

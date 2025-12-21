@@ -451,6 +451,164 @@ int unit_host_process_wav(const char* input_path, const char* output_path,
 }
 
 /**
+ * @brief Test preset loading and verification
+ */
+int unit_host_test_presets(unit_host_state_t* state, unit_host_config_t* config) {
+    if (!state || !config) {
+        return UNIT_HOST_ERR_ARGS;
+    }
+    
+    if (!state->unit_initialized) {
+        return UNIT_HOST_ERR_INIT;
+    }
+    
+    // Check if unit has presets
+    uint8_t num_presets = state->unit_header->num_presets;
+    if (num_presets == 0) {
+        printf("Unit has no presets to test\n");
+        return UNIT_HOST_OK;
+    }
+    
+    // Check if preset callbacks are available
+    if (!g_callbacks.unit_load_preset || !g_callbacks.unit_get_preset_index || 
+        !g_callbacks.unit_get_preset_name) {
+        fprintf(stderr, "Error: Unit missing preset callback functions\n");
+        return UNIT_HOST_ERR_SYMBOL;
+    }
+    
+    printf("\n");
+    printf("═══════════════════════════════════════════════════════════════\n");
+    printf("                     PRESET TEST REPORT                        \n");
+    printf("═══════════════════════════════════════════════════════════════\n");
+    printf("\n");
+    printf("Unit: %s\n", state->unit_header->name);
+    printf("Number of presets: %u\n", num_presets);
+    printf("\n");
+    
+    // List all preset names first
+    printf("Available presets:\n");
+    for (uint8_t i = 0; i < num_presets; i++) {
+        const char* name = g_callbacks.unit_get_preset_name(i);
+        if (name && name[0] != '\0') {
+            printf("  [%u] %s\n", i, name);
+        } else {
+            printf("  [%u] <unnamed or error>\n", i);
+        }
+    }
+    printf("\n");
+    
+    // Test loading each preset
+    printf("Testing preset loading...\n");
+    bool all_passed = true;
+    
+    for (uint8_t i = 0; i < num_presets; i++) {
+        const char* expected_name = g_callbacks.unit_get_preset_name(i);
+        
+        printf("  Testing preset %u (%s)...\n", i, expected_name ? expected_name : "<null>");
+        
+        // Load preset
+        g_callbacks.unit_load_preset(i);
+        
+        // Give the unit a moment to settle (simulate hardware timing)
+        // This is important because some units may defer preset loading
+        usleep(1000);  // 1ms delay
+        
+        // Verify preset index matches
+        uint8_t actual_index = g_callbacks.unit_get_preset_index();
+        if (actual_index != i) {
+            printf("    ❌ FAIL: Expected index %u, got %u\n", i, actual_index);
+            all_passed = false;
+        } else {
+            printf("    ✅ Index correct: %u\n", actual_index);
+        }
+        
+        // Verify name still returns correctly
+        const char* verify_name = g_callbacks.unit_get_preset_name(i);
+        if (!verify_name || verify_name[0] == '\0') {
+            printf("    ❌ FAIL: Name query returned null/empty after load\n");
+            all_passed = false;
+        } else if (expected_name && strcmp(verify_name, expected_name) != 0) {
+            printf("    ❌ FAIL: Name changed from '%s' to '%s'\n", expected_name, verify_name);
+            all_passed = false;
+        } else {
+            printf("    ✅ Name verified: %s\n", verify_name);
+        }
+        
+        // Check some parameters to ensure they've changed
+        // (this is a heuristic - we can't know exact values without unit internals)
+        bool params_changed = false;
+        if (g_callbacks.unit_get_param_value) {
+            for (uint8_t p = 0; p < state->unit_header->num_params; p++) {
+                int32_t value = g_callbacks.unit_get_param_value(p);
+                // Just check that we can read parameters
+                if (p == 0 && config->verbose) {
+                    printf("    Parameter 0 value: %d\n", value);
+                }
+            }
+        }
+        
+        printf("\n");
+    }
+    
+    // Test switching between presets rapidly
+    printf("Testing rapid preset switching...\n");
+    for (int cycle = 0; cycle < 3; cycle++) {
+        for (uint8_t i = 0; i < num_presets; i++) {
+            g_callbacks.unit_load_preset(i);
+            uint8_t actual = g_callbacks.unit_get_preset_index();
+            if (actual != i) {
+                printf("  ❌ FAIL at cycle %d, preset %u: got index %u\n", cycle, i, actual);
+                all_passed = false;
+            }
+        }
+    }
+    printf("  ✅ Rapid switching test completed\n");
+    printf("\n");
+    
+    // Test Reset() behavior with presets
+    printf("Testing unit_reset() behavior with presets...\n");
+    // Load preset 0
+    if (num_presets > 0) {
+        g_callbacks.unit_load_preset(0);
+        uint8_t before_reset = g_callbacks.unit_get_preset_index();
+        
+        // Call reset (this is the critical test for the hardware bug!)
+        if (g_callbacks.unit_reset) {
+            g_callbacks.unit_reset();
+        }
+        
+        // Check if preset index persists
+        uint8_t after_reset = g_callbacks.unit_get_preset_index();
+        if (after_reset != before_reset) {
+            printf("  ⚠️  WARNING: Reset changed preset index from %u to %u\n", 
+                   before_reset, after_reset);
+        } else {
+            printf("  ✅ Preset index preserved after reset: %u\n", after_reset);
+        }
+        
+        // Verify parameters still reflect the loaded preset
+        // (We can't know exact values, but we can check they're readable)
+        if (g_callbacks.unit_get_param_value) {
+            int32_t param0_after = g_callbacks.unit_get_param_value(0);
+            printf("  Parameter 0 after reset: %d\n", param0_after);
+        }
+    }
+    printf("\n");
+    
+    // Summary
+    printf("═══════════════════════════════════════════════════════════════\n");
+    if (all_passed) {
+        printf("✅ All preset tests PASSED\n");
+        printf("═══════════════════════════════════════════════════════════════\n");
+        return UNIT_HOST_OK;
+    } else {
+        printf("❌ Some preset tests FAILED\n");
+        printf("═══════════════════════════════════════════════════════════════\n");
+        return UNIT_HOST_ERR_PROCESS;
+    }
+}
+
+/**
  * @brief Set unit parameter
  */
 int unit_host_set_param(unit_host_state_t* state, uint8_t param_id, int32_t value) {
@@ -622,6 +780,17 @@ void unit_host_print_info(unit_host_state_t* state) {
     printf("  Parameters: %u\n", header->num_params);
     printf("  Presets: %u\n", header->num_presets);
     
+    // List preset names if available
+    if (header->num_presets > 0 && g_callbacks.unit_get_preset_name) {
+        printf("\n  Available presets:\n");
+        for (uint8_t i = 0; i < header->num_presets; i++) {
+            const char* name = g_callbacks.unit_get_preset_name(i);
+            if (name && name[0] != '\0') {
+                printf("    [%u] %s\n", i, name);
+            }
+        }
+    }
+    
     // Print parameters
     if (header->num_params > 0) {
         printf("  Parameter list:\n");
@@ -651,6 +820,7 @@ int unit_host_parse_args(int argc, char* argv[], unit_host_config_t* config) {
     config->channels = 2;  // Default to stereo
     config->verbose = false;
     config->profile = false;
+    config->test_presets = false;
     
     // Parse command line
     if (argc < 4) {
@@ -661,6 +831,7 @@ int unit_host_parse_args(int argc, char* argv[], unit_host_config_t* config) {
         fprintf(stderr, "  --sample-rate <rate>    Sample rate (default: 48000)\n");
         fprintf(stderr, "  --buffer-size <frames>  Buffer size (default: 256)\n");
         fprintf(stderr, "  --channels <1|2>        Output channels (default: 2)\n");
+        fprintf(stderr, "  --test-presets          Test preset loading/switching\n");
         fprintf(stderr, "  --profile               Enable CPU profiling\n");
         fprintf(stderr, "  --verbose               Verbose output\n");
         return UNIT_HOST_ERR_ARGS;
@@ -696,6 +867,8 @@ int unit_host_parse_args(int argc, char* argv[], unit_host_config_t* config) {
                 if (config->channels > 2) config->channels = 2;
                 i++;
             }
+        } else if (strcmp(argv[i], "--test-presets") == 0) {
+            config->test_presets = true;
         } else if (strcmp(argv[i], "--profile") == 0) {
             config->profile = true;
         } else if (strcmp(argv[i], "--verbose") == 0) {
@@ -788,6 +961,16 @@ int unit_host_main(int argc, char* argv[]) {
                 }
                 i++;
             }
+        }
+    }
+    
+    // Test presets if requested
+    if (config.test_presets) {
+        result = unit_host_test_presets(&g_state, &config);
+        if (result != UNIT_HOST_OK) {
+            fprintf(stderr, "Preset test failed\n");
+            unit_host_cleanup(&g_state);
+            return result;
         }
     }
     

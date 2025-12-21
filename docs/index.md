@@ -86,7 +86,7 @@ Designed specifically for the drumlogue's architecture:
 - Smooth parameter transitions (no zipper noise)
 - Velocity sensitivity
 - Pitch bend support
-- Built-in presets for instant inspiration
+- Extensive parameter control for sound design
 
 ### 📖 Open Source
 Based on the acclaimed DSP algorithms from [Mutable Instruments](https://mutable-instruments.net/), released under the MIT license.

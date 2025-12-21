@@ -15,7 +15,7 @@ const __unit_header unit_header_t unit_header = {
     .unit_id = 0x00000001U,                                // unit id unique within dev_id scope
     .version = 0x010200U,                                  // v1.2.0
     .name = "Clds Reverb",                                 // displayed name, 7-bit ASCII, max 13 chars
-    .num_presets = 8,                                      // 8 presets: INIT + 7 crafted presets
+    .num_presets = 0,                                      // Presets not supported on drumlogue for reverb/delay effects (hardware limitation)
     .num_params = 24,                                      // number of active parameters (16 + 6 LFO + 2 blank)
     .params = {
         // Format: min, max, center, default, type, fractional, frac. type, <reserved>, name
