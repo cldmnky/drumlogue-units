@@ -41,6 +41,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y podman
       
+      - name: Build SDK container image
+        run: ./build.sh --build-image
+        env:
+          ENGINE: podman
+      
       - name: Build ${{ matrix.unit }}
         run: ./build.sh ${{ matrix.unit }}
         env:
