@@ -23,6 +23,9 @@ This directory contains reusable components for developing drumlogue units. Thes
 - **`preset_manager.h`**: Generic template-based system for preset storage, loading, and validation.
 - **`midi_helper.h`**: MIDI conversion utilities (Note-to-Freq, velocity scaling, pitch bend).
 
+### Performance Monitoring
+- **`perf_mon.h`**: Cycle counting and performance metrics with `-DPERF_MON` flag control. Compiles to zero overhead when disabled.
+
 ---
 
 ## Usage Examples
@@ -224,6 +227,64 @@ class MySynth {
   }
 };
 ```
+
+### Performance Monitoring
+
+Measure DSP performance with cycle counting (enabled with `-DPERF_MON` flag):
+
+```cpp
+#include "common/perf_mon.h"
+
+class MySynth {
+ private:
+  uint8_t perf_osc_, perf_filter_, perf_effects_;
+  
+ public:
+  void Init() {
+    PERF_MON_INIT();
+    perf_osc_ = PERF_MON_REGISTER("OSC");
+    perf_filter_ = PERF_MON_REGISTER("FILTER");
+    perf_effects_ = PERF_MON_REGISTER("EFFECTS");
+  }
+  
+  void Render(float* out, uint32_t frames) {
+    for (uint32_t i = 0; i < frames; i++) {
+      // Oscillator
+      PERF_MON_START(perf_osc_);
+      float sig = ProcessOscillator();
+      PERF_MON_END(perf_osc_);
+      
+      // Filter
+      PERF_MON_START(perf_filter_);
+      sig = ProcessFilter(sig);
+      PERF_MON_END(perf_filter_);
+      
+      // Effects
+      PERF_MON_START(perf_effects_);
+      out[i] = ProcessEffects(sig);
+      PERF_MON_END(perf_effects_);
+    }
+  }
+  
+  void PrintStats() {
+    for (uint8_t i = 0; i < 3; i++) {
+      uint32_t avg = PERF_MON_GET_AVG(i);
+      uint32_t peak = PERF_MON_GET_PEAK(i);
+      uint32_t frames = PERF_MON_GET_FRAMES(i);
+      printf("%s: avg=%u peak=%u frames=%u\n", 
+             PERF_MON_GET_NAME(i), avg, peak, frames);
+    }
+  }
+};
+```
+
+**Build with performance monitoring:**
+```bash
+# In your unit's config.mk
+UDEFS = -DPERF_MON
+```
+
+**When disabled (default), all `PERF_MON_*` macros compile to nothing - zero overhead.**
 
 ---
 
