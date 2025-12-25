@@ -301,6 +301,12 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     const float unison_detune_cents = static_cast<float>(mod_hub_.GetValue(MOD_UNISON_DETUNE));
     allocator_.SetUnisonDetune(unison_detune_cents);
     
+    // Portamento time control (Phase 2 Task 2.2.4) - 0-100 maps to 10-500ms exponentially
+    const uint8_t porta_param = mod_hub_.GetValue(MOD_PORTAMENTO_TIME);
+    const float porta_normalized = porta_param / 100.0f;
+    const float porta_time_ms = 10.0f * powf(50.0f, porta_normalized);  // 10ms to 500ms exponential
+    allocator_.SetPortamentoTime(porta_time_ms);
+    
     // NOTE: LFO delay and waveform are now set in UpdateLfoSettings()
     // when MOD_HUB or MOD_AMT parameters change (not every buffer)
     // This is a critical performance optimization.
@@ -333,6 +339,31 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     
     // Velocity modulation (fixed value for now, TODO: make parameter)
     const float vel_mod = (current_velocity_ / 127.0f) * 0.5f;  // Fixed 50% velocity->VCF
+    
+    // Task 2.2.4: Process portamento/glide for MONO/UNISON modes
+    // For polyphonic mode, glide is processed per-voice in the render loop
+    if (current_mode_ == dsp::SYNTH_MODE_MONOPHONIC || 
+        current_mode_ == dsp::SYNTH_MODE_UNISON) {
+        dsp::Voice& voice0 = allocator_.GetVoiceMutable(0);
+        if (voice0.is_gliding) {
+            float log_pitch = logf(voice0.pitch_hz);
+            float log_target = logf(voice0.glide_target_hz);
+            
+            log_pitch += voice0.glide_increment;
+            
+            // Check if we've reached target
+            if ((voice0.glide_increment > 0.0f && log_pitch >= log_target) ||
+                (voice0.glide_increment < 0.0f && log_pitch <= log_target)) {
+                voice0.pitch_hz = voice0.glide_target_hz;
+                voice0.is_gliding = false;
+            } else {
+                voice0.pitch_hz = expf(log_pitch);
+            }
+            
+            // Update current_freq_hz_ for MONO/UNISON rendering
+            current_freq_hz_ = voice0.pitch_hz;
+        }
+    }
     
     // ============ Main DSP loop - render to mix_buffer_ ============
     for (uint32_t i = 0; i < frames; ++i) {
@@ -410,6 +441,23 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
                 
                 // Get non-const access to voice for processing
                 dsp::Voice& voice_mut = const_cast<dsp::Voice&>(voice);
+                
+                // Task 2.2.4: Process portamento/glide
+                if (voice_mut.is_gliding) {
+                    float log_pitch = logf(voice_mut.pitch_hz);
+                    float log_target = logf(voice_mut.glide_target_hz);
+                    
+                    log_pitch += voice_mut.glide_increment;
+                    
+                    // Check if we've reached target
+                    if ((voice_mut.glide_increment > 0.0f && log_pitch >= log_target) ||
+                        (voice_mut.glide_increment < 0.0f && log_pitch <= log_target)) {
+                        voice_mut.pitch_hz = voice_mut.glide_target_hz;
+                        voice_mut.is_gliding = false;
+                    } else {
+                        voice_mut.pitch_hz = expf(log_pitch);
+                    }
+                }
                 
                 // Set voice-specific parameters
                 voice_mut.dco1.SetWaveform(static_cast<dsp::JupiterDCO::Waveform>(

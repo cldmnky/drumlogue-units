@@ -56,7 +56,9 @@ VoiceAllocator::VoiceAllocator()
     , round_robin_index_(0)
     , timestamp_(0)
     , num_active_voices_(0)  // Phase 1: Initialize active voice tracking (before unison_detune_cents_)
-    , unison_detune_cents_(10.0f) {  // Default 10 cents detune
+    , unison_detune_cents_(10.0f)  // Default 10 cents detune
+    , portamento_time_ms_(0.0f)    // Task 2.2.4: Default no glide
+    , sample_rate_(48000.0f) {     // Task 2.2.4: Default sample rate
     // Zero-initialize all voices
     memset(voices_, 0, sizeof(voices_));
     memset(active_voice_list_, 0, sizeof(active_voice_list_));  // Clear active voice list
@@ -66,6 +68,8 @@ VoiceAllocator::~VoiceAllocator() {
 }
 
 void VoiceAllocator::Init(float sample_rate) {
+    sample_rate_ = sample_rate;  // Task 2.2.4: Cache for glide calculation
+    
     for (uint8_t i = 0; i < max_voices_; i++) {
         voices_[i].Init(sample_rate);
     }
@@ -352,13 +356,32 @@ void VoiceAllocator::TriggerVoice(Voice* voice, uint8_t note, uint8_t velocity) 
     voice->active = true;
     voice->midi_note = note;
     voice->velocity = common::MidiHelper::VelocityToFloat(velocity);
-    voice->pitch_hz = common::MidiHelper::NoteToFreq(note);
+    float target_hz = common::MidiHelper::NoteToFreq(note);
     voice->note_on_time = timestamp_;
+    
+    // Task 2.2.4: Portamento/glide logic
+    if (portamento_time_ms_ > 0.01f && voice->pitch_hz > 0.0f) {
+        // Enable glide if portamento time is set and voice has previous pitch
+        voice->glide_target_hz = target_hz;
+        voice->is_gliding = true;
+        
+        // Calculate log-space increment for exponential glide
+        float freq_ratio = target_hz / voice->pitch_hz;
+        float log_ratio = logf(freq_ratio);
+        float portamento_time_sec = portamento_time_ms_ / 1000.0f;
+        voice->glide_increment = log_ratio / (portamento_time_sec * sample_rate_);
+    } else {
+        // No glide - jump immediately to target
+        voice->pitch_hz = target_hz;
+        voice->glide_target_hz = target_hz;
+        voice->is_gliding = false;
+        voice->glide_increment = 0.0f;
+    }
     
 #ifdef DEBUG
     int voice_idx = voice - voices_;
-    fprintf(stderr, "[VoiceAlloc] TriggerVoice: voice_idx=%d note=%d freq=%.2f Hz\n",
-            voice_idx, note, voice->pitch_hz);
+    fprintf(stderr, "[VoiceAlloc] TriggerVoice: voice_idx=%d note=%d freq=%.2f Hz glide=%d\n",
+            voice_idx, note, voice->pitch_hz, voice->is_gliding);
     fflush(stderr);
 #endif
     

@@ -95,6 +95,7 @@ enum ModDestination {
     MOD_SYNTH_MODE,        // Synthesis mode (MONO/POLY/UNISON) - Hoover v2.0
     MOD_UNISON_DETUNE,     // Unison detune amount (0-50 cents) - Hoover v2.0
     MOD_ENV_TO_PITCH,      // Filter ENV modulates pitch (±12 semitones) - Phase 2
+    MOD_PORTAMENTO_TIME,   // Portamento/glide time (10-500ms) - Phase 2 Task 2.2.4
     MOD_NUM_DESTINATIONS
 };
 
@@ -131,7 +132,8 @@ static constexpr common::HubControl<MOD_NUM_DESTINATIONS>::Destination kModDesti
     {"ENV KYB", "%",   0, 100, 50, false, nullptr},        // ENV keyboard tracking
     {"S MODE",  "",    0, 2,   0,  false, kSynthModeNames}, // Synthesis mode (MONO/POLY/UNISON)
     {"UNI DET", "ct",  0, 50,  10, false, nullptr},        // Unison detune (cents)
-    {"ENV>PIT", "st",  0, 100, 50, true,  nullptr}         // ENV to pitch (±12 semitones, bipolar!)
+    {"ENV>PIT", "st",  0, 100, 50, true,  nullptr},        // ENV to pitch (±12 semitones, bipolar!)
+    {"GLIDE",   "ms",  0, 100, 0,  false, nullptr}         // Portamento time (10-500ms exponential)
 };
 
 // Effect mode names

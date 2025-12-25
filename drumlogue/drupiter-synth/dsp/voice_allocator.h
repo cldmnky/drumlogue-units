@@ -71,9 +71,15 @@ struct Voice {
     // Per-voice pitch envelope (Phase 2 - Task 2.2.1)
     JupiterEnvelope env_pitch;  // Enabled for per-voice pitch modulation
     
+    // Portamento/glide state (Phase 2 - Task 2.2.4)
+    float glide_target_hz;        // Target pitch for glide
+    float glide_increment;        // Log-space increment per sample
+    bool is_gliding;              // Currently gliding to target
+    
     // Constructor
     Voice() : active(false), midi_note(0), velocity(0.0f), 
-              pitch_hz(0.0f), note_on_time(0) {}
+              pitch_hz(0.0f), note_on_time(0),
+              glide_target_hz(0.0f), glide_increment(0.0f), is_gliding(false) {}
     
     // Initialize DSP components
     void Init(float sample_rate);
@@ -149,6 +155,10 @@ public:
     SynthMode GetMode() const { return mode_; }
     UnisonOscillator& GetUnisonOscillator() { return unison_osc_; }
     
+    // Portamento control (Phase 2 - Task 2.2.4)
+    void SetPortamentoTime(float time_ms) { portamento_time_ms_ = time_ms; }
+    float GetPortamentoTime() const { return portamento_time_ms_; }
+    
     void SetAllocationStrategy(VoiceAllocationStrategy strategy) {
         allocation_strategy_ = strategy;
     }
@@ -173,6 +183,10 @@ private:
     // Unison mode oscillator (Hoover v2.0)
     UnisonOscillator unison_osc_;
     float unison_detune_cents_;    // Detune amount for unison mode (5-20 cents)
+    
+    // Portamento/glide state (Phase 2 - Task 2.2.4)
+    float portamento_time_ms_;     // Portamento time in milliseconds (10-500ms)
+    float sample_rate_;            // Cached sample rate for glide calculation
     
     // Helper functions
     Voice* AllocateVoice();        // Find or steal a voice
