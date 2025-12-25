@@ -1039,14 +1039,9 @@ int32_t DrupiterSynth::GetParameter(uint8_t id) const {
 const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
     static const char* effect_names[] = {"CHORUS", "SPACE", "DRY", "BOTH"};
     
-    // Use separate buffers for each parameter to avoid race conditions
-    // when UI rapidly queries multiple parameters (causes flickering)
+    // Separate static buffers for each parameter type to avoid race conditions
     static char tune_buf[16];      // For PARAM_DCO2_TUNE
-    static char modamt_buf[16];    // For PARAM_MOD_AMT
-    
-    // Cache for MOD_AMT to reduce flickering (only regenerate if value changed)
-    static int32_t last_modamt_value = -1;
-    static uint8_t last_modamt_dest = 255;
+    static char modamt_buf[16];    // For PARAM_MOD_AMT (fallback only - hub now returns stable pointers)
     
     switch (id) {
         // ======== Page 1: DCO-1 ========
@@ -1072,33 +1067,20 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
         // ======== Page 6: MOD HUB ========
         case PARAM_MOD_HUB:
             if (value >= 0 && value < MOD_NUM_DESTINATIONS) {
-                return mod_hub_.GetDestinationName(value);
+                return mod_hub_.GetDestinationName(value);  // Returns stable pointer
             }
             return "";
             
         case PARAM_MOD_AMT: {
-            // Get current destination from mod_hub (updated by SetParameter)
+            // Get current destination from mod_hub
             uint8_t dest = mod_hub_.GetDestination();
             
-            // Check if value is within current destination's range
             if (dest >= MOD_NUM_DESTINATIONS) {
-                return nullptr;  // Invalid destination
+                return "";
             }
             
-            const auto& dest_info = kModDestinations[dest];
-            if (value < dest_info.min || value > dest_info.max) {
-                return nullptr;  // Out of range - tells UI to stop querying
-            }
-            
-            // Cache check to avoid unnecessary string regeneration (reduces flickering)
-            // But don't prevent actual updates - only cache the last result
-            if (value != last_modamt_value || dest != last_modamt_dest) {
-                last_modamt_value = value;
-                last_modamt_dest = dest;
-            }
-            
-            // GetValueStringForDest returns stable pointer (from cache or string array)
-            // Don't copy - just return the pointer directly
+            // GetValueStringForDest now returns stable pointers (static/cached)
+            // modamt_buf only used as fallback for out-of-range values
             return mod_hub_.GetValueStringForDest(dest, value, modamt_buf, sizeof(modamt_buf));
         }
             
@@ -1197,7 +1179,9 @@ void DrupiterSynth::LoadPreset(uint8_t preset_id) {
     xmod_depth_ = current_preset_.params[PARAM_XMOD] / 100.0f;
     sync_mode_ = current_preset_.params[PARAM_SYNC];
     
-    // Restore MOD HUB destination values
+    // Restore MOD HUB values from preset (source of truth for hub state)
+    // Must be done BEFORE applying parameters
+    mod_hub_.SetDestination(current_preset_.params[PARAM_MOD_HUB]);
     for (uint8_t dest = 0; dest < MOD_NUM_DESTINATIONS; ++dest) {
         mod_hub_.SetValueForDest(dest, current_preset_.hub_values[dest]);
     }

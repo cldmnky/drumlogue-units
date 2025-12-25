@@ -1,0 +1,157 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║                    HUB CONTROL ISSUES - VISUAL DIAGRAM                     ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+ISSUE #1: VALUE RESET WHEN SWITCHING DESTINATIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Scenario:
+  1. Select "LFO>PWM" (range 0-100), adjust to 75
+     ✓ mod_hub_.values_[0] = 75   ← Stored correctly
+  
+  2. User switches to "S MODE" (range 0-2)
+     → UI sends PARAM_MOD_AMT=75 (still normalized 0-100)
+  
+  3. HubControl::SetValue(75) is called:
+     ┌─────────────────────────────────────┐
+     │ void SetValue(int32_t value) {      │
+     │   if (value > dest.max) {           │
+     │     value = dest.max;  ← 75 > 2 !   │
+     │   }                                 │
+     │   values_[current_dest_] = value;   │ ← STORED AS 2!
+     │ }                                   │
+     └─────────────────────────────────────┘
+  
+  4. Previous value for "LFO>PWM" lost forever
+     ✗ Next time user switches back to "LFO>PWM", it's at default 0
+
+
+ISSUE #2: PAGE FLICKERING - UNSTABLE STRING POINTERS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  GetValueStringForDest() returns different pointer types:
+  
+  Case A: Enum destination (VCF TYPE)
+  ┌──────────────────────────────────────────┐
+  │ if (d.string_values != nullptr) {        │
+  │   return d.string_values[0];  ←─────┐    │
+  │                                     │    │
+  └──────────────────────────────────────┘    │
+        │                                      │
+        ├─ STATIC: kVcfTypeNames[] ◄──────────┘
+        │           ["LP12", "LP24", ...]
+
+  Case B: Numeric destination (LFO>PWM 0-100)
+  ┌──────────────────────────────────────────┐
+  │ const char* const* cached =              │
+  │   HubStringCache::GetStrings(...);       │
+  │ return cached[75];  ←────────┐           │
+  │                              │           │
+  └──────────────────────────────────────────┘
+        │
+        ├─ CACHED: HubStringCache statics (function-local)
+        │          Dynamic buffers allocated during first call
+
+  Case C: Fallback (out of range)
+  ┌──────────────────────────────────────────┐
+  │ snprintf(buffer, buf_size, ...);         │
+  │ return buffer;  ←──────────┐             │
+  │                            │             │
+  └──────────────────────────────────────────┘
+        │
+        └─ DYNAMIC: User-supplied buffer (fragile!)
+
+  Result:
+  ├─ Pointer A always same address (kVcfTypeNames[0])
+  ├─ Pointer B changes (different cache entries)
+  └─ Pointer C changes (different buffer contents)
+  
+  UI caches by pointer value, not string content:
+  if (ptr != last_ptr) {  // Different pointer?
+      needs_redraw = true;  // ✗ FLICKER! Even if same value
+  }
+
+
+ISSUE #3: SHARED BUFFER RACE CONDITIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  GetParameterStr() has static buffer:
+
+  ┌─────────────────────────────────────────────┐
+  │ const char* GetParameterStr(...) {          │
+  │   static char modamt_buf[16];  ← SHARED!   │
+  │                                            │
+  │   case PARAM_MOD_AMT:                       │
+  │     return GetValueStringForDest(...,      │
+  │            modamt_buf, sizeof(modamt_buf))│
+  │ }                                          │
+  └─────────────────────────────────────────────┘
+
+  Rapid parameter queries:
+  
+  Time 1: GetParameterStr(PARAM_MOD_AMT, 75)
+          └─ modamt_buf = "75%"
+             return → &modamt_buf (ptr=0x1000)
+  
+  Time 2: GetParameterStr(PARAM_DCO1_PW, 50)  (different param)
+          └─ modamt_buf gets reused
+  
+  Time 3: GetParameterStr(PARAM_MOD_AMT, ???)
+          └─ Returns &modamt_buf = "50%" ✗ WRONG!
+
+
+ISSUE #4: VALUE RANGE MISMATCH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Data flow with range mismatch:
+
+  UI (0-100)
+      │
+      ▼
+  SetParameter(PARAM_MOD_AMT, 75)
+      │
+      ├─ 75 is normalized 0-100 UI value
+      ├─ Means "75% of current destination's range"
+      │
+      ▼
+  HubControl::SetValue(75)
+      │
+      ├─ If dest is S MODE (0-2):
+      │   75 → clamped to 2 ✗ Wrong! Should be ~1.5 → 2
+      │
+      ├─ If dest is LFO>PWM (0-100):
+      │   75 → kept as 75 ✓ Correct
+      │
+      ▼
+  values_[dest] = clamped_value
+      │
+      ├─ Lost the original 0-100 intent
+      ├─ No way to reconstruct proper range mapping
+      │
+      ▼
+  DSP gets values_[dest]
+      │
+      └─ For S MODE: gets 2 (which is 100%)
+         For LFO>PWM: gets 75 (which is 75%)
+         ✗ INCONSISTENT! Same UI slider position gives different %
+
+
+ROOT ISSUES SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+┌────────────────────┬──────────────────────────┬──────────────────────┐
+│ Issue              │ Current Implementation   │ Problem              │
+├────────────────────┼──────────────────────────┼──────────────────────┤
+│ Value Persistence  │ SetValue() clamps        │ Loses original       │
+│                    │ immediately              │ 0-100 value          │
+├────────────────────┼──────────────────────────┼──────────────────────┤
+│ String Pointers    │ Multiple return sources  │ UI sees different    │
+│                    │ (static, cached, dynamic)│ pointers = flicker   │
+├────────────────────┼──────────────────────────┼──────────────────────┤
+│ Buffer Management  │ Shared static buffers    │ Overwrites between   │
+│                    │ in GetParameterStr()     │ rapid queries        │
+├────────────────────┼──────────────────────────┼──────────────────────┤
+│ Range Handling     │ No separation of UI and  │ Inconsistent value   │
+│                    │ destination ranges       │ scaling              │
+└────────────────────┴──────────────────────────┴──────────────────────┘
+

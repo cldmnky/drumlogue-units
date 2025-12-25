@@ -26,6 +26,9 @@
 
 namespace common {
 
+// Stable empty string for consistent return pointer
+static constexpr const char kEmptyString[] = "";
+
 /**
  * @brief String cache for numeric parameter values
  * Pre-generates string arrays for common numeric ranges
@@ -143,6 +146,8 @@ class HubControl {
     // Initialize all values to defaults
     for (uint8_t i = 0; i < NUM_DESTINATIONS; i++) {
       values_[i] = destinations[i].default_value;
+      original_values_[i] = destinations[i].default_value;
+      clamped_values_[i] = destinations[i].default_value;
     }
   }
   
@@ -158,45 +163,68 @@ class HubControl {
   
   /**
    * @brief Set value for current destination
-   * @param value New value (must be within destination's min/max range)
+   * @param value New value in 0-100 range (from UI)
    */
   void SetValue(int32_t value) {
+    // Store normalized 0-100 value (from UI)
+    if (value < 0) value = 0;
+    if (value > 100) value = 100;
+    original_values_[current_dest_] = value;
+    
+    // Calculate clamped version for destination's range
     const Destination& dest = destinations_[current_dest_];
-    // Clamp to valid range
-    if (value < dest.min) value = dest.min;
-    if (value > dest.max) value = dest.max;
-    values_[current_dest_] = value;
+    int32_t clamped = value;
+    
+    // Linear mapping from 0-100 to [min, max]
+    int32_t range = dest.max - dest.min;
+    clamped = dest.min + (value * range) / 100;
+    
+    // Safety clamp
+    if (clamped < dest.min) clamped = dest.min;
+    if (clamped > dest.max) clamped = dest.max;
+    
+    clamped_values_[current_dest_] = clamped;
   }
   
   /**
    * @brief Set value for specific destination (direct access)
    * @param dest Destination index
-   * @param value New value
+   * @param value New value in 0-100 range (from UI)
    */
   void SetValueForDest(uint8_t dest, int32_t value) {
     if (dest >= NUM_DESTINATIONS) return;
     
+    // value should be in 0-100 range (from UI)
+    if (value < 0) value = 0;
+    if (value > 100) value = 100;
+    original_values_[dest] = value;
+    
+    // Calculate clamped version
     const Destination& d = destinations_[dest];
-    if (value < d.min) value = d.min;
-    if (value > d.max) value = d.max;
-    values_[dest] = value;
+    int32_t range = d.max - d.min;
+    int32_t clamped = d.min + (value * range) / 100;
+    
+    if (clamped < d.min) clamped = d.min;
+    if (clamped > d.max) clamped = d.max;
+    
+    clamped_values_[dest] = clamped;
   }
   
   /**
-   * @brief Get value for specific destination
+   * @brief Get value for specific destination (clamped to destination's range)
    * @param dest Destination index
-   * @return Value for that destination, or 0 if invalid index
+   * @return Clamped value for DSP use
    */
   int32_t GetValue(uint8_t dest) const {
-    return (dest < NUM_DESTINATIONS) ? values_[dest] : 0;
+    return (dest < NUM_DESTINATIONS) ? clamped_values_[dest] : 0;
   }
   
   /**
-   * @brief Get value for current destination
-   * @return Current destination's value
+   * @brief Get value for current destination (clamped to destination's range)
+   * @return Current destination's clamped value
    */
   int32_t GetCurrentValue() const {
-    return values_[current_dest_];
+    return clamped_values_[current_dest_];
   }
   
   /**
@@ -228,69 +256,61 @@ class HubControl {
    * @brief Get formatted value string for current destination
    * @param buffer Output buffer for formatted string
    * @param buf_size Size of output buffer
-   * @return Pointer to buffer (for convenience)
-   * 
-   * Formats value according to destination's bipolar flag:
-   * - Bipolar: "-50%" to "+50%" (centered)
-   * - Unipolar: "0%" to "100%"
+   * @return Pointer to formatted string
    */
   const char* GetValueString(char* buffer, size_t buf_size) const {
-    return GetValueStringForDest(current_dest_, values_[current_dest_], 
+    return GetValueStringForDest(current_dest_, clamped_values_[current_dest_], 
                                   buffer, buf_size);
   }
   
   /**
    * @brief Get formatted value string for specific destination and value
    * @param dest Destination index
-   * @param value Value to format
-   * @param buffer Output buffer
+   * @param value Value to format (clamped to destination's range)
+   * @param buffer Output buffer (fallback only)
    * @param buf_size Buffer size
-   * @return Formatted string
+   * @return Stable pointer to formatted string
    */
   const char* GetValueStringForDest(uint8_t dest, int32_t value,
                                      char* buffer, size_t buf_size) const {
     if (dest >= NUM_DESTINATIONS) {
-      buffer[0] = '\0';
-      return buffer;
+      return kEmptyString;
     }
     
     const Destination& d = destinations_[dest];
     
-    // If string array is explicitly provided, use it
+    // Path 1: Enum/string values (highest priority)
     if (d.string_values != nullptr) {
       if (value >= d.min && value <= d.max) {
-        return d.string_values[value - d.min];
+        return d.string_values[value - d.min];  // Static pointer ✓
       }
-      buffer[0] = '\0';
-      return buffer;
+      return kEmptyString;
     }
     
-    // Try to get cached strings for numeric ranges
+    // Path 2: Numeric values (use cache for ALL numeric)
     const char* const* cached = HubStringCache::GetStrings(
       d.min, d.max, d.value_unit, d.bipolar);
     
-    if (cached != nullptr) {
-      if (value >= d.min && value <= d.max) {
-        return cached[value - d.min];
+    if (cached != nullptr && value >= d.min && value <= d.max) {
+      return cached[value - d.min];  // Cached pointer ✓
+    }
+    
+    // Path 3: Out of range - only use buffer if needed
+    if (value >= d.min && value <= d.max) {
+      // This should be rare if cache is working
+      if (d.bipolar) {
+        int32_t range = d.max - d.min;
+        int32_t center = d.min + range / 2;
+        int32_t offset = value - center;
+        int32_t percent = (offset * 100) / (range / 2);
+        snprintf(buffer, buf_size, "%+d%s", percent, d.value_unit);
+      } else {
+        snprintf(buffer, buf_size, "%d%s", (int)value, d.value_unit);
       }
-      buffer[0] = '\0';
       return buffer;
     }
     
-    // Fallback to dynamic formatting (for out-of-range values)
-    if (d.bipolar) {
-      // Display as ±: -100% to +100%
-      int32_t range = d.max - d.min;
-      int32_t center = d.min + range / 2;
-      int32_t offset = value - center;
-      int32_t percent = (offset * 100) / (range / 2);
-      snprintf(buffer, buf_size, "%+d%s", percent, d.value_unit);
-    } else {
-      // Display as absolute value
-      snprintf(buffer, buf_size, "%d%s", (int)value, d.value_unit);
-    }
-    
-    return buffer;
+    return kEmptyString;
   }
   
   /**
@@ -299,6 +319,8 @@ class HubControl {
   void Reset() {
     for (uint8_t i = 0; i < NUM_DESTINATIONS; i++) {
       values_[i] = destinations_[i].default_value;
+      original_values_[i] = destinations_[i].default_value;
+      clamped_values_[i] = destinations_[i].default_value;
     }
     current_dest_ = 0;
   }
@@ -312,9 +334,11 @@ class HubControl {
   }
   
  private:
-  const Destination* destinations_;  ///< Destination descriptors
-  int32_t values_[NUM_DESTINATIONS]; ///< Current values for each destination
-  uint8_t current_dest_;             ///< Currently selected destination index
+  const Destination* destinations_;        ///< Destination descriptors
+  int32_t values_[NUM_DESTINATIONS];       ///< Legacy: kept for compatibility
+  int32_t original_values_[NUM_DESTINATIONS];  ///< Original 0-100 values from UI
+  int32_t clamped_values_[NUM_DESTINATIONS];   ///< Clamped to destination's range
+  uint8_t current_dest_;                   ///< Currently selected destination index
 };
 
 }  // namespace common
