@@ -680,7 +680,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         
         // Apply VCA with envelope, LFO tremolo, keyboard tracking, and level control
         // Base VCA envelope
-        // In POLY mode, voices already rendered with their individual envelopes
+        // In POLY mode, voices already rendered with their individual envelopes - no additional processing needed
         // In UNISON mode, use voice 0's envelope and let it complete its release
         // In MONO mode, use main env_vca_
         float vca_gain = vca_env_out_;
@@ -696,14 +696,10 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
                 vca_gain = 0.0f;  // Envelope fully released = silence
             }
         } else if (current_mode_ == dsp::SYNTH_MODE_POLYPHONIC) {
-            // In POLY mode, voices have already been rendered individually
-            // This is the post-poly-render master gain, use voice 0 as reference
-            if (allocator_.IsAnyVoiceActive()) {
-                dsp::Voice& lead_voice = allocator_.GetVoiceMutable(0);
-                vca_gain = lead_voice.env_amp.Process();
-            } else {
-                vca_gain = 0.0f;
-            }
+            // In POLY mode, voices have already been rendered with their individual envelopes
+            // Each voice applied its own envelope at line 473, so no additional envelope processing here
+            // Just use base VCA gain of 1.0 for global modulation (tremolo, keyboard tracking)
+            vca_gain = 1.0f;
         }
         
         // VCA LFO (tremolo): 0% = no tremolo, 100% = full amplitude modulation
