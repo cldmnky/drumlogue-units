@@ -836,34 +836,37 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
         case PARAM_MOD_AMT:
             // Hub amount: Store in hub and preset's hub_values array
             v = clamp_u8_int32(value, 0, 100);
-            mod_hub_.SetValue(v);
-            // Save to preset's hub storage for current destination
+            mod_hub_.SetValue(v);  // Hub will clamp to destination's actual range
+            
+            // Get the actual clamped value from the hub (not our 0-100 clamp!)
+            // This is critical for string params like S.MODE (0-2) and UNI DET (0-50)
             {
                 uint8_t dest = current_preset_.params[PARAM_MOD_HUB];
                 if (dest < MOD_NUM_DESTINATIONS) {
-                    current_preset_.hub_values[dest] = v;
-                }
-                
-                // Apply specific destinations to DSP components immediately
-                switch (dest) {
-                    case MOD_SYNTH_MODE:  // S MODE
-                        // Update synth mode: 0=MONO, 1=POLY, 2=UNISON
-                        if (v <= 2) {
-                            // Only allow mode changes when no notes are playing
-                            // to prevent audio glitches and envelope state issues
-                            if (!allocator_.IsAnyVoiceActive()) {
-                                current_mode_ = static_cast<dsp::SynthMode>(v);
-                                allocator_.SetMode(current_mode_);
+                    // Get the actual value after hub's range clamping
+                    int32_t actual_value = mod_hub_.GetValue(dest);
+                    current_preset_.hub_values[dest] = actual_value;
+                    
+                    // Apply specific destinations to DSP components immediately
+                    switch (dest) {
+                        case MOD_SYNTH_MODE:  // S MODE (range 0-2: MONO/POLY/UNISON)
+                            if (actual_value <= 2) {
+                                // Only allow mode changes when no notes are playing
+                                // to prevent audio glitches and envelope state issues
+                                if (!allocator_.IsAnyVoiceActive()) {
+                                    current_mode_ = static_cast<dsp::SynthMode>(actual_value);
+                                    allocator_.SetMode(current_mode_);
+                                }
+                                // If voices are active, mode change will apply after all notes off
                             }
-                            // If voices are active, mode change will apply after all notes off
-                        }
-                        break;
-                    case MOD_UNISON_DETUNE:  // UNI DET
-                        // Update unison detune (0-50 cents)
-                        allocator_.SetUnisonDetune(v);
-                        break;
-                    default:
-                        break;  // Other destinations handled in Render()
+                            break;
+                        case MOD_UNISON_DETUNE:  // UNI DET (range 0-50 cents)
+                            // Update unison detune with actual clamped value
+                            allocator_.SetUnisonDetune(actual_value);
+                            break;
+                        default:
+                            break;  // Other destinations handled in Render()
+                    }
                 }
             }
             return;  // Hub handles its own state
