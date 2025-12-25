@@ -301,10 +301,14 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     const float unison_detune_cents = static_cast<float>(mod_hub_.GetValue(MOD_UNISON_DETUNE));
     allocator_.SetUnisonDetune(unison_detune_cents);
     
-    // Portamento time control (Phase 2 Task 2.2.4) - 0-100 maps to 10-500ms exponentially
+    // Portamento time control (Phase 2 Task 2.2.4) - 0-100 maps to 0-500ms exponentially
+    // Special case: 0 = portamento disabled (0ms), 1-100 = 10-500ms exponential
     const uint8_t porta_param = mod_hub_.GetValue(MOD_PORTAMENTO_TIME);
-    const float porta_normalized = porta_param / 100.0f;
-    const float porta_time_ms = 10.0f * powf(50.0f, porta_normalized);  // 10ms to 500ms exponential
+    float porta_time_ms = 0.0f;
+    if (porta_param > 0) {
+        const float porta_normalized = porta_param / 100.0f;
+        porta_time_ms = 10.0f * powf(50.0f, porta_normalized);  // 10ms to 500ms exponential
+    }
     allocator_.SetPortamentoTime(porta_time_ms);
     
     // NOTE: LFO delay and waveform are now set in UpdateLfoSettings()
