@@ -19,6 +19,7 @@
 #include "../common/smoothed_value.h"
 #include <cmath>
 #include <cstring>
+#include <cstring>
 #include <cstdio>
 
 #ifdef USE_NEON
@@ -848,8 +849,13 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
                     case MOD_SYNTH_MODE:  // S MODE
                         // Update synth mode: 0=MONO, 1=POLY, 2=UNISON
                         if (v <= 2) {
-                            current_mode_ = static_cast<dsp::SynthMode>(v);
-                            allocator_.SetMode(current_mode_);
+                            // Only allow mode changes when no notes are playing
+                            // to prevent audio glitches and envelope state issues
+                            if (!allocator_.IsAnyVoiceActive()) {
+                                current_mode_ = static_cast<dsp::SynthMode>(v);
+                                allocator_.SetMode(current_mode_);
+                            }
+                            // If voices are active, mode change will apply after all notes off
                         }
                         break;
                     case MOD_UNISON_DETUNE:  // UNI DET
@@ -1088,7 +1094,14 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
             if (value != last_modamt_value || dest != last_modamt_dest) {
                 last_modamt_value = value;
                 last_modamt_dest = dest;
-                mod_hub_.GetValueStringForDest(dest, value, modamt_buf, sizeof(modamt_buf));
+                // GetValueStringForDest returns pointer to string (not filling buffer)
+                // So we need to copy it to our static buffer
+                const char* str = mod_hub_.GetValueStringForDest(dest, value, modamt_buf, sizeof(modamt_buf));
+                if (str != modamt_buf) {
+                    // String came from array, need to copy it
+                    strncpy(modamt_buf, str, sizeof(modamt_buf) - 1);
+                    modamt_buf[sizeof(modamt_buf) - 1] = '\0';
+                }
             }
             
             return modamt_buf;
