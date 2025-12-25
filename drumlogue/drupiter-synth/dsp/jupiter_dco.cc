@@ -206,6 +206,29 @@ float JupiterDCO::GenerateWaveform(float phase, float phase_inc) {
         
         case WAVEFORM_TRIANGLE:
             return LookupWavetable(triangle_table_, phase);
+        
+        case WAVEFORM_SAW_PWM:
+        {
+            // PWM Sawtooth: Mix two phase-shifted sawtooths for classic hoover sound
+            // This creates spectral movement when pulse width is modulated
+            // 
+            // Algorithm:saw1 * (1-pw) + saw2 * pw, where saw2 is phase-shifted
+            // Results in timbre change from bright (pw=0) to hollow (pw=0.5) to bright (pw=1)
+            
+            float saw1 = 1.0f - phase * 2.0f;  // Primary sawtooth
+            float phase2 = WrapPhase(phase + pulse_width_);  // Phase-shifted sawtooth
+            float saw2 = 1.0f - phase2 * 2.0f;
+            
+            // Mix with crossfade based on pulse width
+            float mix = pulse_width_;
+            float value = saw1 * (1.0f - mix) + saw2 * mix;
+            
+            // Apply PolyBLEP anti-aliasing to both components
+            value -= PolyBlep(phase, dt) * (1.0f - mix);
+            value -= PolyBlep(phase2, dt) * mix;
+            
+            return value;
+        }
 
         case WAVEFORM_SINE:
             // Use wavetable for fast sine (avoids expensive sinf() call)
