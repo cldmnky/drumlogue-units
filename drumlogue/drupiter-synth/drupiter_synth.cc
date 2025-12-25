@@ -681,18 +681,19 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         // Apply VCA with envelope, LFO tremolo, keyboard tracking, and level control
         // Base VCA envelope
         // In POLY mode, voices already rendered with their individual envelopes
-        // In UNISON mode, check if any voice is still playing (envelope > threshold)
+        // In UNISON mode, use voice 0's envelope and let it complete its release
         // In MONO mode, use main env_vca_
         float vca_gain = vca_env_out_;
         if (current_mode_ == dsp::SYNTH_MODE_UNISON) {
-            // In UNISON mode: Check all voices for active envelopes
-            // All unison voices should have same envelope state (they're triggered together)
-            // Use voice 0's envelope, but check if any voice is active first
-            if (allocator_.IsAnyVoiceActive()) {
-                dsp::Voice& lead_voice = allocator_.GetVoiceMutable(0);
-                vca_gain = lead_voice.env_amp.Process();
-            } else {
-                vca_gain = 0.0f;  // No active voices = silence
+            // In UNISON mode: All unison voices share the same envelope state
+            // CRITICAL: Always process envelope (even during release) to allow proper note-off
+            // Don't check IsAnyVoiceActive() - let envelope complete its full ADSR cycle
+            dsp::Voice& lead_voice = allocator_.GetVoiceMutable(0);
+            vca_gain = lead_voice.env_amp.Process();
+            
+            // Only check envelope state (not voice active flag) to detect true silence
+            if (!lead_voice.env_amp.IsActive()) {
+                vca_gain = 0.0f;  // Envelope fully released = silence
             }
         } else if (current_mode_ == dsp::SYNTH_MODE_POLYPHONIC) {
             // In POLY mode, voices have already been rendered individually
