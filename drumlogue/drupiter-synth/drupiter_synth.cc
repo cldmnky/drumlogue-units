@@ -284,6 +284,10 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     const float vca_lfo_depth = mod_hub_.GetValue(MOD_VCA_LFO) / 100.0f;      // LFO->VCA tremolo
     const float vca_kybd = mod_hub_.GetValue(MOD_VCA_KYBD) / 100.0f;          // VCA keyboard tracking
     
+    // Phase 2: Pitch envelope modulation (ENV→PIT)
+    // Bipolar: 0-100 maps to -12 to +12 semitones (50 = center/zero)
+    const float env_pitch_depth = (static_cast<int32_t>(mod_hub_.GetValue(MOD_ENV_TO_PITCH)) - 50) / 50.0f * 12.0f;  // ±12 semitones
+    
     // Synthesis mode selection (Hoover v2.0) - read from MOD HUB
     const uint8_t synth_mode_value = mod_hub_.GetValue(MOD_SYNTH_MODE);
     const dsp::SynthMode synth_mode = static_cast<dsp::SynthMode>(synth_mode_value < 3 ? synth_mode_value : 0);
@@ -425,6 +429,13 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
                     voice_freq2 *= lfo_mod;
                 }
                 
+                // Apply pitch envelope modulation
+                if (fabsf(env_pitch_depth) > 0.001f) {
+                    const float pitch_mod_ratio = powf(2.0f, vcf_env_out_ * env_pitch_depth / 12.0f);
+                    voice_freq1 *= pitch_mod_ratio;
+                    voice_freq2 *= pitch_mod_ratio;
+                }
+                
                 voice_mut.dco1.SetFrequency(voice_freq1);
                 voice_mut.dco2.SetFrequency(voice_freq2);
                 
@@ -489,6 +500,13 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
                 const float lfo_mod = 1.0f + lfo_out_ * lfo_vco_depth * 0.05f;
                 unison_freq *= lfo_mod;
             }
+            
+            // Apply pitch envelope modulation
+            if (fabsf(env_pitch_depth) > 0.001f) {
+                const float pitch_mod_ratio = powf(2.0f, vcf_env_out_ * env_pitch_depth / 12.0f);
+                unison_freq *= pitch_mod_ratio;
+            }
+            
             unison_osc.SetFrequency(unison_freq);
             
             // Process stereo unison output
@@ -505,6 +523,13 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
                 const float lfo_mod = 1.0f + lfo_out_ * lfo_vco_depth * 0.05f;
                 freq2 *= lfo_mod;
             }
+            
+            // Apply pitch envelope modulation to DCO2
+            if (fabsf(env_pitch_depth) > 0.001f) {
+                const float pitch_mod_ratio = powf(2.0f, vcf_env_out_ * env_pitch_depth / 12.0f);
+                freq2 *= pitch_mod_ratio;
+            }
+            
             dco2_->SetFrequency(freq2);
             dco2_out_ = dco2_->Process();
             
@@ -524,6 +549,13 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
                 const float lfo_mod = 1.0f + lfo_out_ * lfo_vco_depth * 0.05f;  // ±5% vibrato
                 freq1 *= lfo_mod;
                 freq2 *= lfo_mod;
+            }
+            
+            // Apply pitch envelope modulation
+            if (fabsf(env_pitch_depth) > 0.001f) {
+                const float pitch_mod_ratio = powf(2.0f, vcf_env_out_ * env_pitch_depth / 12.0f);
+                freq1 *= pitch_mod_ratio;
+                freq2 *= pitch_mod_ratio;
             }
             
             dco1_->SetFrequency(freq1);

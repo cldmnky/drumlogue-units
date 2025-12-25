@@ -85,8 +85,8 @@ const __unit_header unit_header_t unit_header = {
         // ==================== Page 6: MODULATION ====================
         // LFO RATE: Direct LFO speed control (0.1Hz - 50Hz)
         {0, 100, 0, 32, k_unit_param_type_percent, 0, 0, 0, {"LFO RT"}},
-        // MOD HUB: Modulation destination selector (16 modes including SYNTH MODE and UNISON DETUNE)
-        {0, 15, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"MOD HUB"}},
+        // MOD HUB: Modulation destination selector (17 modes including SYNTH MODE, UNISON DETUNE, and ENV>PIT)
+        {0, 16, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"MOD HUB"}},
         // MOD AMT: Value for selected destination (context-sensitive string display)
         {0, 100, 50, 50, k_unit_param_type_strings, 0, 0, 0, {"MOD AMT"}},  
         // EFFECT: Effect selection (CHORUS/SPACE/DRY/BOTH)

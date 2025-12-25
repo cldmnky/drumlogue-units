@@ -756,46 +756,391 @@ Pitch Env: -12 semitones, 100ms decay
 
 **Duration:** 2-3 weeks
 
-**Tasks:**
+**Status:** ⏳ IN PROGRESS (Started 2025-12-25)
 
-#### Task 2.1: Expand Unison to 5-7 Voices
-- [ ] Increase unison voice count options
-- [ ] Implement exponential/golden ratio detune spread
-- [ ] Add phase randomization for natural chorus
-- [ ] Profile CPU usage (critical!)
-- [ ] Optimize for ARM performance
+---
 
-**CPU Budget Check:**
-- 5 voices: Target <65%
-- 7 voices: Target <80%
+## Phase 2 TODO List
 
-#### Task 2.2: Enhance Polyphonic Voice Rendering
-- [ ] Per-voice pitch modulation (pitch envelope via MOD HUB)
-- [ ] Per-voice vibrato (LFO → pitch)
-- [ ] Per-voice filter cutoff tracking
-- [ ] Voice stealing strategy refinement
-- [ ] Glide/portamento support (pitch slide between notes)
+### Task 2.1: Expand Unison to 5-7 Voices ✅ COMPLETE
+**Status:** Already complete - Phase 1 implemented 7-voice unison
 
-#### Task 2.3: Pitch Envelope Routing (MOD HUB Additive)
-- [ ] Add `MOD_ENV_TO_PITCH` to hub destinations
-- [ ] Implement pitch modulation in render loop
-- [ ] Bipolar range: ±12 semitones
-- [ ] Works for both polyphonic and unison modes
+**Already Implemented:**
+- ✅ 7-voice unison (full implementation)
+- ✅ Golden ratio detune spread (exponential)
+- ✅ Golden angle phase distribution for stereo spread
+- ✅ UnisonOscillator fully functional
+- ✅ CPU usage: ~60% in UNISON mode (within target)
+
+**No Action Required:** Task already complete from Phase 1.
+
+---
+
+### Task 2.2: Enhance Polyphonic Voice Rendering ⏳ IN PROGRESS
+
+**Goal:** Improve polyphonic mode with per-voice modulation and voice stealing refinement
+
+**Subtasks:**
+
+#### 2.2.1: Per-Voice Pitch Modulation (Pitch Envelope)
+- [ ] Add pitch envelope to Voice struct
+- [ ] Map to MOD HUB destination (MOD_ENV_TO_PITCH)
+- [ ] Implement per-voice pitch modulation in render loop
+- [ ] Bipolar range: ±12 semitones (configurable)
 - [ ] Test with fast attack/decay settings
 
-#### Task 2.4: Phase-Aligned Dual Output (Optional)
-- [ ] Modify `JupiterDCO` for dual waveform mode
-- [ ] Single phase drives SAW + PULSE simultaneously
-- [ ] Test phase alignment accuracy
+**Architecture:**
+```cpp
+// In Voice struct (voice_allocator.h)
+#ifdef ENABLE_PITCH_ENVELOPE
+    JupiterEnvelope env_pitch;  // Per-voice pitch modulation
+#endif
 
-**Decision point:** May skip if unison + PWM saw is sufficient
+// In polyphonic render loop
+float pitch_mod = voice.env_pitch.Process();
+float modulated_pitch = voice.pitch_hz * semitones_to_ratio(pitch_mod * 12.0f);
+voice.dco1.SetFrequency(modulated_pitch);
+```
 
-#### Task 2.5: NEON SIMD Optimization
-- [ ] Vectorize unison voice processing
-- [ ] Vectorize polyphonic voice rendering
-- [ ] Parallel waveform generation
-- [ ] SIMD detune calculations
-- [ ] Benchmark improvements (target: 30-50%)
+**Files to modify:**
+- `dsp/voice_allocator.h` - Add env_pitch to Voice struct
+- `dsp/voice_allocator.cc` - Initialize and trigger env_pitch
+- `drupiter_synth.h` - Add MOD_ENV_TO_PITCH destination
+- `drupiter_synth.cc` - Wire pitch envelope modulation
+- `header.c` - Add MOD DEST parameter for pitch envelope
+
+**Success Criteria:**
+- ✅ Each voice can have independent pitch modulation
+- ✅ Pitch envelope triggered on note-on
+- ✅ Smooth pitch sweeps (no clicks or artifacts)
+- ✅ Works in both POLY and UNISON modes
+- ✅ CPU impact <5% additional
+
+---
+
+#### 2.2.2: Per-Voice Vibrato (LFO → Pitch)
+- [ ] Add per-voice LFO phase offset
+- [ ] Implement per-voice pitch LFO modulation
+- [ ] Wire to MOD HUB (MOD_LFO_TO_PITCH)
+- [ ] Test with different LFO rates (0.5-10 Hz)
+
+**Architecture:**
+```cpp
+// In Voice struct
+float lfo_phase_offset;  // Randomize per voice for natural chorus
+
+// In render loop
+float lfo_value = lfo_.ProcessWithOffset(voice.lfo_phase_offset);
+float pitch_mod = lfo_value * mod_lfo_to_pitch_;
+float modulated_pitch = voice.pitch_hz * (1.0f + pitch_mod * 0.05f);  // ±5% vibrato
+```
+
+**Success Criteria:**
+- ✅ Each voice has slightly different LFO phase
+- ✅ Natural, organic vibrato (not robotic)
+- ✅ Works with all LFO waveforms
+- ✅ CPU impact <2% additional
+
+---
+
+#### 2.2.3: Voice Stealing Strategy Refinement
+- [ ] Analyze voice stealing artifacts (current: oldest-note priority)
+- [ ] Implement fade-out on stolen voice (prevent clicks)
+- [ ] Add voice stealing mode selection (round-robin, oldest, quietest)
+- [ ] Test with rapid MIDI sequences
+
+**Architecture:**
+```cpp
+// In VoiceAllocator
+enum VoiceStealMode {
+    STEAL_OLDEST,      // Current implementation
+    STEAL_QUIETEST,    // Steal voice with lowest amplitude
+    STEAL_RELEASED,    // Prefer voices in release phase
+    STEAL_ROUND_ROBIN  // Cycle through voices
+};
+
+void StealVoice(Voice* voice) {
+    // Fade out quickly to prevent click
+    voice->env_amp.SetRelease(10.0f);  // 10ms fast release
+    voice->env_amp.NoteOff();
+}
+```
+
+**Success Criteria:**
+- ✅ No clicks or pops when stealing voices
+- ✅ Smooth transitions between notes
+- ✅ Configurable stealing strategy
+- ✅ Works under stress (rapid MIDI)
+
+---
+
+#### 2.2.4: Glide/Portamento Support
+- [ ] Add glide time parameter (0-500ms)
+- [ ] Implement pitch interpolation between notes
+- [ ] Works in monophonic and polyphonic modes
+- [ ] Test with different glide times
+
+**Architecture:**
+```cpp
+// In Voice struct
+float glide_target_hz;
+float glide_rate;  // Hz per sample
+
+// In render loop
+if (voice.pitch_hz != voice.glide_target_hz) {
+    float diff = voice.glide_target_hz - voice.pitch_hz;
+    if (fabsf(diff) < voice.glide_rate) {
+        voice.pitch_hz = voice.glide_target_hz;
+    } else {
+        voice.pitch_hz += copysignf(voice.glide_rate, diff);
+    }
+}
+```
+
+**Decision:** Optional - May defer to Phase 3 if CPU budget tight
+
+---
+
+#### 2.2.5: Per-Voice Filter Cutoff Tracking
+- [ ] Analyze current filter behavior in polyphonic mode
+- [ ] Verify per-voice filter cutoff modulation
+- [ ] Test keyboard tracking across all voices
+- [ ] Ensure envelope modulation is per-voice
+
+**Current Status:** Should already work per-voice (verify only)
+
+**Success Criteria:**
+- ✅ Each voice has independent filter cutoff
+- ✅ Keyboard tracking works correctly
+- ✅ No filter jumps between voices
+
+---
+
+### Task 2.3: Pitch Envelope Routing (MOD HUB Additive) ⏳ IN PROGRESS
+
+**Goal:** Add pitch envelope destination to MOD HUB
+
+**Implementation Steps:**
+
+1. **Add MOD destination:**
+```cpp
+// In drupiter_synth.h
+enum ModDestination {
+    // ... existing 0-15 ...
+    MOD_ENV_TO_PITCH = 16,  // NEW: Envelope modulates pitch
+    MOD_NUM_DESTINATIONS
+};
+```
+
+2. **Update header.c:**
+```cpp
+// MOD DEST parameter
+{
+    .id = PARAM_MOD_DEST,
+    .min = 0,
+    .max = 16,  // Extended from 15 to 16
+    .center = 0,
+    .type = k_unit_param_type_integer,
+    .name = "MOD DEST"
+}
+```
+
+3. **Implement in drupiter_synth.cc:**
+```cpp
+float pitch_mod = GetModulationAmount(MOD_ENV_TO_PITCH);
+if (pitch_mod > 0.0f) {
+    float env_value = env_filter_.GetValue();  // Reuse VCF envelope
+    float pitch_shift_semitones = (env_value - 0.5f) * pitch_mod * 24.0f;  // ±12 semitones
+    // Apply to voice pitch
+}
+```
+
+4. **Test with different envelope shapes:**
+- Fast attack/decay (characteristic hoover "zap")
+- Slow attack (pitch rise)
+- Long decay (pitch fall)
+
+**Success Criteria:**
+- ✅ Pitch envelope destination selectable via MOD HUB
+- ✅ Works in all three modes (MONO/POLY/UNISON)
+- ✅ Bipolar range (pitch up or down)
+- ✅ Smooth pitch sweeps (no artifacts)
+- ✅ CPU impact <3% additional
+
+**Files to Modify:**
+- `drupiter_synth.h` - Add MOD_ENV_TO_PITCH enum
+- `drupiter_synth.cc` - Implement pitch modulation
+- `header.c` - Update MOD DEST max value
+- `dsp/voice_allocator.cc` - Apply pitch modulation in render loops
+
+---
+
+### Task 2.4: Phase-Aligned Dual Output (Optional) 🔵 DEFERRED
+
+**Status:** DEFERRED - Unison + PWM saw is sufficient for hoover sounds
+
+**Decision:** Skip this task unless user feedback indicates it's needed. Current PWM sawtooth implementation provides the signature hoover sound.
+
+**Rationale:**
+- PWM sawtooth already provides characteristic harmonic movement
+- UnisonOscillator provides thick, detuned texture
+- Phase alignment adds complexity without significant sonic benefit
+- CPU budget better spent on other enhancements
+
+**If Implemented Later:**
+- Modify JupiterDCO to output two waveforms per phase advance
+- Use same phase accumulator for SAW + PULSE
+- Mix outputs with independent levels
+
+---
+
+### Task 2.5: NEON SIMD Optimization 🔴 CRITICAL
+
+**Goal:** Reduce CPU usage for polyphonic and unison modes via ARM NEON vectorization
+
+**Priority:** CRITICAL for 6-voice polyphonic and 7-voice unison
+
+**Current CPU Usage:**
+- Polyphonic (7v): ~45% (good headroom)
+- Unison (7v): ~60% (acceptable, but optimization helpful)
+
+**Target CPU Usage:**
+- Polyphonic (7v): ~30-35% (35% speedup)
+- Unison (7v): ~40-45% (30% speedup)
+
+**Implementation Steps:**
+
+#### 2.5.1: Vectorize Oscillator Phase Accumulation
+```cpp
+#ifdef __ARM_NEON
+#include <arm_neon.h>
+
+// Process 4 voices in parallel
+void ProcessVoices_NEON(Voice* voices, uint8_t count, uint32_t frames) {
+    float32x4_t phases = vld1q_f32(&phases_[0]);
+    float32x4_t phase_incs = vld1q_f32(&phase_incs_[0]);
+    
+    // Advance all 4 phases simultaneously
+    phases = vaddq_f32(phases, phase_incs);
+    
+    // Wrap phases (0.0-1.0)
+    float32x4_t ones = vdupq_n_f32(1.0f);
+    uint32x4_t mask = vcgtq_f32(phases, ones);
+    phases = vbslq_f32(mask, vsubq_f32(phases, ones), phases);
+    
+    vst1q_f32(&phases_[0], phases);
+}
+#endif
+```
+
+#### 2.5.2: Vectorize Detune Calculations
+```cpp
+// Apply detune multipliers to 4 voices at once
+float32x4_t base_freqs = vdupq_n_f32(base_freq);
+float32x4_t detunes = vld1q_f32(&detune_ratios_[0]);
+float32x4_t detuned_freqs = vmulq_f32(base_freqs, detunes);
+```
+
+#### 2.5.3: Vectorize Waveform Generation
+```cpp
+// Generate sawtooth for 4 voices in parallel
+float32x4_t phases = vld1q_f32(&phases_[0]);
+float32x4_t saws = vsubq_f32(vmulq_n_f32(phases, 2.0f), vdupq_n_f32(1.0f));
+vst1q_f32(&outputs_[0], saws);
+```
+
+#### 2.5.4: Benchmark and Iterate
+- [ ] Profile NEON vs scalar implementation
+- [ ] Measure speedup (target: 2.5-3.5×)
+- [ ] Test on actual drumlogue hardware
+- [ ] Verify audio quality unchanged
+
+**Files to Modify:**
+- `dsp/unison_oscillator.cc` - Add NEON waveform generation
+- `dsp/voice_allocator.cc` - Add NEON polyphonic rendering
+- `config.mk` - Add `-mfpu=neon` compile flag
+- `drupiter_synth.h` - Add NEON feature flag
+
+**Success Criteria:**
+- ✅ 30-50% CPU reduction for unison/polyphonic modes
+- ✅ No change in audio quality
+- ✅ No artifacts or glitches
+- ✅ Fallback to scalar if NEON unavailable
+
+---
+
+## Phase 2 Implementation Order
+
+**Recommended sequence:**
+
+1. **Task 2.3: Pitch Envelope Routing** (1-2 days)
+   - Quick win, high impact for hoover sounds
+   - Adds characteristic "zap" pitch drop
+
+2. **Task 2.2.1: Per-Voice Pitch Modulation** (2-3 days)
+   - Foundation for per-voice effects
+   - Enables richer polyphonic textures
+
+3. **Task 2.2.3: Voice Stealing Refinement** (2-3 days)
+   - Improves polyphonic mode stability
+   - Prevents artifacts
+
+4. **Task 2.5: NEON SIMD Optimization** (3-5 days)
+   - CRITICAL for performance
+   - Enables higher voice counts
+
+5. **Task 2.2.2: Per-Voice Vibrato** (1-2 days)
+   - Optional polish
+   - Adds organic movement
+
+6. **Task 2.2.4: Glide/Portamento** (2-3 days)
+   - Optional enhancement
+   - Defer if CPU budget tight
+
+**Total Estimated Time:** 2-3 weeks
+
+---
+
+## Phase 2 Testing Plan
+
+### Desktop Tests
+```bash
+cd test/drupiter-synth
+make test-pitch-envelope
+make test-voice-stealing
+make test-neon-optimization
+```
+
+### Hardware Tests
+1. Load Phase 2 build to drumlogue
+2. Test pitch envelope with fast attack/decay
+3. Test polyphonic mode with rapid MIDI
+4. Verify CPU usage reduction
+5. Long-running stability test (30min+)
+
+### Success Criteria
+- ✅ Pitch envelope works in all modes
+- ✅ Voice stealing is smooth (no clicks)
+- ✅ CPU usage reduced by 30-50% (with NEON)
+- ✅ No audio quality degradation
+- ✅ All factory presets still work
+- ✅ Backward compatible
+
+---
+
+## Current Status: Ready to Begin Phase 2
+
+**Phase 1 Complete:**
+- ✅ Voice allocator (3 modes)
+- ✅ PWM sawtooth
+- ✅ 7-voice unison
+- ✅ MOD HUB expansion
+- ✅ All tests passing
+
+**Next Action:**
+- Start with Task 2.3: Pitch Envelope Routing
+- High impact, quick implementation
+- Foundation for other Phase 2 tasks
 
 ---
 
