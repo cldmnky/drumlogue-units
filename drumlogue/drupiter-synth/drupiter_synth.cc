@@ -679,12 +679,29 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         
         // Apply VCA with envelope, LFO tremolo, keyboard tracking, and level control
         // Base VCA envelope
-        // In POLY/UNISON modes, use voice allocator's envelope; in MONO mode, use main env_vca_
+        // In POLY mode, voices already rendered with their individual envelopes
+        // In UNISON mode, check if any voice is still playing (envelope > threshold)
+        // In MONO mode, use main env_vca_
         float vca_gain = vca_env_out_;
-        if (current_mode_ == dsp::SYNTH_MODE_POLYPHONIC || current_mode_ == dsp::SYNTH_MODE_UNISON) {
-            // Use voice 0's envelope for amplitude in poly/unison modes
-            dsp::Voice& lead_voice = allocator_.GetVoiceMutable(0);
-            vca_gain = lead_voice.env_amp.Process();
+        if (current_mode_ == dsp::SYNTH_MODE_UNISON) {
+            // In UNISON mode: Check all voices for active envelopes
+            // All unison voices should have same envelope state (they're triggered together)
+            // Use voice 0's envelope, but check if any voice is active first
+            if (allocator_.IsAnyVoiceActive()) {
+                dsp::Voice& lead_voice = allocator_.GetVoiceMutable(0);
+                vca_gain = lead_voice.env_amp.Process();
+            } else {
+                vca_gain = 0.0f;  // No active voices = silence
+            }
+        } else if (current_mode_ == dsp::SYNTH_MODE_POLYPHONIC) {
+            // In POLY mode, voices have already been rendered individually
+            // This is the post-poly-render master gain, use voice 0 as reference
+            if (allocator_.IsAnyVoiceActive()) {
+                dsp::Voice& lead_voice = allocator_.GetVoiceMutable(0);
+                vca_gain = lead_voice.env_amp.Process();
+            } else {
+                vca_gain = 0.0f;
+            }
         }
         
         // VCA LFO (tremolo): 0% = no tremolo, 100% = full amplitude modulation
@@ -824,6 +841,23 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
                 uint8_t dest = current_preset_.params[PARAM_MOD_HUB];
                 if (dest < MOD_NUM_DESTINATIONS) {
                     current_preset_.hub_values[dest] = v;
+                }
+                
+                // Apply specific destinations to DSP components immediately
+                switch (dest) {
+                    case MOD_SYNTH_MODE:  // S MODE
+                        // Update synth mode: 0=MONO, 1=POLY, 2=UNISON
+                        if (v <= 2) {
+                            current_mode_ = static_cast<dsp::SynthMode>(v);
+                            allocator_.SetMode(current_mode_);
+                        }
+                        break;
+                    case MOD_UNISON_DETUNE:  // UNI DET
+                        // Update unison detune (0-50 cents)
+                        allocator_.SetUnisonDetune(v);
+                        break;
+                    default:
+                        break;  // Other destinations handled in Render()
                 }
             }
             return;  // Hub handles its own state
@@ -1004,6 +1038,10 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
     static char tune_buf[16];      // For PARAM_DCO2_TUNE
     static char modamt_buf[16];    // For PARAM_MOD_AMT
     
+    // Cache for MOD_AMT to reduce flickering (only regenerate if value changed)
+    static int32_t last_modamt_value = -1;
+    static uint8_t last_modamt_dest = 255;
+    
     switch (id) {
         // ======== Page 1: DCO-1 ========
         case PARAM_DCO1_OCT:
@@ -1046,7 +1084,14 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
                 return nullptr;  // Out of range - tells UI to stop querying
             }
             
-            return mod_hub_.GetValueStringForDest(dest, value, modamt_buf, sizeof(modamt_buf));
+            // Only regenerate string if value or destination changed
+            if (value != last_modamt_value || dest != last_modamt_dest) {
+                last_modamt_value = value;
+                last_modamt_dest = dest;
+                mod_hub_.GetValueStringForDest(dest, value, modamt_buf, sizeof(modamt_buf));
+            }
+            
+            return modamt_buf;
         }
             
         case PARAM_EFFECT:
