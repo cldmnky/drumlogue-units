@@ -1090,21 +1090,16 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
                 return nullptr;  // Out of range - tells UI to stop querying
             }
             
-            // Only regenerate string if value or destination changed
+            // Cache check to avoid unnecessary string regeneration (reduces flickering)
+            // But don't prevent actual updates - only cache the last result
             if (value != last_modamt_value || dest != last_modamt_dest) {
                 last_modamt_value = value;
                 last_modamt_dest = dest;
-                // GetValueStringForDest returns pointer to string (not filling buffer)
-                // So we need to copy it to our static buffer
-                const char* str = mod_hub_.GetValueStringForDest(dest, value, modamt_buf, sizeof(modamt_buf));
-                if (str != modamt_buf) {
-                    // String came from array, need to copy it
-                    strncpy(modamt_buf, str, sizeof(modamt_buf) - 1);
-                    modamt_buf[sizeof(modamt_buf) - 1] = '\0';
-                }
             }
             
-            return modamt_buf;
+            // GetValueStringForDest returns stable pointer (from cache or string array)
+            // Don't copy - just return the pointer directly
+            return mod_hub_.GetValueStringForDest(dest, value, modamt_buf, sizeof(modamt_buf));
         }
             
         case PARAM_EFFECT:
