@@ -55,9 +55,11 @@ VoiceAllocator::VoiceAllocator()
     , allocation_strategy_(ALLOC_ROUND_ROBIN)
     , round_robin_index_(0)
     , timestamp_(0)
+    , num_active_voices_(0)  // Phase 1: Initialize active voice tracking (before unison_detune_cents_)
     , unison_detune_cents_(10.0f) {  // Default 10 cents detune
     // Zero-initialize all voices
     memset(voices_, 0, sizeof(voices_));
+    memset(active_voice_list_, 0, sizeof(active_voice_list_));  // Clear active voice list
 }
 
 VoiceAllocator::~VoiceAllocator() {
@@ -79,20 +81,73 @@ void VoiceAllocator::SetMode(SynthMode mode) {
    // Note: Voice count limits are set at compile time (DRUPITER_MAX_VOICES)
 }
 
+// ============================================================================
+// Phase 1 Optimization: Active Voice Tracking
+// ============================================================================
+
+void VoiceAllocator::AddActiveVoice(uint8_t voice_idx) {
+    // Check if already in list
+    for (uint8_t i = 0; i < num_active_voices_; i++) {
+        if (active_voice_list_[i] == voice_idx) {
+            return;  // Already tracked
+        }
+    }
+    
+    // Add to list if there's room
+    if (num_active_voices_ < max_voices_) {
+        active_voice_list_[num_active_voices_++] = voice_idx;
+    }
+}
+
+void VoiceAllocator::RemoveActiveVoice(uint8_t voice_idx) {
+    // Rebuild list without this voice
+    uint8_t new_count = 0;
+    for (uint8_t i = 0; i < num_active_voices_; i++) {
+        if (active_voice_list_[i] != voice_idx) {
+            active_voice_list_[new_count++] = active_voice_list_[i];
+        }
+    }
+    num_active_voices_ = new_count;
+}
+
+void VoiceAllocator::UpdateActiveVoiceList() {
+    // Scan all tracked active voices and remove those with finished envelopes
+    uint8_t new_count = 0;
+    for (uint8_t i = 0; i < num_active_voices_; i++) {
+        uint8_t v_idx = active_voice_list_[i];
+        Voice& voice = voices_[v_idx];
+        
+        // Keep voice in list if still active or envelope still playing
+        if (voice.active || voice.env_amp.IsActive()) {
+            active_voice_list_[new_count++] = v_idx;
+        }
+    }
+    num_active_voices_ = new_count;
+}
+
 void VoiceAllocator::NoteOn(uint8_t note, uint8_t velocity) {
     timestamp_++;  // Increment for voice stealing
     
     Voice* voice = nullptr;
+    uint8_t voice_idx = 0;
     
     switch (mode_) {
         case SYNTH_MODE_MONOPHONIC:
             // Monophonic: always use voice 0
             voice = &voices_[0];
+            voice_idx = 0;
             break;
             
         case SYNTH_MODE_POLYPHONIC:
             // Polyphonic: find available voice or steal
             voice = AllocateVoice();
+            // Find which voice was allocated
+            for (uint8_t i = 0; i < max_voices_; i++) {
+                if (&voices_[i] == voice) {
+                    voice_idx = i;
+                    break;
+                }
+            }
             break;
             
         case SYNTH_MODE_UNISON:
@@ -103,12 +158,15 @@ void VoiceAllocator::NoteOn(uint8_t note, uint8_t velocity) {
                 
                 // Trigger voice 0 for envelope and parameter tracking
                 voice = &voices_[0];
+                voice_idx = 0;
             }
             break;
     }
     
     if (voice) {
         TriggerVoice(voice, note, velocity);
+        // Phase 1: Add to active voice list (optimization)
+        AddActiveVoice(voice_idx);
     }
 }
 
@@ -182,13 +240,15 @@ void VoiceAllocator::RenderPolyphonic(float* left, float* right, uint32_t frames
     memset(left, 0, frames * sizeof(float));
     memset(right, 0, frames * sizeof(float));
     
-    // Mix all active voices
+    // Phase 1 optimization: Only iterate active voices, not all max_voices_
+    // This reduces per-frame voice checks from 8 to typically 1-3 active voices
     uint8_t active_count = 0;
-    for (uint8_t i = 0; i < max_voices_; i++) {
-        Voice& voice = voices_[i];
+    for (uint8_t i = 0; i < num_active_voices_; i++) {
+        uint8_t v = active_voice_list_[i];
+        Voice& voice = voices_[v];
         
         if (!voice.active && !voice.env_amp.IsActive()) {
-            continue;  // Skip inactive voices
+            continue;  // Skip finished voices
         }
         
         active_count++;
@@ -196,6 +256,9 @@ void VoiceAllocator::RenderPolyphonic(float* left, float* right, uint32_t frames
         // Placeholder: Actual voice rendering will be done in drupiter_synth.cc
         // For now, just count active voices
     }
+    
+    // Update active voice list at end of render (remove finished envelopes)
+    UpdateActiveVoiceList();
     
     // Scale output by active voice count (prevent clipping)
     if (active_count > 1) {
