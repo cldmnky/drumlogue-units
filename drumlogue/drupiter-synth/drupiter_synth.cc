@@ -677,7 +677,13 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         
         // Apply VCA with envelope, LFO tremolo, keyboard tracking, and level control
         // Base VCA envelope
+        // In POLY/UNISON modes, use voice allocator's envelope; in MONO mode, use main env_vca_
         float vca_gain = vca_env_out_;
+        if (current_mode_ == dsp::SYNTH_MODE_POLYPHONIC || current_mode_ == dsp::SYNTH_MODE_UNISON) {
+            // Use voice 0's envelope for amplitude in poly/unison modes
+            dsp::Voice& lead_voice = allocator_.GetVoiceMutable(0);
+            vca_gain = lead_voice.env_amp.Process();
+        }
         
         // VCA LFO (tremolo): 0% = no tremolo, 100% = full amplitude modulation
         if (vca_lfo_depth > 0.001f) {
