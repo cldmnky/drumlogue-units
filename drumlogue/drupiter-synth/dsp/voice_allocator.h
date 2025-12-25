@@ -68,10 +68,8 @@ struct Voice {
     JupiterEnvelope env_amp;     // Amplitude envelope
     JupiterEnvelope env_filter;  // Filter modulation envelope
     
-    // Optional: per-voice pitch envelope (Phase 2)
-#ifdef ENABLE_PITCH_ENVELOPE
-    JupiterEnvelope env_pitch;
-#endif
+    // Per-voice pitch envelope (Phase 2 - Task 2.2.1)
+    JupiterEnvelope env_pitch;  // Enabled for per-voice pitch modulation
     
     // Constructor
     Voice() : active(false), midi_note(0), velocity(0.0f), 

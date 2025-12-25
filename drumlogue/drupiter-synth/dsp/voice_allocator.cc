@@ -26,6 +26,7 @@ void Voice::Init(float sample_rate) {
     vcf.Init(sample_rate);
     env_amp.Init(sample_rate);
     env_filter.Init(sample_rate);
+    env_pitch.Init(sample_rate);  // Task 2.2.1: Per-voice pitch envelope
     
     Reset();
 }
@@ -40,6 +41,7 @@ void Voice::Reset() {
     // Reset envelopes to idle state
     env_amp.Reset();
     env_filter.Reset();
+    env_pitch.Reset();  // Task 2.2.1: Reset pitch envelope
 }
 
 // ============================================================================
@@ -117,6 +119,7 @@ void VoiceAllocator::NoteOff(uint8_t note) {
             if (voices_[0].active && voices_[0].midi_note == note) {
                 voices_[0].env_amp.NoteOff();
                 voices_[0].env_filter.NoteOff();
+                voices_[0].env_pitch.NoteOff();
             }
             break;
             
@@ -126,6 +129,7 @@ void VoiceAllocator::NoteOff(uint8_t note) {
                 if (voices_[i].active && voices_[i].midi_note == note) {
                     voices_[i].env_amp.NoteOff();
                     voices_[i].env_filter.NoteOff();
+                    voices_[i].env_pitch.NoteOff();
                 }
             }
             break;
@@ -136,6 +140,7 @@ void VoiceAllocator::NoteOff(uint8_t note) {
                 if (voices_[i].active) {
                     voices_[i].env_amp.NoteOff();
                     voices_[i].env_filter.NoteOff();
+                    voices_[i].env_pitch.NoteOff();
                 }
             }
             break;
@@ -147,6 +152,7 @@ void VoiceAllocator::AllNotesOff() {
         if (voices_[i].active) {
             voices_[i].env_amp.NoteOff();
             voices_[i].env_filter.NoteOff();
+            voices_[i].env_pitch.NoteOff();  // Task 2.2.1
         }
     }
 }
@@ -296,6 +302,7 @@ void VoiceAllocator::TriggerVoice(Voice* voice, uint8_t note, uint8_t velocity) 
     // Trigger envelopes
     voice->env_amp.NoteOn();
     voice->env_filter.NoteOn();
+    voice->env_pitch.NoteOn();  // Task 2.2.1: Trigger per-voice pitch envelope
 }
 
 }  // namespace dsp

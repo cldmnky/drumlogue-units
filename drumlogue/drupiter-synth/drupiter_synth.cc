@@ -429,9 +429,11 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
                     voice_freq2 *= lfo_mod;
                 }
                 
-                // Apply pitch envelope modulation
+                // Apply pitch envelope modulation (Task 2.2.1: Per-voice pitch envelope)
                 if (fabsf(env_pitch_depth) > 0.001f) {
-                    const float pitch_mod_ratio = powf(2.0f, vcf_env_out_ * env_pitch_depth / 12.0f);
+                    // Use per-voice pitch envelope for independent pitch modulation
+                    const float voice_env_pitch = voice_mut.env_pitch.Process();
+                    const float pitch_mod_ratio = powf(2.0f, voice_env_pitch * env_pitch_depth / 12.0f);
                     voice_freq1 *= pitch_mod_ratio;
                     voice_freq2 *= pitch_mod_ratio;
                 }
@@ -898,15 +900,28 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
         // ======== Page 4: VCF Envelope ========
         case PARAM_VCF_ATTACK:
             env_vcf_->SetAttack(ParameterToEnvelopeTime(v));
+            // Task 2.2.1: Also set per-voice pitch envelopes
+            for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; i++) {
+                allocator_.GetVoiceMutable(i).env_pitch.SetAttack(ParameterToEnvelopeTime(v));
+            }
             break;
         case PARAM_VCF_DECAY:
             env_vcf_->SetDecay(ParameterToEnvelopeTime(v));
+            for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; i++) {
+                allocator_.GetVoiceMutable(i).env_pitch.SetDecay(ParameterToEnvelopeTime(v));
+            }
             break;
         case PARAM_VCF_SUSTAIN:
             env_vcf_->SetSustain(v / 100.0f);
+            for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; i++) {
+                allocator_.GetVoiceMutable(i).env_pitch.SetSustain(v / 100.0f);
+            }
             break;
         case PARAM_VCF_RELEASE:
             env_vcf_->SetRelease(ParameterToEnvelopeTime(v));
+            for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; i++) {
+                allocator_.GetVoiceMutable(i).env_pitch.SetRelease(ParameterToEnvelopeTime(v));
+            }
             break;
         
         // ======== Page 5: VCA Envelope ========
