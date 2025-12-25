@@ -23,6 +23,7 @@
 #include "../common/stereo_widener.h"
 #include "../common/hub_control.h"
 #include "../common/param_format.h"
+#include "../common/perf_mon.h"
 
 // Voice allocation and synthesis modes
 #include "dsp/voice_allocator.h"
@@ -447,4 +448,16 @@ private:
     void UpdateVCFParameters();
     void UpdateEnvelopeParameters();
     void UpdateLFOParameters();
+    
+    // ========================================================================
+    // Performance Monitoring (when -DPERF_MON enabled)
+    // ========================================================================
+    
+    #ifdef PERF_MON
+    uint8_t perf_voice_alloc_;    // Voice allocation & gate handling
+    uint8_t perf_dco_;            // DCO oscillator processing
+    uint8_t perf_vcf_;            // VCF filter processing
+    uint8_t perf_effects_;        // Effects (chorus, reverb)
+    uint8_t perf_render_total_;   // Total render time per buffer
+    #endif
 };

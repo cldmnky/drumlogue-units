@@ -16,6 +16,9 @@ CSRC = header.c
 CXXSRC = unit.cc
 CXXSRC += drupiter_synth.cc
 
+# Common utilities (conditionally compiled based on PERF_MON)
+# CXXSRC += ../common/perf_mon.cc  # Only when PERF_MON is defined
+
 # DSP component sources
 CXXSRC += dsp/jupiter_dco.cc
 CXXSRC += dsp/jupiter_vcf.cc
@@ -75,9 +78,15 @@ ENABLE_NEON ?= 0
 ENABLE_PITCH_ENVELOPE ?= 0
 
 # Build defines - Synthesis mode
-UDEFS = -DDRUPITER_MODE=SYNTH_MODE_$(shell echo $(DRUPITER_MODE) | tr a-z A-Z)
-UDEFS += -DPOLYPHOVoice counts (buffer allocation)
-UDEFS = -DDRUPITER_MAX_VOICES=$(DRUPITER_MAX_VOICES)
+# Enable performance monitoring via command line: ./build.sh drupiter-synth PERF_MON=1
+ifeq ($(PERF_MON),1)
+  UDEFS = -DPERF_MON
+  CXXSRC += ../common/perf_mon.cc
+else
+  UDEFS =
+endif
+
+UDEFS += -DDRUPITER_MAX_VOICES=$(DRUPITER_MAX_VOICES)
 UDEFS += -DUNISON_MAX_DETUNE=$(UNISON_MAX_DETUNE)
 
 # Feature flags - NEON always enabled for ARM (Task 2.5)

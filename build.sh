@@ -37,12 +37,26 @@ fi
 PROJECT="${1:-clouds-revfx}"
 ACTION="${2:-build}"
 
+# Parse additional arguments (e.g., PERF_MON=1)
+shift 2 2>/dev/null || shift $# 2>/dev/null
+MAKE_VARS=""
+ENV_VARS=""
+for arg in "$@"; do
+    # If arg looks like VAR=value, add it as both env var and make var
+    if [[ "$arg" =~ ^[A-Z_]+=.+$ ]]; then
+        ENV_VARS="$ENV_VARS -e $arg"
+        MAKE_VARS="$MAKE_VARS $arg"
+    fi
+done
+
 case "$ACTION" in
     clean)
         CMD="/app/commands/build --clean drumlogue/${PROJECT}"
         ;;
     *)
+        # Pass make variables directly to the SDK build command
         CMD="/app/commands/build drumlogue/${PROJECT}"
+        # We'll set them as environment variables for make to pick up
         ;;
 esac
 
@@ -81,6 +95,7 @@ chmod 777 "${OUTPUT_MOUNT}"
 
 $ENGINE run --rm --entrypoint "" \
     -e HOME=/tmp \
+    $ENV_VARS \
     -v "${SDK_PLATFORM}:/sdk-platform:ro" \
     -v "${SCRIPT_DIR}/drumlogue/${PROJECT}:/project-src:ro" \
     -v "${SCRIPT_DIR}/drumlogue/common:/project-common:ro" \

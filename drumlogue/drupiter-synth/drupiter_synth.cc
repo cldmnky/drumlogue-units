@@ -181,6 +181,16 @@ int8_t DrupiterSynth::Init(const unit_runtime_desc_t* desc) {
     // Load init preset (this will set all parameters including smoothed values)
     LoadPreset(0);
     
+    // Initialize performance monitoring (when -DPERF_MON enabled)
+    #ifdef PERF_MON
+    PERF_MON_INIT();
+    perf_voice_alloc_ = PERF_MON_REGISTER("VoiceAlloc");
+    perf_dco_ = PERF_MON_REGISTER("DCO");
+    perf_vcf_ = PERF_MON_REGISTER("VCF");
+    perf_effects_ = PERF_MON_REGISTER("Effects");
+    perf_render_total_ = PERF_MON_REGISTER("RenderTotal");
+    #endif
+    
     return 0;
 }
 
@@ -370,6 +380,10 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     }
     
     // ============ Main DSP loop - render to mix_buffer_ ============
+    #ifdef PERF_MON
+    PERF_MON_START(perf_render_total_);
+    #endif
+    
     for (uint32_t i = 0; i < frames; ++i) {
         // Process envelopes FIRST (needed for LFO rate modulation)
         vcf_env_out_ = env_vcf_->Process();
@@ -419,6 +433,15 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
 #endif
         
         // === MODE-SPECIFIC OSCILLATOR PROCESSING ===
+        #ifdef PERF_MON
+        PERF_MON_START(perf_voice_alloc_);
+        #endif
+        
+        #ifdef PERF_MON
+        PERF_MON_END(perf_voice_alloc_);
+        PERF_MON_START(perf_dco_);
+        #endif
+        
         if (current_mode_ == dsp::SYNTH_MODE_POLYPHONIC) {
             // POLYPHONIC MODE: Render and mix multiple independent voices
             mixed_ = 0.0f;
@@ -723,7 +746,17 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         if (current_preset_.params[PARAM_VCF_CUTOFF] >= 100) {
             filtered_ = hpf_out;  // Bypass LPF, but keep HPF processing
         } else {
+            #ifdef PERF_MON
+            PERF_MON_END(perf_dco_);
+            PERF_MON_START(perf_vcf_);
+            #endif
+            
             filtered_ = vcf_->Process(hpf_out);  // Process HPF output through LPF
+            
+            #ifdef PERF_MON
+            PERF_MON_END(perf_vcf_);
+            PERF_MON_START(perf_effects_);
+            #endif
             
             // Soft clip filter output to prevent resonance spikes
             if (filtered_ > 1.8f) filtered_ = 1.8f + 0.2f * (filtered_ - 1.8f);
@@ -788,7 +821,15 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
 #endif
     }
     
+    #ifdef PERF_MON
+    PERF_MON_END(perf_effects_);
+    #endif
+    
     // ============ Output stage with chorus/space effect ============
+    
+    #ifdef PERF_MON
+    PERF_MON_START(perf_effects_);
+    #endif
     
     // Sanitize buffer (remove NaN/Inf) and apply soft clamp
     drupiter::neon::SanitizeAndClamp(mix_buffer_, 1.0f, frames);
@@ -845,6 +886,11 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         out[i * 2 + 1] = right_buffer_[i] + denormal_offset;
     }
 #endif
+    
+    #ifdef PERF_MON
+    PERF_MON_END(perf_effects_);
+    PERF_MON_END(perf_render_total_);
+    #endif
 }
 
 void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
@@ -877,8 +923,15 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             
         // Page 6: MOD HUB selector and EFFECT mode
         case PARAM_MOD_HUB:
-            v = clamp_u8_int32(value, 0, MOD_NUM_DESTINATIONS - 1);  // 14 hub destinations (0-13)
+            v = clamp_u8_int32(value, 0, MOD_NUM_DESTINATIONS - 1);  // 14 hub destinations (0-17)
             mod_hub_.SetDestination(v);
+            
+            // Restore the previously stored value for this destination
+            // This allows switching between MOD HUB options and remembering each value
+            if (v < MOD_NUM_DESTINATIONS) {
+                mod_hub_.SetValue(current_preset_.hub_values[v]);
+            }
+            
             current_preset_.params[id] = v;
             return;  // Hub handles its own state
             
@@ -887,14 +940,16 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             v = clamp_u8_int32(value, 0, 100);
             mod_hub_.SetValue(v);  // Hub will clamp to destination's actual range
             
-            // Get the actual clamped value from the hub (not our 0-100 clamp!)
-            // This is critical for string params like S.MODE (0-2) and UNI DET (0-50)
+            // Store the ORIGINAL UI value (0-100), not the clamped value
+            // This is critical for proper restoration when switching destinations
             {
                 uint8_t dest = current_preset_.params[PARAM_MOD_HUB];
                 if (dest < MOD_NUM_DESTINATIONS) {
-                    // Get the actual value after hub's range clamping
+                    // Store original 0-100 value for restoration later
+                    current_preset_.hub_values[dest] = v;  // Store original, not clamped
+                    
+                    // Get the actual clamped value from the hub for DSP use
                     int32_t actual_value = mod_hub_.GetValue(dest);
-                    current_preset_.hub_values[dest] = actual_value;
                     
                     // Apply specific destinations to DSP components immediately
                     switch (dest) {

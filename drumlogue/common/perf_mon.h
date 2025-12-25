@@ -27,6 +27,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdio>
 
 namespace dsp {
 
@@ -42,6 +43,17 @@ struct PerfCounter {
     uint32_t frame_count;
     uint32_t peak_cycles;
     uint32_t min_cycles;
+};
+
+/**
+ * @brief Performance counter statistics (exported)
+ */
+struct PerfStats {
+    const char* name;
+    uint32_t average_cycles;
+    uint32_t peak_cycles;
+    uint32_t min_cycles;
+    uint32_t frame_count;
 };
 
 /**
@@ -186,6 +198,103 @@ class PerfMon {
         }
     }
     
+    /**
+     * @brief Export statistics for a single counter
+     * @param counter_id ID from RegisterCounter()
+     * @return PerfStats structure with exported data
+     */
+    static PerfStats GetStats(uint8_t counter_id) {
+        PerfStats stats = {};
+        if (counter_id >= counter_count_) {
+            return stats;
+        }
+        
+        const PerfCounter& c = counters_[counter_id];
+        stats.name = c.name;
+        stats.average_cycles = (c.frame_count > 0) ? (c.total_cycles / c.frame_count) : 0;
+        stats.peak_cycles = c.peak_cycles;
+        stats.min_cycles = (c.frame_count > 0) ? c.min_cycles : 0;
+        stats.frame_count = c.frame_count;
+        return stats;
+    }
+    
+    /**
+     * @brief Export all counter statistics
+     * @param out_stats Array to receive PerfStats (must be >= GetCounterCount() size)
+     * @param max_count Maximum entries in out_stats array
+     * @return Number of counters exported
+     */
+    static uint8_t ExportAllStats(PerfStats* out_stats, uint8_t max_count) {
+        if (!out_stats || max_count == 0) {
+            return 0;
+        }
+        
+        uint8_t count = (counter_count_ < max_count) ? counter_count_ : max_count;
+        for (uint8_t i = 0; i < count; i++) {
+            out_stats[i] = GetStats(i);
+        }
+        return count;
+    }
+    
+    /**
+     * @brief Format counter stats as a string
+     * @param counter_id Counter to format
+     * @param buffer Output buffer
+     * @param buf_size Buffer size
+     * @return Number of bytes written to buffer
+     * 
+     * Example output: "Oscillator: avg=1250 peak=1340 min=1200 (48000 meas)"
+     */
+    static int FormatStats(uint8_t counter_id, char* buffer, size_t buf_size) {
+        if (!buffer || buf_size == 0 || counter_id >= counter_count_) {
+            return 0;
+        }
+        
+        PerfStats stats = GetStats(counter_id);
+        return snprintf(buffer, buf_size, "%s: avg=%u peak=%u min=%u (%u meas)",
+                        stats.name, stats.average_cycles, stats.peak_cycles,
+                        stats.min_cycles, stats.frame_count);
+    }
+    
+    /**
+     * @brief Print all performance statistics to stdout
+     * (Useful for debugging via printf)
+     */
+    static void PrintAllStats() {
+        printf("\n=== Performance Monitoring Statistics ===\n");
+        for (uint8_t i = 0; i < counter_count_; i++) {
+            PerfStats stats = GetStats(i);
+            printf("  %s: avg=%u peak=%u min=%u (%u measurements)\n",
+                   stats.name, stats.average_cycles, stats.peak_cycles,
+                   stats.min_cycles, stats.frame_count);
+        }
+        printf("=========================================\n\n");
+    }
+    
+    /**
+     * @brief Calculate total average cycles across all counters
+     * @return Sum of average cycles for all active counters
+     */
+    static uint32_t GetTotalAverageCycles() {
+        uint32_t total = 0;
+        for (uint8_t i = 0; i < counter_count_; i++) {
+            total += GetStats(i).average_cycles;
+        }
+        return total;
+    }
+    
+    /**
+     * @brief Calculate total peak cycles across all counters
+     * @return Sum of peak cycles for all active counters
+     */
+    static uint32_t GetTotalPeakCycles() {
+        uint32_t total = 0;
+        for (uint8_t i = 0; i < counter_count_; i++) {
+            total += GetStats(i).peak_cycles;
+        }
+        return total;
+    }
+ 
  private:
     static PerfCounter counters_[kMaxCounters];
     static uint8_t counter_count_;
@@ -202,9 +311,8 @@ class PerfMon {
     }
 };
 
-// Static member initialization
-inline PerfCounter PerfMon::counters_[PerfMon::kMaxCounters];
-inline uint8_t PerfMon::counter_count_ = 0;
+// Helper to access static members via function
+// NOTE: Out-of-class definitions removed - using function-local statics instead
 
 // Macro API for convenient use
 #define PERF_MON_INIT() \
@@ -237,6 +345,25 @@ inline uint8_t PerfMon::counter_count_ = 0;
 #define PERF_MON_RESET() \
     ::dsp::PerfMon::Reset()
 
+// Data export macros
+#define PERF_MON_GET_STATS(id) \
+    ::dsp::PerfMon::GetStats(id)
+
+#define PERF_MON_EXPORT_ALL(out_stats, max_count) \
+    ::dsp::PerfMon::ExportAllStats(out_stats, max_count)
+
+#define PERF_MON_FORMAT_STATS(id, buf, size) \
+    ::dsp::PerfMon::FormatStats(id, buf, size)
+
+#define PERF_MON_PRINT_ALL() \
+    ::dsp::PerfMon::PrintAllStats()
+
+#define PERF_MON_TOTAL_AVG() \
+    ::dsp::PerfMon::GetTotalAverageCycles()
+
+#define PERF_MON_TOTAL_PEAK() \
+    ::dsp::PerfMon::GetTotalPeakCycles()
+
 #else  // PERF_MON not defined - compile to nothing
 
 // Empty stubs when performance monitoring is disabled
@@ -250,6 +377,12 @@ inline uint8_t PerfMon::counter_count_ = 0;
 #define PERF_MON_GET_FRAMES(id) 0
 #define PERF_MON_GET_NAME(id) ""
 #define PERF_MON_RESET() do {} while(0)
+#define PERF_MON_GET_STATS(id) (PerfStats{})
+#define PERF_MON_EXPORT_ALL(out_stats, max_count) 0
+#define PERF_MON_FORMAT_STATS(id, buf, size) 0
+#define PERF_MON_PRINT_ALL() do {} while(0)
+#define PERF_MON_TOTAL_AVG() 0
+#define PERF_MON_TOTAL_PEAK() 0
 
 #endif  // PERF_MON
 
