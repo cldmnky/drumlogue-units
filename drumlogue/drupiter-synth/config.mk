@@ -80,15 +80,10 @@ UDEFS += -DPOLYPHOVoice counts (buffer allocation)
 UDEFS = -DDRUPITER_MAX_VOICES=$(DRUPITER_MAX_VOICES)
 UDEFS += -DUNISON_MAX_DETUNE=$(UNISON_MAX_DETUNE)
 
-# Feature flags
-ifeq ($(ENABLE_NEON),1)
+# Feature flags - NEON always enabled for ARM (Task 2.5)
 UDEFS += -DUSE_NEON
 UDEFS += -mfpu=neon
-endif
-
-ifeq ($(ENABLE_PITCH_ENVELOPE),1)
-UDEFS += -DENABLE_PITCH_ENVELOPE
-endif
+UDEFS += -mfloat-abi=hard
 
 # Enable PolyBLEP anti-aliasing
 UDEFS += -DENABLE_POLYBLEP

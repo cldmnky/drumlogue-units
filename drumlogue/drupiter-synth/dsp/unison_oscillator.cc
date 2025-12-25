@@ -8,8 +8,17 @@
  */
 
 #include "unison_oscillator.h"
+#include "../common/dsp_utils.h"
 #include <cmath>
 #include <cstring>
+
+// Enable USE_NEON for ARM NEON optimizations
+#ifdef __ARM_NEON
+#define USE_NEON 1
+#endif
+
+#define NEON_DSP_NS drupiter
+#include "../common/neon_dsp.h"
 
 namespace dsp {
 
