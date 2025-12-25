@@ -16,6 +16,16 @@
  * };
  * HubControl<8> mod_hub{kModDests};
  * @endcode
+ *
+ * Usage notes:
+ * 1. Populate each {@link Destination} so the hub knows how to clamp and format values.
+ * 2. Call {@link SetDestination} when the selector parameter changes (e.g., user picks a new MOD target).
+ * 3. Feed raw 0–100 slider values from the UI into {@link SetValue}. The hub stores the UI intent and
+ *    converts it to the destination-specific range (visible via {@link GetValue}).
+ * 4. Use {@link GetValueString} when rendering the parameter value; the returned pointer is stable and safe
+ *    to cache, which prevents screen flicker.
+ * 5. In DSP code, read {@link GetValue} or {@link GetCurrentValue} to obtain the clamped value for the
+ *    currently selected destination, or {@link GetValue} with a destination index for others.
  */
 
 #pragma once
@@ -58,6 +68,7 @@ class HubStringCache {
     static const char* ptrs[16][128];     // [cache_idx][value_idx]
     static int cache_count = 0;
     
+    const char* safe_unit = (unit != nullptr) ? unit : "";
     // Cache metadata
     struct CacheKey {
       int32_t min, max;
@@ -75,7 +86,7 @@ class HubStringCache {
     for (int i = 0; i < cache_count; i++) {
       if (keys[i].min == min && keys[i].max == max && 
           keys[i].bipolar == bipolar &&
-          strcmp(keys[i].unit, unit) == 0) {
+          strcmp(keys[i].unit, safe_unit) == 0) {
         return ptrs[i];
       }
     }
@@ -89,7 +100,7 @@ class HubStringCache {
     keys[idx].min = min;
     keys[idx].max = max;
     keys[idx].bipolar = bipolar;
-    strncpy(keys[idx].unit, unit, 3);
+    strncpy(keys[idx].unit, safe_unit, 3);
     keys[idx].unit[3] = '\0';
     
     // Generate strings
@@ -145,7 +156,6 @@ class HubControl {
     : destinations_(destinations), current_dest_(0) {
     // Initialize all values to defaults
     for (uint8_t i = 0; i < NUM_DESTINATIONS; i++) {
-      values_[i] = destinations[i].default_value;
       original_values_[i] = destinations[i].default_value;
       clamped_values_[i] = destinations[i].default_value;
     }
@@ -302,7 +312,11 @@ class HubControl {
         int32_t range = d.max - d.min;
         int32_t center = d.min + range / 2;
         int32_t offset = value - center;
-        int32_t percent = (offset * 100) / (range / 2);
+        int32_t half_range = range / 2;
+        if (half_range == 0) {
+          half_range = 1;
+        }
+        int32_t percent = (offset * 100) / half_range;
         snprintf(buffer, buf_size, "%+d%s", percent, d.value_unit);
       } else {
         snprintf(buffer, buf_size, "%d%s", (int)value, d.value_unit);
@@ -318,13 +332,70 @@ class HubControl {
    */
   void Reset() {
     for (uint8_t i = 0; i < NUM_DESTINATIONS; i++) {
-      values_[i] = destinations_[i].default_value;
       original_values_[i] = destinations_[i].default_value;
       clamped_values_[i] = destinations_[i].default_value;
     }
     current_dest_ = 0;
   }
   
+  /**
+   * @brief Get normalized float value [0.0, 1.0] for unipolar destinations
+   * 
+   * For destinations with 0-100 range and unipolar display.
+   * Typical use: amplitude/depth modulations that range from 0 to full effect.
+   * 
+   * @param dest Destination index
+   * @return Clamped value divided by 100.0f, returns 0.0f if dest invalid
+   * 
+   * @code
+   * float lfo_depth = hub.GetValueNormalizedUnipolar(MOD_LFO_TO_PWM);  // 0.0 to 1.0
+   * @endcode
+   */
+  float GetValueNormalizedUnipolar(uint8_t dest) const {
+    if (dest >= NUM_DESTINATIONS) return 0.0f;
+    return static_cast<float>(GetValue(dest)) / 100.0f;
+  }
+
+  /**
+   * @brief Get normalized float value [-1.0, +1.0] for bipolar destinations
+   * 
+   * For destinations with 0-100 range but bipolar display (center=50).
+   * Typical use: pitch modulations, filter FM, which can go up or down.
+   * 
+   * Conversion: (value - 50) / 50.0f yields [-1.0, +1.0] with center=0.0
+   * 
+   * @param dest Destination index
+   * @return (clamped_value - 50) / 50.0f, returns 0.0f if dest invalid
+   * 
+   * @code
+   * float env_fm = hub.GetValueNormalizedBipolar(MOD_ENV_TO_VCF);  // -1.0 to +1.0
+   * @endcode
+   */
+  float GetValueNormalizedBipolar(uint8_t dest) const {
+    if (dest >= NUM_DESTINATIONS) return 0.0f;
+    int32_t val = static_cast<int32_t>(GetValue(dest));
+    return static_cast<float>(val - 50) / 50.0f;
+  }
+
+  /**
+   * @brief Get scaled bipolar value [-scale, +scale]
+   * 
+   * Convenience method for bipolar destinations that need range scaling.
+   * Equivalent to GetValueNormalizedBipolar(dest) × scale_factor.
+   * 
+   * @param dest Destination index
+   * @param scale_factor Multiplier (e.g., 12.0f for semitones, 100.0f for cents)
+   * @return Normalized bipolar value × scale_factor, returns 0.0f if dest invalid
+   * 
+   * @code
+   * float pitch_mod = hub.GetValueScaledBipolar(MOD_ENV_TO_PITCH, 12.0f);  // ±12 semitones
+   * float detune = hub.GetValueScaledBipolar(MOD_LFO_DETUNE, 50.0f);       // ±50 cents
+   * @endcode
+   */
+  float GetValueScaledBipolar(uint8_t dest, float scale_factor) const {
+    return GetValueNormalizedBipolar(dest) * scale_factor;
+  }
+
   /**
    * @brief Get number of destinations
    * @return NUM_DESTINATIONS
@@ -335,7 +406,6 @@ class HubControl {
   
  private:
   const Destination* destinations_;        ///< Destination descriptors
-  int32_t values_[NUM_DESTINATIONS];       ///< Legacy: kept for compatibility
   int32_t original_values_[NUM_DESTINATIONS];  ///< Original 0-100 values from UI
   int32_t clamped_values_[NUM_DESTINATIONS];   ///< Clamped to destination's range
   uint8_t current_dest_;                   ///< Currently selected destination index

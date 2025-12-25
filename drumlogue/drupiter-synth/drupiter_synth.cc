@@ -268,26 +268,26 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     const float xmod_depth = xmod_depth_;  // Set via PARAM_XMOD in SetParameter
     
     // === Read MOD HUB values ===
-    const float lfo_pwm_depth = mod_hub_.GetValue(MOD_LFO_TO_PWM) / 100.0f;
-    const float lfo_vcf_depth = mod_hub_.GetValue(MOD_LFO_TO_VCF) / 100.0f;
-    const float lfo_vco_depth = mod_hub_.GetValue(MOD_LFO_TO_VCO) / 100.0f;
-    const float env_pwm_depth = mod_hub_.GetValue(MOD_ENV_TO_PWM) / 100.0f;
-    // ENV→VCF is bipolar: 0-100 maps to -1.0 to +1.0 (50 = center/zero)
-    const float env_vcf_depth = (static_cast<int32_t>(mod_hub_.GetValue(MOD_ENV_TO_VCF)) - 50) / 50.0f;
+    // Unipolar destinations (0 to 1.0)
+    const float lfo_pwm_depth = mod_hub_.GetValueNormalizedUnipolar(MOD_LFO_TO_PWM);
+    const float lfo_vcf_depth = mod_hub_.GetValueNormalizedUnipolar(MOD_LFO_TO_VCF);
+    const float lfo_vco_depth = mod_hub_.GetValueNormalizedUnipolar(MOD_LFO_TO_VCO);
+    const float env_pwm_depth = mod_hub_.GetValueNormalizedUnipolar(MOD_ENV_TO_PWM);
+    // Bipolar destinations (-1.0 to +1.0)
+    const float env_vcf_depth = mod_hub_.GetValueNormalizedBipolar(MOD_ENV_TO_VCF);
     const uint8_t hpf_cutoff = mod_hub_.GetValue(MOD_HPF);
     const uint8_t vcf_type = mod_hub_.GetValue(MOD_VCF_TYPE);
     const uint8_t lfo_delay = mod_hub_.GetValue(MOD_LFO_DELAY);
     const uint8_t lfo_wave = mod_hub_.GetValue(MOD_LFO_WAVE);
     
     // New modulation features
-    const float lfo_env_amt = mod_hub_.GetValue(MOD_LFO_ENV_AMT) / 100.0f;    // ENV modulates LFO rate
-    const float vca_level = mod_hub_.GetValue(MOD_VCA_LEVEL) / 100.0f;        // VCA output level
-    const float vca_lfo_depth = mod_hub_.GetValue(MOD_VCA_LFO) / 100.0f;      // LFO->VCA tremolo
-    const float vca_kybd = mod_hub_.GetValue(MOD_VCA_KYBD) / 100.0f;          // VCA keyboard tracking
+    const float lfo_env_amt = mod_hub_.GetValueNormalizedUnipolar(MOD_LFO_ENV_AMT);
+    const float vca_level = mod_hub_.GetValueNormalizedUnipolar(MOD_VCA_LEVEL);
+    const float vca_lfo_depth = mod_hub_.GetValueNormalizedUnipolar(MOD_VCA_LFO);
+    const float vca_kybd = mod_hub_.GetValueNormalizedUnipolar(MOD_VCA_KYBD);
     
-    // Phase 2: Pitch envelope modulation (ENV→PIT)
-    // Bipolar: 0-100 maps to -12 to +12 semitones (50 = center/zero)
-    const float env_pitch_depth = (static_cast<int32_t>(mod_hub_.GetValue(MOD_ENV_TO_PITCH)) - 50) / 50.0f * 12.0f;  // ±12 semitones
+    // Phase 2: Pitch envelope modulation (ENV→PIT), bipolar scaled by 12 semitones
+    const float env_pitch_depth = mod_hub_.GetValueScaledBipolar(MOD_ENV_TO_PITCH, 12.0f);
     
     // Synthesis mode selection (Hoover v2.0) - read from MOD HUB
     const uint8_t synth_mode_value = mod_hub_.GetValue(MOD_SYNTH_MODE);
