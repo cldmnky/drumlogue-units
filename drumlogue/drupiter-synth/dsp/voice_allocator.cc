@@ -353,15 +353,12 @@ Voice* VoiceAllocator::StealRoundRobinVoice() {
 }
 
 void VoiceAllocator::TriggerVoice(Voice* voice, uint8_t note, uint8_t velocity) {
-    voice->active = true;
-    voice->midi_note = note;
-    voice->velocity = common::MidiHelper::VelocityToFloat(velocity);
     float target_hz = common::MidiHelper::NoteToFreq(note);
-    voice->note_on_time = timestamp_;
     
     // Task 2.2.4: Portamento/glide logic
-    if (portamento_time_ms_ > 0.01f && voice->pitch_hz > 0.0f) {
-        // Enable glide if portamento time is set and voice has previous pitch
+    // Only glide if voice is already active (legato/retrigger), not on fresh note starts
+    if (portamento_time_ms_ > 0.01f && voice->active && voice->pitch_hz > 0.0f) {
+        // Enable glide - voice is already playing, glide to new pitch
         voice->glide_target_hz = target_hz;
         voice->is_gliding = true;
         
@@ -371,12 +368,18 @@ void VoiceAllocator::TriggerVoice(Voice* voice, uint8_t note, uint8_t velocity) 
         float portamento_time_sec = portamento_time_ms_ / 1000.0f;
         voice->glide_increment = log_ratio / (portamento_time_sec * sample_rate_);
     } else {
-        // No glide - jump immediately to target
+        // No glide - jump immediately to target (new note or portamento off)
         voice->pitch_hz = target_hz;
         voice->glide_target_hz = target_hz;
         voice->is_gliding = false;
         voice->glide_increment = 0.0f;
     }
+    
+    // Update voice state after glide calculation
+    voice->active = true;
+    voice->midi_note = note;
+    voice->velocity = common::MidiHelper::VelocityToFloat(velocity);
+    voice->note_on_time = timestamp_;
     
 #ifdef DEBUG
     int voice_idx = voice - voices_;
