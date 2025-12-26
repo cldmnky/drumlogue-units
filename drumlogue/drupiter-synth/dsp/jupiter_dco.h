@@ -32,8 +32,9 @@ public:
         WAVEFORM_SQUARE = 1,    // Square wave (50% duty)
         WAVEFORM_PULSE = 2,     // Pulse wave (variable width)
         WAVEFORM_TRIANGLE = 3,  // Triangle wave
-        WAVEFORM_SINE = 4,      // Sine wave
-        WAVEFORM_NOISE = 5      // White noise
+        WAVEFORM_SAW_PWM = 4,   // PWM Sawtooth (Hoover sound) - NEW!
+        WAVEFORM_SINE = 5,      // Sine wave (moved from 4)
+        WAVEFORM_NOISE = 6      // White noise (moved from 5)
     };
 
     /**

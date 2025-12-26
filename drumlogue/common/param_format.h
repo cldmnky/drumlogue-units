@@ -83,7 +83,7 @@ class ParamFormat {
                                   int32_t min, int32_t max) {
     int32_t center = (min + max) / 2;
     int32_t offset = value - center;
-    int32_t range = (max - min) / 2;
+    (void)(max - min);  // Suppress unused variable warning; range available for future use
     // Map to -range to +range
     int32_t bipolar = offset;
     snprintf(buf, size, "%+d", bipolar);

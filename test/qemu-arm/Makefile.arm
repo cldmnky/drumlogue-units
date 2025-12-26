@@ -8,6 +8,13 @@ CXX := arm-linux-gnueabihf-g++
 # Compiler flags
 CFLAGS := -std=c11 -O2 -Wall -Wextra -g
 CXXFLAGS := -std=c++17 -O2 -Wall -Wextra -g
+
+# Optional PERF_MON support (passed from command line)
+ifeq ($(PERF_MON),1)
+  CFLAGS += -DPERF_MON
+  CXXFLAGS += -DPERF_MON
+endif
+
 LDFLAGS := -lsndfile -ldl -lm -pthread
 
 # Source files

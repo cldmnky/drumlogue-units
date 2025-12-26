@@ -44,6 +44,7 @@ typedef struct {
     uint8_t channels;           // Number of channels (1=mono, 2=stereo)
     bool verbose;               // Verbose logging
     bool profile;               // Enable CPU profiling
+    bool perf_mon;              // Enable PERF_MON output (requires unit built with PERF_MON=1)
 } unit_host_config_t;
 
 /**
