@@ -921,7 +921,6 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             break;
         case PARAM_DCO2_WAVE:
             v = clamp_u8_int32(value, 0, 4);  // 0-4: SAW/NSE/PUL/SIN/SAW_PWM
-            v = clamp_u8_int32(value, 0, 3);
             break;
         case PARAM_SYNC:
             v = clamp_u8_int32(value, 0, 2);
