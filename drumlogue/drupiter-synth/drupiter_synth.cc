@@ -82,7 +82,8 @@ inline uint8_t scale_127_centered_to_100(uint8_t v, uint8_t center_127, uint8_t 
 }  // namespace
 
 DrupiterSynth::DrupiterSynth()
-    : dco1_(nullptr)
+    : allocator_()
+    , dco1_(nullptr)
     , dco2_(nullptr)
     , vcf_(nullptr)
     , lfo_(nullptr)
@@ -90,8 +91,17 @@ DrupiterSynth::DrupiterSynth()
     , env_vca_(nullptr)
     , sample_rate_(48000.0f)
     , current_mode_(dsp::SYNTH_MODE_MONOPHONIC)
+    , gate_(false)
+    , current_note_(0)
+    , current_velocity_(0)
+    , current_freq_hz_(440.0f)
+    , current_preset_()
+    , current_preset_idx_(0)
     , sync_mode_(0)
     , xmod_depth_(0.0f)
+    , mod_hub_(kModDestinations)  // Initialize HubControl
+    , mod_value_str_()
+    , effect_mode_(0)  // CHORUS by default
     , dco1_out_(0.0f)
     , dco2_out_(0.0f)
     , noise_out_(0.0f)
@@ -107,9 +117,6 @@ DrupiterSynth::DrupiterSynth()
     , dco1_level_smooth_(nullptr)
     , dco2_level_smooth_(nullptr)
     , last_cutoff_hz_(1000.0f)
-    , mod_hub_(kModDestinations)  // Initialize HubControl
-    , effect_mode_(0)  // CHORUS by default
-    , current_preset_idx_(0)
     , hpf_prev_output_(0.0f)
     , hpf_prev_input_(0.0f)
 {

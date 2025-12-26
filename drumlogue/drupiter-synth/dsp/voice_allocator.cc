@@ -49,13 +49,14 @@ void Voice::Reset() {
 // ============================================================================
 
 VoiceAllocator::VoiceAllocator()
-    : mode_(SYNTH_MODE_MONOPHONIC)
-    , max_voices_(DRUPITER_MAX_VOICES)
+    : max_voices_(DRUPITER_MAX_VOICES)
     , active_voices_(0)
-    , allocation_strategy_(ALLOC_ROUND_ROBIN)
     , round_robin_index_(0)
     , timestamp_(0)
-    , num_active_voices_(0)  // Phase 1: Initialize active voice tracking (before unison_detune_cents_)
+    , active_voice_list_()
+    , num_active_voices_(0)  // Phase 1: Initialize active voice tracking
+    , mode_(SYNTH_MODE_MONOPHONIC)
+    , allocation_strategy_(ALLOC_ROUND_ROBIN)
     , unison_detune_cents_(10.0f)  // Default 10 cents detune
     , portamento_time_ms_(0.0f)    // Task 2.2.4: Default no glide
     , sample_rate_(48000.0f) {     // Task 2.2.4: Default sample rate
@@ -223,7 +224,7 @@ void VoiceAllocator::AllNotesOff() {
 // Render Methods (called by drupiter_synth.cc)
 // ============================================================================
 
-void VoiceAllocator::RenderMonophonic(float* left, float* right, uint32_t frames, const float* params) {
+void VoiceAllocator::RenderMonophonic(float* left, float* right, uint32_t frames, const float* /*params*/) {
     Voice& voice = voices_[0];
     
     // Early exit if voice inactive (saves CPU)
@@ -239,7 +240,7 @@ void VoiceAllocator::RenderMonophonic(float* left, float* right, uint32_t frames
     memset(right, 0, frames * sizeof(float));
 }
 
-void VoiceAllocator::RenderPolyphonic(float* left, float* right, uint32_t frames, const float* params) {
+void VoiceAllocator::RenderPolyphonic(float* left, float* right, uint32_t frames, const float* /*params*/) {
     // Zero output buffers
     memset(left, 0, frames * sizeof(float));
     memset(right, 0, frames * sizeof(float));
@@ -274,7 +275,7 @@ void VoiceAllocator::RenderPolyphonic(float* left, float* right, uint32_t frames
     }
 }
 
-void VoiceAllocator::RenderUnison(float* left, float* right, uint32_t frames, const float* params) {
+void VoiceAllocator::RenderUnison(float* left, float* right, uint32_t frames, const float* /*params*/) {
     // Unison mode: Use UnisonOscillator for multi-voice detuned stack
     // All voices trigger simultaneously and use the unison oscillator
     
@@ -294,8 +295,7 @@ void VoiceAllocator::RenderUnison(float* left, float* right, uint32_t frames, co
         return;
     }
     
-    // Use voice 0's settings for the unison oscillator
-    Voice& lead_voice = voices_[0];
+    // Use voice 0 for the unison oscillator (currently unused in placeholder)
     
     // Process frame by frame using unison oscillator
     for (uint32_t i = 0; i < frames; i++) {
