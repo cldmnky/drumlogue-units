@@ -19,7 +19,6 @@
 #include "../common/smoothed_value.h"
 #include <cmath>
 #include <cstring>
-#include <cstring>
 #include <cstdio>
 
 #ifdef USE_NEON
