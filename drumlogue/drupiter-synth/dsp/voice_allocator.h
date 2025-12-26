@@ -22,6 +22,7 @@
 #include "jupiter_vcf.h"
 #include "jupiter_env.h"
 #include "unison_oscillator.h"
+#include "../common/midi_helper.h"
 
 // Default voice counts (compile-time for buffer allocation)
 #ifndef POLYPHONIC_VOICES
@@ -205,17 +206,7 @@ private:
     VoiceAllocator& operator=(const VoiceAllocator&) = delete;
 };
 
-// Utility functions for MIDI to frequency conversion
-inline float MidiNoteToHz(uint8_t note) {
-    // A4 (MIDI note 69) = 440 Hz
-    // f = 440 * 2^((n-69)/12)
-    return 440.0f * powf(2.0f, (note - 69) / 12.0f);
-}
-
-inline float MidiNoteToCV(uint8_t note) {
-    // CV standard: 1V/octave, C4 (MIDI note 60) = 0V
-    // CV = (note - 60) / 12.0
-    return (note - 60) / 12.0f;
-}
-
 }  // namespace dsp
+
+// Use common MIDI utilities
+using common::MidiHelper;
