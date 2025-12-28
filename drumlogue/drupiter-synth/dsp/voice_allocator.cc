@@ -14,6 +14,14 @@
 #include <cstring>
 #include <algorithm>
 
+// Enable USE_NEON for ARM NEON optimizations
+#ifdef __ARM_NEON
+#define USE_NEON 1
+#endif
+
+#define NEON_DSP_NS drupiter
+#include "../../common/neon_dsp.h"
+
 namespace dsp {
 
 // ============================================================================
@@ -229,21 +237,18 @@ void VoiceAllocator::RenderMonophonic(float* left, float* right, uint32_t frames
     
     // Early exit if voice inactive (saves CPU)
     if (!voice.active && !voice.env_amp.IsActive()) {
-        memset(left, 0, frames * sizeof(float));
-        memset(right, 0, frames * sizeof(float));
+        drupiter::neon::ClearStereoBuffers(left, right, frames);
         return;
     }
     
     // Placeholder: Actual DSP rendering will be implemented in drupiter_synth.cc
     // This just clears the buffers for now
-    memset(left, 0, frames * sizeof(float));
-    memset(right, 0, frames * sizeof(float));
+    drupiter::neon::ClearStereoBuffers(left, right, frames);
 }
 
 void VoiceAllocator::RenderPolyphonic(float* left, float* right, uint32_t frames, const float* /*params*/) {
-    // Zero output buffers
-    memset(left, 0, frames * sizeof(float));
-    memset(right, 0, frames * sizeof(float));
+    // Zero output buffers using NEON-optimized function
+    drupiter::neon::ClearStereoBuffers(left, right, frames);
     
     // Phase 1 optimization: Only iterate active voices, not all max_voices_
     // This reduces per-frame voice checks from 8 to typically 1-3 active voices
@@ -290,8 +295,7 @@ void VoiceAllocator::RenderUnison(float* left, float* right, uint32_t frames, co
     
     if (!any_active) {
         // No active voices - silence
-        memset(left, 0, frames * sizeof(float));
-        memset(right, 0, frames * sizeof(float));
+        drupiter::neon::ClearStereoBuffers(left, right, frames);
         return;
     }
     

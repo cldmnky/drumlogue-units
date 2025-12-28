@@ -294,25 +294,25 @@ public:
     
     /**
      * @brief Load preset
-     * @param preset_id Preset index (0-5)
+     * @param preset_id Preset index (0-11)
      */
     void LoadPreset(uint8_t preset_id);
     
     /**
      * @brief Save current state to preset
-     * @param preset_id Preset index (0-5)
+     * @param preset_id Preset index (0-11)
      */
     void SavePreset(uint8_t preset_id);
     
     /**
      * @brief Get current preset index
-     * @return Current preset index (0-5)
+     * @return Current preset index (0-11)
      */
     uint8_t GetPresetIndex() const { return current_preset_idx_; }
     
     /**
      * @brief Get preset name
-     * @param preset_id Preset index (0-5)
+     * @param preset_id Preset index (0-11)
      * @return Preset name
      */
     const char* GetPresetName(uint8_t preset_id) const;

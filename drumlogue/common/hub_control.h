@@ -8,6 +8,11 @@
  *
  * This allows N parameters to be controlled with just 2 UI slots.
  * 
+ * **Catch Behavior**: When you set a value for a destination, that modulation
+ * value is "caught" and preserved. When switching to another destination that
+ * has been caught, the hub value automatically adjusts to maintain the same
+ * modulation output, preventing sudden jumps.
+ * 
  * Example usage:
  * @code
  * static constexpr HubControl<8>::Destination kModDests[] = {
@@ -26,6 +31,8 @@
  *    to cache, which prevents screen flicker.
  * 5. In DSP code, read {@link GetValue} or {@link GetCurrentValue} to obtain the clamped value for the
  *    currently selected destination, or {@link GetValue} with a destination index for others.
+ * 6. **Catch behavior**: Once you set a value for a destination, switching to it later will maintain
+ *    that modulation level by automatically adjusting the hub value.
  */
 
 #pragma once
@@ -132,6 +139,9 @@ class HubStringCache {
  * 
  * Template parameter NUM_DESTINATIONS specifies how many destinations
  * this hub can control (typically 4-8).
+ * 
+ * Supports "catch" behavior: when switching destinations, the modulation
+ * value is preserved by adjusting the hub value to maintain the same output.
  */
 template<uint8_t NUM_DESTINATIONS>
 class HubControl {
@@ -159,22 +169,58 @@ class HubControl {
     for (uint8_t i = 0; i < NUM_DESTINATIONS; i++) {
       original_values_[i] = destinations[i].default_value;
       clamped_values_[i] = destinations[i].default_value;
+      caught_values_[i] = destinations[i].default_value;
+      caught_[i] = false;
     }
   }
   
   /**
    * @brief Set which destination is selected
    * @param dest Destination index (0 to NUM_DESTINATIONS-1)
+   * 
+   * Implements "catch" behavior: if the new destination has a caught value,
+   * the hub value is adjusted to maintain the same modulation output.
    */
   void SetDestination(uint8_t dest) {
-    if (dest < NUM_DESTINATIONS) {
-      current_dest_ = dest;
+    if (dest >= NUM_DESTINATIONS || dest == current_dest_) return;
+    
+    current_dest_ = dest;
+    
+    // If new destination has been caught, adjust hub value to match caught modulation
+    if (caught_[dest]) {
+      // Calculate what hub value (0-100) would produce the caught modulation value
+      const Destination& new_dest = destinations_[dest];
+      int32_t caught_mod = caught_values_[dest];
+      
+      // Clamp caught value to destination's valid range
+      if (caught_mod < new_dest.min) caught_mod = new_dest.min;
+      if (caught_mod > new_dest.max) caught_mod = new_dest.max;
+      
+      // Convert back to 0-100 hub value
+      int32_t range = new_dest.max - new_dest.min;
+      int32_t hub_value;
+      if (range > 0) {
+        hub_value = static_cast<int32_t>(((caught_mod - new_dest.min) * 100.0f) / range + 0.5f);
+      } else {
+        hub_value = 0;
+      }
+      
+      // Clamp to 0-100
+      if (hub_value < 0) hub_value = 0;
+      if (hub_value > 100) hub_value = 100;
+      
+      // Update the hub value and clamped value
+      original_values_[dest] = hub_value;
+      clamped_values_[dest] = caught_mod;
     }
   }
   
   /**
    * @brief Set value for current destination
    * @param value New value in 0-100 range (from UI)
+   * 
+   * Setting a value "catches" the destination, preserving its modulation
+   * output when switching to other destinations.
    */
   void SetValue(int32_t value) {
     // Store normalized 0-100 value (from UI)
@@ -199,12 +245,19 @@ class HubControl {
     if (clamped > dest.max) clamped = dest.max;
     
     clamped_values_[current_dest_] = clamped;
+    
+    // Mark this destination as caught with its current modulation value
+    caught_values_[current_dest_] = clamped;
+    caught_[current_dest_] = true;
   }
   
   /**
    * @brief Set value for specific destination (direct access)
    * @param dest Destination index
    * @param value New value in 0-100 range (from UI)
+   * 
+   * Setting a value "catches" the destination, preserving its modulation
+   * output when switching to other destinations.
    */
   void SetValueForDest(uint8_t dest, int32_t value) {
     if (dest >= NUM_DESTINATIONS) return;
@@ -228,6 +281,10 @@ class HubControl {
     if (clamped > d.max) clamped = d.max;
     
     clamped_values_[dest] = clamped;
+    
+    // Mark this destination as caught with its current modulation value
+    caught_values_[dest] = clamped;
+    caught_[dest] = true;
   }
   
   /**
@@ -339,11 +396,15 @@ class HubControl {
   
   /**
    * @brief Reset all values to defaults
+   * 
+   * Clears all caught states, returning to default behavior.
    */
   void Reset() {
     for (uint8_t i = 0; i < NUM_DESTINATIONS; i++) {
       original_values_[i] = destinations_[i].default_value;
       clamped_values_[i] = destinations_[i].default_value;
+      caught_values_[i] = destinations_[i].default_value;
+      caught_[i] = false;
     }
     current_dest_ = 0;
   }
@@ -426,10 +487,46 @@ class HubControl {
     return NUM_DESTINATIONS;
   }
   
+  /**
+   * @brief Check if a destination has been caught
+   * @param dest Destination index
+   * @return True if the destination has a preserved modulation value
+   */
+  bool IsCaught(uint8_t dest) const {
+    return (dest < NUM_DESTINATIONS) ? caught_[dest] : false;
+  }
+  
+  /**
+   * @brief Clear caught state for a specific destination
+   * @param dest Destination index
+   * 
+   * The destination will revert to using the current hub value.
+   */
+  void ClearCaught(uint8_t dest) {
+    if (dest < NUM_DESTINATIONS) {
+      caught_[dest] = false;
+      caught_values_[dest] = destinations_[dest].default_value;
+    }
+  }
+  
+  /**
+   * @brief Clear all caught states
+   * 
+   * All destinations will revert to using the current hub value.
+   */
+  void ClearAllCaught() {
+    for (uint8_t i = 0; i < NUM_DESTINATIONS; i++) {
+      caught_[i] = false;
+      caught_values_[i] = destinations_[i].default_value;
+    }
+  }
+  
  private:
   const Destination* destinations_;        ///< Destination descriptors
   int32_t original_values_[NUM_DESTINATIONS];  ///< Original 0-100 values from UI
   int32_t clamped_values_[NUM_DESTINATIONS];   ///< Clamped to destination's range
+  int32_t caught_values_[NUM_DESTINATIONS];    ///< Caught modulation values for catch behavior
+  bool caught_[NUM_DESTINATIONS];              ///< Whether each destination has been caught
   uint8_t current_dest_;                   ///< Currently selected destination index
 };
 

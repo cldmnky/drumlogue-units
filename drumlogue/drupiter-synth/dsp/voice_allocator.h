@@ -24,13 +24,8 @@
 #include "unison_oscillator.h"
 #include "../common/midi_helper.h"
 
-// Default voice counts (compile-time for buffer allocation)
-#ifndef POLYPHONIC_VOICES
-#define POLYPHONIC_VOICES 4
-#endif
-
 #ifndef UNISON_VOICES
-#define UNISON_VOICES 5
+#define UNISON_VOICES 4
 #endif
 
 #ifndef DRUPITER_MAX_VOICES

@@ -66,16 +66,12 @@ ULIBS += -lc
 # === Synthesis Mode Configuration (Hoover v2.0) ===
 # NOTE: Mode selection is now RUNTIME via parameter (no recompilation needed)
 # Voice counts still compile-time (for buffer allocation)
-POLYPHONIC_VOICES ?= 4
-UNISON_VOICES ?= 5
-DRUPITER_MAX_VOICES ?= 7
+UNISON_VOICES ?= 4
+DRUPITER_MAX_VOICES ?= 4
 
 # Unison detune range (cents)
 UNISON_MAX_DETUNE ?= 50
 
-# Feature flags
-ENABLE_NEON ?= 0
-ENABLE_PITCH_ENVELOPE ?= 0
 
 # Build defines - Synthesis mode
 # Enable performance monitoring via command line: ./build.sh drupiter-synth PERF_MON=1
@@ -93,6 +89,9 @@ UDEFS += -DUNISON_MAX_DETUNE=$(UNISON_MAX_DETUNE)
 UDEFS += -DUSE_NEON
 UDEFS += -mfpu=neon
 UDEFS += -mfloat-abi=hard
+
+# Enable NEON-optimized DCO processing (requires USE_NEON)
+UDEFS += -DNEON_DCO
 
 # Enable PolyBLEP anti-aliasing
 UDEFS += -DENABLE_POLYBLEP
