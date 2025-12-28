@@ -362,22 +362,43 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     
     // Task 2.2.4: Process portamento/glide for MONO/UNISON modes
     // For polyphonic mode, glide is processed per-voice in the render loop
+    // Option A: Stateless glide - recalculate increment every frame to respond to parameter changes
     if (current_mode_ == dsp::SYNTH_MODE_MONOPHONIC || 
         current_mode_ == dsp::SYNTH_MODE_UNISON) {
         dsp::Voice& voice0 = allocator_.GetVoiceMutable(0);
         if (voice0.is_gliding) {
             float log_pitch = logf(voice0.pitch_hz);
             float log_target = logf(voice0.glide_target_hz);
+            float remaining_log_distance = log_target - log_pitch;
             
-            log_pitch += voice0.glide_increment;
+            // Get current portamento time (may have changed since glide started)
+            float porta_time_ms = allocator_.GetPortamentoTime();
             
-            // Check if we've reached target
-            if ((voice0.glide_increment > 0.0f && log_pitch >= log_target) ||
-                (voice0.glide_increment < 0.0f && log_pitch <= log_target)) {
+            if (porta_time_ms < 0.01f) {
+                // Portamento disabled - snap to target immediately
                 voice0.pitch_hz = voice0.glide_target_hz;
                 voice0.is_gliding = false;
             } else {
-                voice0.pitch_hz = expf(log_pitch);
+                // Recalculate glide_increment based on remaining distance and time
+                // This allows the glide to respond to portamento parameter changes
+                float remaining_samples = (porta_time_ms / 1000.0f) * sample_rate_;
+                if (remaining_samples > 1.0f && fabsf(remaining_log_distance) > 1e-6f) {
+                    voice0.glide_increment = remaining_log_distance / remaining_samples;
+                } else {
+                    voice0.glide_increment = 0.0f;
+                }
+                
+                // Apply glide increment
+                log_pitch += voice0.glide_increment;
+                
+                // Check if we've reached target
+                if ((voice0.glide_increment > 0.0f && log_pitch >= log_target) ||
+                    (voice0.glide_increment < 0.0f && log_pitch <= log_target)) {
+                    voice0.pitch_hz = voice0.glide_target_hz;
+                    voice0.is_gliding = false;
+                } else {
+                    voice0.pitch_hz = expf(log_pitch);
+                }
             }
             
             // Update current_freq_hz_ for MONO/UNISON rendering
@@ -476,19 +497,40 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
                 dsp::Voice& voice_mut = const_cast<dsp::Voice&>(voice);
                 
                 // Task 2.2.4: Process portamento/glide
+                // Option A: Stateless glide - recalculate increment every frame to respond to parameter changes
                 if (voice_mut.is_gliding) {
                     float log_pitch = logf(voice_mut.pitch_hz);
                     float log_target = logf(voice_mut.glide_target_hz);
+                    float remaining_log_distance = log_target - log_pitch;
                     
-                    log_pitch += voice_mut.glide_increment;
+                    // Get current portamento time (may have changed since glide started)
+                    float porta_time_ms = allocator_.GetPortamentoTime();
                     
-                    // Check if we've reached target
-                    if ((voice_mut.glide_increment > 0.0f && log_pitch >= log_target) ||
-                        (voice_mut.glide_increment < 0.0f && log_pitch <= log_target)) {
+                    if (porta_time_ms < 0.01f) {
+                        // Portamento disabled - snap to target immediately
                         voice_mut.pitch_hz = voice_mut.glide_target_hz;
                         voice_mut.is_gliding = false;
                     } else {
-                        voice_mut.pitch_hz = expf(log_pitch);
+                        // Recalculate glide_increment based on remaining distance and time
+                        // This allows the glide to respond to portamento parameter changes
+                        float remaining_samples = (porta_time_ms / 1000.0f) * sample_rate_;
+                        if (remaining_samples > 1.0f && fabsf(remaining_log_distance) > 1e-6f) {
+                            voice_mut.glide_increment = remaining_log_distance / remaining_samples;
+                        } else {
+                            voice_mut.glide_increment = 0.0f;
+                        }
+                        
+                        // Apply glide increment
+                        log_pitch += voice_mut.glide_increment;
+                        
+                        // Check if we've reached target
+                        if ((voice_mut.glide_increment > 0.0f && log_pitch >= log_target) ||
+                            (voice_mut.glide_increment < 0.0f && log_pitch <= log_target)) {
+                            voice_mut.pitch_hz = voice_mut.glide_target_hz;
+                            voice_mut.is_gliding = false;
+                        } else {
+                            voice_mut.pitch_hz = expf(log_pitch);
+                        }
                     }
                 }
                 
@@ -1191,9 +1233,10 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
                 return "";
             }
             
-            // GetValueStringForDest now returns stable pointers (static/cached)
-            // modamt_buf only used as fallback for out-of-range values
-            return mod_hub_.GetValueStringForDest(dest, value, modamt_buf, sizeof(modamt_buf));
+            // Get the CLAMPED value from hub (destination-specific range)
+            // The raw slider value (0-100) must be converted to the destination's range
+            int32_t clamped_value = mod_hub_.GetValue(dest);
+            return mod_hub_.GetValueStringForDest(dest, clamped_value, modamt_buf, sizeof(modamt_buf));
         }
             
         case PARAM_EFFECT:
