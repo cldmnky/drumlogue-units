@@ -106,6 +106,35 @@ public:
      */
     float Process();
 
+    /**
+     * @brief Multiple oscillator state for vectorized processing
+     */
+    struct MultiOscState {
+        float phase[4];           // Current phase for 4 oscillators
+        float phase_inc[4];       // Phase increment per sample
+        float pulse_width[4];     // Pulse width for each oscillator
+        Waveform waveform[4];     // Waveform type for each oscillator
+        float fm_amount[4];       // FM modulation amount
+        bool sync_enabled[4];     // Sync enable flags
+        float last_phase[4];      // For sync detection
+    };
+
+    /**
+     * @brief Process multiple oscillators simultaneously (NEON optimized)
+     * 
+     * Processes up to 4 oscillators in parallel using NEON SIMD operations.
+     * Useful for unison modes and multi-oscillator effects.
+     * 
+     * @param states Array of oscillator states (up to 4)
+     * @param num_osc Number of oscillators to process (1-4)
+     * @param outputs Output buffer for each oscillator
+     * @param frames Number of samples to process
+     * @param sync_trigger Optional sync trigger phase (0.0-1.0)
+     */
+    static void ProcessMultipleOscillators(MultiOscState* states, int num_osc,
+                                          float* outputs[4], uint32_t frames,
+                                          float sync_trigger = -1.0f);
+
 private:
     float sample_rate_;
     float phase_;              // Current phase (0.0-1.0)
@@ -154,7 +183,35 @@ private:
      * @param phase Phase 0.0-1.0
      * @return Interpolated value
      */
-    float LookupWavetable(const float* table, float phase);
+    static float LookupWavetable(const float* table, float phase);
+
+    /**
+     * @brief Generate waveform for multiple oscillator processing
+     * @param phase Current phase (0.0-1.0)
+     * @param phase_inc Phase increment per sample
+     * @param waveform Waveform type
+     * @param pulse_width Pulse width for pulse waves
+     * @return Waveform value
+     */
+    static float GenerateWaveformForMulti(float phase, float phase_inc,
+                                         Waveform waveform, float pulse_width);
+
+    /**
+     * @brief Get wavetable pointer for waveform type
+     * @param waveform Waveform type
+     * @return Pointer to wavetable
+     */
+    static const float* GetWavetable(Waveform waveform);
+
+#ifdef NEON_DCO
+    /**
+     * @brief NEON-optimized processing for 4 oscillators
+     */
+    static void ProcessMultipleOscillatorsNEON(MultiOscState* state,
+                                              float* outputs[4], uint32_t frames,
+                                              float sync_trigger);
+#endif
+
 };
 
 } // namespace dsp
