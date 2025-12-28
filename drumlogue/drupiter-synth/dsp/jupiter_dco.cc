@@ -16,6 +16,9 @@
 #include <algorithm>
 #include <cmath>
 
+// Include common DSP utilities
+#include "dsp_utils.h"
+
 // Include ARM DSP utilities for NEON optimizations
 #if defined(USE_NEON) && defined(NEON_DCO)
 #include "../../common/arm_intrinsics.h"
@@ -87,20 +90,8 @@ inline float PolyBlep(float t, float dt) {
 }
 
 inline float WrapPhase(float phase) {
-#if defined(USE_NEON) && defined(NEON_DCO)
-    // Fast phase wrapping using bit manipulation
-    union { float f; uint32_t i; } phase_union = { phase };
-    int exponent = ((phase_union.i >> 23) & 0xFF) - 127;
-    
-    // If phase >= 1.0 (exponent >= 0), subtract integer part
-    if (exponent >= 0) {
-        return phase - (float)(int)phase;
-    }
-    return phase;
-#else
-    // Efficient wrapping to [0, 1) using floorf
-    return phase - floorf(phase);
-#endif
+    // Use fast bit-manipulation phase wrapping from common utilities
+    return fast_wrap_phase(phase);
 }
 
 }  // namespace
@@ -226,12 +217,11 @@ float JupiterDCO::Process() {
     // Advance phase with optimized wrapping
     phase_ += current_phase_inc;
 #if defined(USE_NEON) && defined(NEON_DCO)
-    // For now, use standard wrapping - bit manipulation needs more careful implementation
-    // TODO: Implement proper fast phase wrapping
-    phase_ -= floorf(phase_);
+    // Use fast bit-manipulation phase wrapping from common utilities
+    phase_ = fast_wrap_phase(phase_);
 #else
-    // Standard branchless wrapping using floorf
-    phase_ -= floorf(phase_);
+    // Use fast bit-manipulation phase wrapping from common utilities
+    phase_ = fast_wrap_phase(phase_);
 #endif
     
     return sample;
