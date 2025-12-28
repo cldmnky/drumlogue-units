@@ -33,6 +33,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
 
 namespace common {
 
@@ -185,9 +186,13 @@ class HubControl {
     const Destination& dest = destinations_[current_dest_];
     int32_t clamped = value;
     
-    // Linear mapping from 0-100 to [min, max]
+    // Linear mapping from 0-100 to [min, max] using floating-point for precision
     int32_t range = dest.max - dest.min;
-    clamped = dest.min + (value * range) / 100;
+    if (range > 0) {
+      clamped = dest.min + static_cast<int32_t>((value * range) / 100.0f + 0.5f);
+    } else {
+      clamped = dest.min;
+    }
     
     // Safety clamp
     if (clamped < dest.min) clamped = dest.min;
@@ -212,7 +217,12 @@ class HubControl {
     // Calculate clamped version
     const Destination& d = destinations_[dest];
     int32_t range = d.max - d.min;
-    int32_t clamped = d.min + (value * range) / 100;
+    int32_t clamped;
+    if (range > 0) {
+      clamped = d.min + static_cast<int32_t>((value * range) / 100.0f + 0.5f);
+    } else {
+      clamped = d.min;
+    }
     
     if (clamped < d.min) clamped = d.min;
     if (clamped > d.max) clamped = d.max;
@@ -341,11 +351,11 @@ class HubControl {
   /**
    * @brief Get normalized float value [0.0, 1.0] for unipolar destinations
    * 
-   * For destinations with 0-100 range and unipolar display.
-   * Typical use: amplitude/depth modulations that range from 0 to full effect.
+   * Maps the destination's actual range to [0.0, 1.0].
+   * For example, a destination with range 0-50 will return 0.0 at min and 1.0 at max.
    * 
    * @param dest Destination index
-   * @return Clamped value divided by 100.0f, returns 0.0f if dest invalid
+   * @return Normalized value in [0.0, 1.0] range, returns 0.0f if dest invalid
    * 
    * @code
    * float lfo_depth = hub.GetValueNormalizedUnipolar(MOD_LFO_TO_PWM);  // 0.0 to 1.0
@@ -353,19 +363,24 @@ class HubControl {
    */
   float GetValueNormalizedUnipolar(uint8_t dest) const {
     if (dest >= NUM_DESTINATIONS) return 0.0f;
-    return static_cast<float>(GetValue(dest)) / 100.0f;
+    const Destination& d = destinations_[dest];
+    int32_t range = d.max - d.min;
+    if (range <= 0) return 0.0f;
+    int32_t value = GetValue(dest);
+    return static_cast<float>(value - d.min) / range;
   }
 
   /**
    * @brief Get normalized float value [-1.0, +1.0] for bipolar destinations
    * 
-   * For destinations with 0-100 range but bipolar display (center=50).
-   * Typical use: pitch modulations, filter FM, which can go up or down.
-   * 
-   * Conversion: (value - 50) / 50.0f yields [-1.0, +1.0] with center=0.0
+   * Maps the destination's range to [-1.0, +1.0] with the default/center value at 0.0.
+   * For example, a bipolar destination with range 0-100 and default 50 will return:
+   * - 0.0 at the center (50)
+   * - -1.0 at minimum (0) 
+   * - +1.0 at maximum (100)
    * 
    * @param dest Destination index
-   * @return (clamped_value - 50) / 50.0f, returns 0.0f if dest invalid
+   * @return Normalized value in [-1.0, +1.0] range, returns 0.0f if dest invalid
    * 
    * @code
    * float env_fm = hub.GetValueNormalizedBipolar(MOD_ENV_TO_VCF);  // -1.0 to +1.0
@@ -373,8 +388,15 @@ class HubControl {
    */
   float GetValueNormalizedBipolar(uint8_t dest) const {
     if (dest >= NUM_DESTINATIONS) return 0.0f;
-    int32_t val = static_cast<int32_t>(GetValue(dest));
-    return static_cast<float>(val - 50) / 50.0f;
+    const Destination& d = destinations_[dest];
+    int32_t value = GetValue(dest);
+    int32_t center = d.default_value;
+    
+    // Calculate the maximum deviation from center
+    int32_t max_deviation = std::max(center - d.min, d.max - center);
+    if (max_deviation <= 0) return 0.0f;
+    
+    return static_cast<float>(value - center) / max_deviation;
   }
 
   /**

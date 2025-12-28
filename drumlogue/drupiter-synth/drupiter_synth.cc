@@ -38,13 +38,21 @@ static constexpr float kMinDistance = 1e-6f;     // Minimum significant log dist
 
 // Fast 2^x approximation (accurate for |x| < 8)
 // Uses polynomial: 2^x ≈ 1 + 0.693x + 0.240x² + 0.056x³
-// Relative error < 0.3% for |x| < 4
+// Relative error < 0.3% for |x| < 4, piecewise approximation for |x| >= 4
 inline float fast_pow2(float x) {
     // Clamp to safe range
     if (x < -8.0f) return 0.00390625f;  // 2^-8
     if (x > 8.0f) return 256.0f;         // 2^8
     
-    // Polynomial approximation (Horner's form)
+    // For |x| >= 4, use piecewise approximation: 2^x = 2^(4 + (x-4)) = 16 * 2^(x-4)
+    // This keeps the polynomial input in the accurate range
+    if (x >= 4.0f) {
+        return 16.0f * fast_pow2(x - 4.0f);
+    } else if (x <= -4.0f) {
+        return fast_pow2(x + 4.0f) * 0.0625f;  // 2^x = 2^((x+4) - 4) = 2^(x+4) / 16
+    }
+    
+    // Polynomial approximation (Horner's form) for |x| < 4
     const float c1 = 0.693147181f;  // ln(2)
     const float c2 = 0.240226507f;  // ln(2)²/2!
     const float c3 = 0.055504109f;  // ln(2)³/3!
@@ -765,7 +773,11 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
 
         // Keyboard tracking (from MOD HUB)
         const float note_offset = (static_cast<int32_t>(current_note_) - 60) / 12.0f;
-        cutoff_base *= semitones_to_ratio(note_offset * key_track * 12.0f);  // Fast approx
+        // Clamp tracking exponent to ±4 octaves to prevent numerical issues
+        const float tracking_exponent = note_offset * key_track;
+        const float clamped_exponent = (tracking_exponent > 4.0f) ? 4.0f : 
+                                      (tracking_exponent < -4.0f) ? -4.0f : tracking_exponent;
+        cutoff_base *= semitones_to_ratio(clamped_exponent * 12.0f);  // Fast approx
         
         // Combine envelope, LFO, velocity, and hub modulation
         float total_mod = vcf_env_out_ * 2.0f              // Base envelope modulation
