@@ -63,10 +63,29 @@ static const DrupiterPreset kFactoryPresets[6] = {
             0,    // PARAM_MOD_AMT: Will use hub_values
             0     // PARAM_EFFECT: Chorus
         },
-        {0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 100, 0, 0, 50}  // hub_values: VCF_TYPE=1 (LP24), VCA_LEVEL=100, ENV_KYBD=50
+        {
+            0,    // MOD_LFO_TO_PWM
+            0,    // MOD_LFO_TO_VCF
+            0,    // MOD_LFO_TO_VCO
+            0,    // MOD_ENV_TO_PWM
+            0,    // MOD_ENV_TO_VCF
+            0,    // MOD_HPF
+            1,    // MOD_VCF_TYPE: LP24
+            0,    // MOD_LFO_DELAY
+            0,    // MOD_LFO_WAVE: TRI
+            0,    // MOD_LFO_ENV_AMT
+            100,  // MOD_VCA_LEVEL: Full level
+            0,    // MOD_VCA_LFO
+            0,    // MOD_VCA_KYBD
+            50,   // MOD_ENV_KYBD: 50%
+            0,    // MOD_SYNTH_MODE: MONO
+            10,   // MOD_UNISON_DETUNE: 10 cents (unison default)
+            50,   // MOD_ENV_TO_PITCH: No pitch env mod (center)
+            0     // MOD_PORTAMENTO_TIME: No glide
+        }
     },
     
-    // Preset 1: Bass - Punchy bass with filter envelope
+    // Preset 1: Bass - Punchy bass with filter envelope and glide
     {
         "Bass 1",
         {
@@ -77,10 +96,13 @@ static const DrupiterPreset kFactoryPresets[6] = {
             0, 31, 63, 12,      // VCA env: punchy
             32, static_cast<uint8_t>(MOD_VCF_TYPE), 0, 0
         },
-        {0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 100, 0, 0, 50}  // VCF_TYPE=1 (LP24), VCA_LEVEL=100, ENV_KYBD=50
+        {
+            0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 100, 0, 0, 50,  // Standard mod setup
+            0, 10, 50, 15       // MONO, 10ct detune, no pitch env, 15ms glide
+        }
     },
     
-    // Preset 2: Lead - Sharp lead with sync
+    // Preset 2: Lead - Sharp lead with sync and glide
     {
         "Lead 1",
         {
@@ -91,10 +113,13 @@ static const DrupiterPreset kFactoryPresets[6] = {
             2, 24, 79, 16,      // VCA env: slight attack
             50, static_cast<uint8_t>(MOD_LFO_TO_VCF), 0, 0
         },
-        {0, 30, 0, 0, 0, 0, 1, 0, 0, 0, 100, 0, 0, 50}  // LFO_TO_VCF=30, VCF_TYPE=1, VCA_LEVEL=100, ENV_KYBD=50
+        {
+            0, 30, 0, 0, 0, 0, 1, 0, 0, 0, 100, 0, 0, 50,  // LFO_TO_VCF=30
+            0, 10, 50, 25       // MONO, 10ct detune, no pitch env, 25ms glide
+        }
     },
     
-    // Preset 3: Pad - Warm pad with detuned oscillators
+    // Preset 3: Pad - Warm pad with detuned oscillators and vibrato
     {
         "Pad 1",
         {
@@ -103,12 +128,15 @@ static const DrupiterPreset kFactoryPresets[6] = {
             50, 63, 20, 20,     // Equal mix, medium cutoff, low reso
             35, 39, 55, 39,     // VCF env: slow attack
             39, 39, 79, 55,     // VCA env: slow attack, long release
-            35, static_cast<uint8_t>(MOD_VCF_TYPE), 0, 0
+            35, static_cast<uint8_t>(MOD_LFO_TO_VCO), 0, 0
         },
-        {0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 100, 0, 0, 50}  // VCF_TYPE=1 (LP24), VCA_LEVEL=100, ENV_KYBD=50
+        {
+            0, 0, 15, 0, 0, 0, 1, 0, 0, 0, 100, 0, 0, 50,  // LFO_TO_VCO=15 (subtle vibrato)
+            0, 15, 50, 40       // MONO, 15ct detune for richness, no pitch env, 40ms glide
+        }
     },
     
-    // Preset 4: Brass - Bright brass with XMOD
+    // Preset 4: Brass - Bright brass with ENV modulation and glide
     {
         "Brass 1",
         {
@@ -119,10 +147,13 @@ static const DrupiterPreset kFactoryPresets[6] = {
             12, 35, 71, 24,     // VCA env: medium attack
             40, static_cast<uint8_t>(MOD_ENV_TO_VCF), 0, 0
         },
-        {0, 0, 0, 0, 40, 0, 1, 0, 0, 0, 100, 0, 0, 50}  // ENV_TO_VCF=40, VCF_TYPE=1, VCA_LEVEL=100, ENV_KYBD=50
+        {
+            0, 0, 0, 0, 40, 0, 1, 0, 0, 0, 100, 0, 0, 50,  // ENV_TO_VCF=40
+            0, 10, 50, 50       // MONO, 10ct detune, no pitch env, 50ms glide for legato
+        }
     },
     
-    // Preset 5: Strings - Lush strings with detuned oscillators
+    // Preset 5: Strings - Lush strings with vibrato and glide
     {
         "String 1",
         {
@@ -133,7 +164,10 @@ static const DrupiterPreset kFactoryPresets[6] = {
             51, 43, 79, 63,     // VCA env: slow attack, very long release
             38, static_cast<uint8_t>(MOD_LFO_TO_VCO), 0, 0
         },
-        {0, 0, 20, 0, 0, 0, 1, 0, 0, 0, 100, 0, 0, 50}  // LFO_TO_VCO=20 (vibrato), VCF_TYPE=1, VCA_LEVEL=100, ENV_KYBD=50
+        {
+            0, 0, 20, 0, 0, 0, 1, 0, 0, 0, 100, 0, 0, 50,  // LFO_TO_VCO=20 (vibrato)
+            0, 20, 50, 60       // MONO, 20ct detune, no pitch env, 60ms glide (smooth)
+        }
     }
 };
 
