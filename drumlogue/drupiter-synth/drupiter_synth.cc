@@ -26,9 +26,21 @@
 #include <arm_neon.h>
 #endif
 
+#define NEON_DSP_NS drupiter
+#include "../common/neon_dsp.h"
+
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
+
+// Fast pow2 approximation using bit manipulation (from jupiter_dco.cc)
+DRUMLOGUE_ALWAYS_INLINE float fasterpow2f(float p) {
+    float clipp = (p < -126.0f) ? -126.0f : p;
+    union { uint32_t i; float f; } v = { 
+        static_cast<uint32_t>((1 << 23) * (clipp + 126.94269504f))
+    };
+    return v.f;
+}
 
 namespace {
 
@@ -375,43 +387,24 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     
     // Task 2.2.4: Process portamento/glide for MONO/UNISON modes
     // For polyphonic mode, glide is processed per-voice in the render loop
-    // Option A: Stateless glide - recalculate increment every frame to respond to parameter changes
+    // Use the correct glide increment calculated in voice allocator
     if (current_mode_ == dsp::SYNTH_MODE_MONOPHONIC || 
         current_mode_ == dsp::SYNTH_MODE_UNISON) {
         dsp::Voice& voice0 = allocator_.GetVoiceMutable(0);
         if (voice0.is_gliding) {
+            // Use the pre-calculated glide increment from voice allocator
+            // This ensures constant speed glide (not slowing down near target)
             float log_pitch = logf(voice0.pitch_hz);
+            log_pitch += voice0.glide_increment;
+            
+            // Check if we've reached target
             float log_target = logf(voice0.glide_target_hz);
-            float remaining_log_distance = log_target - log_pitch;
-            
-            // Get current portamento time (may have changed since glide started)
-            float porta_time_ms = allocator_.GetPortamentoTime();
-            
-            if (porta_time_ms < 0.01f) {
-                // Portamento disabled - snap to target immediately
+            if ((voice0.glide_increment > 0.0f && log_pitch >= log_target) ||
+                (voice0.glide_increment < 0.0f && log_pitch <= log_target)) {
                 voice0.pitch_hz = voice0.glide_target_hz;
                 voice0.is_gliding = false;
             } else {
-                // Recalculate glide_increment based on remaining distance and time
-                // This allows the glide to respond to portamento parameter changes
-                float remaining_samples = (porta_time_ms / 1000.0f) * sample_rate_;
-                if (remaining_samples > 1.0f && fabsf(remaining_log_distance) > 1e-6f) {
-                    voice0.glide_increment = remaining_log_distance / remaining_samples;
-                } else {
-                    voice0.glide_increment = 0.0f;
-                }
-                
-                // Apply glide increment
-                log_pitch += voice0.glide_increment;
-                
-                // Check if we've reached target
-                if ((voice0.glide_increment > 0.0f && log_pitch >= log_target) ||
-                    (voice0.glide_increment < 0.0f && log_pitch <= log_target)) {
-                    voice0.pitch_hz = voice0.glide_target_hz;
-                    voice0.is_gliding = false;
-                } else {
-                    voice0.pitch_hz = expf(log_pitch);
-                }
+                voice0.pitch_hz = expf(log_pitch);
             }
             
             // Update current_freq_hz_ for MONO/UNISON rendering
@@ -514,40 +507,21 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
                 dsp::Voice& voice_mut = const_cast<dsp::Voice&>(voice);
                 
                 // Task 2.2.4: Process portamento/glide
-                // Option A: Stateless glide - recalculate increment every frame to respond to parameter changes
+                // Use the pre-calculated glide increment from voice allocator
+                // This ensures constant speed glide (not slowing down near target)
                 if (voice_mut.is_gliding) {
+                    // Use the pre-calculated glide increment from voice allocator
                     float log_pitch = logf(voice_mut.pitch_hz);
+                    log_pitch += voice_mut.glide_increment;
+                    
+                    // Check if we've reached target
                     float log_target = logf(voice_mut.glide_target_hz);
-                    float remaining_log_distance = log_target - log_pitch;
-                    
-                    // Get current portamento time (may have changed since glide started)
-                    float porta_time_ms = allocator_.GetPortamentoTime();
-                    
-                    if (porta_time_ms < 0.01f) {
-                        // Portamento disabled - snap to target immediately
+                    if ((voice_mut.glide_increment > 0.0f && log_pitch >= log_target) ||
+                        (voice_mut.glide_increment < 0.0f && log_pitch <= log_target)) {
                         voice_mut.pitch_hz = voice_mut.glide_target_hz;
                         voice_mut.is_gliding = false;
                     } else {
-                        // Recalculate glide_increment based on remaining distance and time
-                        // This allows the glide to respond to portamento parameter changes
-                        float remaining_samples = (porta_time_ms / 1000.0f) * sample_rate_;
-                        if (remaining_samples > 1.0f && fabsf(remaining_log_distance) > 1e-6f) {
-                            voice_mut.glide_increment = remaining_log_distance / remaining_samples;
-                        } else {
-                            voice_mut.glide_increment = 0.0f;
-                        }
-                        
-                        // Apply glide increment
-                        log_pitch += voice_mut.glide_increment;
-                        
-                        // Check if we've reached target
-                        if ((voice_mut.glide_increment > 0.0f && log_pitch >= log_target) ||
-                            (voice_mut.glide_increment < 0.0f && log_pitch <= log_target)) {
-                            voice_mut.pitch_hz = voice_mut.glide_target_hz;
-                            voice_mut.is_gliding = false;
-                        } else {
-                            voice_mut.pitch_hz = expf(log_pitch);
-                        }
+                        voice_mut.pitch_hz = expf(log_pitch);
                     }
                 }
                 
@@ -574,9 +548,19 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
                 if (pitch_mod_ratio != 1.0f) {
                     // Use per-voice pitch envelope for independent pitch modulation
                     const float voice_env_pitch = voice_mut.env_pitch.Process();
-                    const float voice_pitch_ratio = powf(2.0f, voice_env_pitch * env_pitch_depth / 12.0f);
+                    // Use faster pow2 approximation instead of expensive powf
+                    const float voice_pitch_ratio = fasterpow2f(voice_env_pitch * env_pitch_depth / 12.0f);
+
+                    // NEON-optimized: multiply both frequencies by ratio simultaneously
+#ifdef USE_NEON
+                    float32x2_t freq_pair = vld1_f32(&voice_freq1);  // Load freq1, freq2
+                    float32x2_t ratio_vec = vdup_n_f32(voice_pitch_ratio);  // Duplicate ratio
+                    freq_pair = vmul_f32(freq_pair, ratio_vec);  // Multiply both
+                    vst1_f32(&voice_freq1, freq_pair);  // Store back
+#else
                     voice_freq1 *= voice_pitch_ratio;
                     voice_freq2 *= voice_pitch_ratio;
+#endif
                 }
                 
                 voice_mut.dco1.SetFrequency(voice_freq1);
@@ -921,31 +905,16 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     
     // Add tiny DC offset for denormal protection before interleaving
     const float denormal_offset = 1.0e-15f;
-#ifdef USE_NEON
-    // NEON-optimized stereo interleave (processes 4 frames at a time)
-    {
-        float32x4_t dc = vdupq_n_f32(denormal_offset);
-        uint32_t i = 0;
-        for (; i + 4 <= frames; i += 4) {
-            float32x4_t l = vaddq_f32(vld1q_f32(&left_buffer_[i]), dc);
-            float32x4_t r = vaddq_f32(vld1q_f32(&right_buffer_[i]), dc);
-            float32x4x2_t interleaved = vzipq_f32(l, r);
-            vst1q_f32(&out[i * 2], interleaved.val[0]);
-            vst1q_f32(&out[i * 2 + 4], interleaved.val[1]);
-        }
-        // Scalar tail for remaining frames
-        for (; i < frames; ++i) {
-            out[i * 2] = left_buffer_[i] + denormal_offset;
-            out[i * 2 + 1] = right_buffer_[i] + denormal_offset;
-        }
+    drupiter::neon::ApplyGain(left_buffer_, 1.0f, frames);  // Could add offset here if needed
+    drupiter::neon::ApplyGain(right_buffer_, 1.0f, frames); // Could add offset here if needed
+    
+    // Use neon_dsp InterleaveStereo function for optimized stereo interleaving
+    drupiter::neon::InterleaveStereo(left_buffer_, right_buffer_, out, frames);
+    
+    // Add DC offset to output (simpler than modifying buffers)
+    for (uint32_t i = 0; i < frames * 2; ++i) {
+        out[i] += denormal_offset;
     }
-#else
-    // Scalar fallback for non-NEON builds
-    for (uint32_t i = 0; i < frames; ++i) {
-        out[i * 2] = left_buffer_[i] + denormal_offset;
-        out[i * 2 + 1] = right_buffer_[i] + denormal_offset;
-    }
-#endif
     
     #ifdef PERF_MON
     PERF_MON_END(perf_effects_);
@@ -1316,7 +1285,7 @@ void DrupiterSynth::AllNoteOff() {
 }
 
 void DrupiterSynth::LoadPreset(uint8_t preset_id) {
-    if (preset_id >= 6) {
+    if (preset_id >= 12) {
         preset_id = 0;
     }
     
@@ -1413,7 +1382,7 @@ float DrupiterSynth::ParameterToExponentialFreq(uint8_t value, float min_freq, f
 }
 
 const char* DrupiterSynth::GetPresetName(uint8_t preset_id) const {
-    if (preset_id >= 6) {
+    if (preset_id >= 12) {
         return "Invalid";
     }
     return presets::kFactoryPresets[preset_id].name;
