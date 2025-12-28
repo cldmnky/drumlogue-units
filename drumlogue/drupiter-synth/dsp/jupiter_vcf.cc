@@ -16,6 +16,10 @@
 #include <algorithm>
 #include <cmath>
 
+#ifdef __ARM_NEON
+#include <arm_neon.h>
+#endif
+
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -62,6 +66,36 @@ inline float FastTanh(float x) {
     float x2 = x * x;
     return x * (27.0f + x2) / (27.0f + 9.0f * x2);
 }
+
+#ifdef __ARM_NEON
+// NEON-optimized tanh using vectorized polynomial evaluation
+// Processes single float but uses NEON for internal calculations
+inline float FastTanh_NEON(float x) {
+    if (x > 4.0f) return 1.0f;
+    if (x < -4.0f) return -1.0f;
+    
+    // Load single value into NEON register
+    float32x4_t vx = vdupq_n_f32(x);
+    float32x4_t vx2 = vmulq_f32(vx, vx);
+    
+    // Compute numerator: x * (27 + x²)
+    float32x4_t num = vmulq_f32(vx, vaddq_f32(vdupq_n_f32(27.0f), vx2));
+    
+    // Compute denominator: 27 + 9*x²
+    float32x4_t den = vaddq_f32(vdupq_n_f32(27.0f), 
+                               vmulq_f32(vdupq_n_f32(9.0f), vx2));
+    
+    // Use reciprocal approximation for division (faster than vdivq_f32)
+    float32x4_t recip_den = vrecpeq_f32(den);
+    recip_den = vmulq_f32(recip_den, vrecpsq_f32(recip_den, den));  // Newton-Raphson iteration
+    
+    // Compute result
+    float32x4_t result = vmulq_f32(num, recip_den);
+    
+    // Extract single float result
+    return vgetq_lane_f32(result, 0);
+}
+#endif
 
 // Fast pow(2, x) approximation for keyboard tracking
 // Uses bit manipulation for integer part + polynomial for fractional
@@ -188,9 +222,10 @@ void JupiterVCF::SetKeyboardTracking(float amount) {
 
 void JupiterVCF::ApplyKeyboardTracking(uint8_t note) {
     if (kbd_tracking_ > 0.0f) {
-        // Use lookup table for fast keyboard tracking
-        // Table is precomputed for all 128 MIDI notes
-        float freq_mult = s_kbd_tracking_table[note] * kbd_tracking_ + (1.0f - kbd_tracking_);
+        // Linear interpolation between no tracking (1.0) and full tracking
+        // This maintains the original behavior while using the lookup table
+        float full_tracking_ratio = s_kbd_tracking_table[note];
+        float freq_mult = 1.0f + (full_tracking_ratio - 1.0f) * kbd_tracking_;
         cutoff_hz_ = ClampCutoff(base_cutoff_hz_ * freq_mult);
         coefficients_dirty_ = true;
     }
@@ -220,9 +255,13 @@ float JupiterVCF::Process(float input) {
             // Input stage with soft saturation (transistor-like nonlinearity)
             float u = input - feedback;
             
-            // Use optimized lookup-based tanh approximation
-            // This is the hot path - called per oversampling iteration per voice
-            u = TanhLookup(u);
+            // Use NEON-optimized tanh approximation for saturation
+            // This creates the characteristic "warmth" of analog filters
+#ifdef __ARM_NEON
+            u = FastTanh_NEON(u);
+#else
+            u = FastTanh(u);
+#endif
             
             // 4 cascaded one-pole sections using Krajeski-style improved coefficients
             // Each pole: y[n] = g * (0.3/1.3 * x[n] + 1/1.3 * x[n-1] - y[n-1]) + y[n-1]
@@ -234,23 +273,23 @@ float JupiterVCF::Process(float input) {
             // Stage 1
             float y1_new = g * (kA1 * u + kA2 * ota_d1_ - ota_s1_) + ota_s1_;
             ota_d1_ = u;
-            ota_s1_ = FlushDenormalConditional(y1_new);
+            ota_s1_ = FlushDenormal(y1_new);
             
             // Stage 2
             float y2_new = g * (kA1 * y1_new + kA2 * ota_d2_ - ota_s2_) + ota_s2_;
             ota_d2_ = y1_new;
-            ota_s2_ = FlushDenormalConditional(y2_new);
+            ota_s2_ = FlushDenormal(y2_new);
             ota_y2_ = ota_s2_;  // LP12 output tap
             
             // Stage 3
             float y3_new = g * (kA1 * y2_new + kA2 * ota_d3_ - ota_s3_) + ota_s3_;
             ota_d3_ = y2_new;
-            ota_s3_ = FlushDenormalConditional(y3_new);
+            ota_s3_ = FlushDenormal(y3_new);
             
             // Stage 4
             float y4_new = g * (kA1 * y3_new + kA2 * ota_d4_ - ota_s4_) + ota_s4_;
             ota_d4_ = y3_new;
-            ota_s4_ = FlushDenormalConditional(y4_new);
+            ota_s4_ = FlushDenormal(y4_new);
             ota_y4_ = ota_s4_;  // LP24 output tap
             
             // Soft clipping on output to prevent blow-ups
@@ -278,8 +317,8 @@ float JupiterVCF::Process(float input) {
     // BP mode: Chamberlin SVF bandpass
     for (int i = 0; i < kOversamplingFactor; i++) {
         hp_ = input - lp_ - q_ * bp_;
-        bp_ = FlushDenormalConditional(bp_ + f_ * hp_);
-        lp_ = FlushDenormalConditional(lp_ + f_ * bp_);
+        bp_ = FlushDenormal(bp_ + f_ * hp_);
+        lp_ = FlushDenormal(lp_ + f_ * bp_);
 
         // Clamp to prevent blowup
         if (bp_ > 10.0f) bp_ = 10.0f;
@@ -337,7 +376,19 @@ void JupiterVCF::UpdateCoefficients() {
     const float wc2 = wc * wc;
     const float wc3 = wc2 * wc;
     const float wc4 = wc3 * wc;
+    
+#ifdef __ARM_NEON
+    // NEON-optimized polynomial evaluation for g coefficient
+    // ota_g_ = 0.9892f * wc - 0.4342f * wc2 + 0.1381f * wc3 - 0.0202f * wc4
+    float32x4_t wc_powers = {wc, wc2, wc3, wc4};
+    float32x4_t g_coeffs = {0.9892f, -0.4342f, 0.1381f, -0.0202f};
+    float32x4_t g_result = vmulq_f32(wc_powers, g_coeffs);
+    // Horizontal sum using pairwise addition (compatible with older NEON)
+    float32x2_t g_sum2 = vpadd_f32(vget_low_f32(g_result), vget_high_f32(g_result));
+    ota_g_ = vget_lane_f32(vpadd_f32(g_sum2, g_sum2), 0);
+#else
     ota_g_ = 0.9892f * wc - 0.4342f * wc2 + 0.1381f * wc3 - 0.0202f * wc4;
+#endif
     
     // Clamp g to prevent instability
     if (ota_g_ < 0.0f) ota_g_ = 0.0f;
@@ -350,7 +401,17 @@ void JupiterVCF::UpdateCoefficients() {
     
     // Krajeski resonance correction: compensate resonance for cutoff changes
     // gRes = r * (1.0029 + 0.0526*wc - 0.926*wc² + 0.0218*wc³)
+#ifdef __ARM_NEON
+    // NEON-optimized polynomial evaluation for resonance correction
+    float32x4_t res_powers = {1.0f, wc, wc2, wc3};
+    float32x4_t res_coeffs = {1.0029f, 0.0526f, -0.926f, 0.0218f};
+    float32x4_t res_result = vmulq_f32(res_powers, res_coeffs);
+    // Horizontal sum using pairwise addition
+    float32x2_t res_sum2 = vpadd_f32(vget_low_f32(res_result), vget_high_f32(res_result));
+    const float res_correction = vget_lane_f32(vpadd_f32(res_sum2, res_sum2), 0);
+#else
     const float res_correction = 1.0029f + 0.0526f * wc - 0.926f * wc2 + 0.0218f * wc3;
+#endif
     ota_res_k_ = 4.0f * r * res_correction;
     
     // Limit resonance to prevent self-oscillation going out of control
