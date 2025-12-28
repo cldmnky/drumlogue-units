@@ -12,6 +12,7 @@
 #include "../common/param_format.h"
 #include "../common/midi_helper.h"
 #include "../common/preset_manager.h"
+#include "../common/dsp_utils.h"
 #include "dsp/jupiter_dco.h"
 #include "dsp/jupiter_vcf.h"
 #include "dsp/jupiter_env.h"
@@ -30,6 +31,10 @@
 #endif
 
 namespace {
+
+// Threshold constants for modulation and distance checks
+static constexpr float kMinModulation = 0.001f;  // Minimum significant modulation depth
+static constexpr float kMinDistance = 1e-6f;     // Minimum significant log distance for glide
 
 // Fast 2^x approximation (accurate for |x| < 8)
 // Uses polynomial: 2^x ≈ 1 + 0.693x + 0.240x² + 0.056x³
@@ -418,7 +423,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         
         // Process LFO with optional envelope rate modulation
         // ENV→LFO modulates LFO frequency: 0% = no change, 100% = double rate at peak
-        if (lfo_env_amt > 0.001f) {
+        if (lfo_env_amt > kMinModulation) {
             // Temporarily boost LFO rate based on envelope
             // Store current rate, modulate, process, restore
             // This avoids permanently changing the LFO rate parameter
@@ -440,19 +445,17 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         
         // Add LFO→PWM modulation
         float pw_mod = 0.0f;
-        if (lfo_pwm_depth > 0.001f) {
+        if (lfo_pwm_depth > kMinModulation) {
             pw_mod += lfo_out_ * lfo_pwm_depth * 0.4f;  // ±40% PWM range
         }
         
         // Add ENV→PWM modulation
-        if (env_pwm_depth > 0.001f) {
+        if (env_pwm_depth > kMinModulation) {
             pw_mod += vcf_env_out_ * env_pwm_depth * 0.4f;  // ±40% PWM range
         }
         
         // Apply modulated pulse width, clamped to safe range (10%-90%)
-        float modulated_pw = base_pw + pw_mod;
-        if (modulated_pw < 0.1f) modulated_pw = 0.1f;
-        if (modulated_pw > 0.9f) modulated_pw = 0.9f;
+        float modulated_pw = clampf(base_pw + pw_mod, 0.1f, 0.9f);
         
 #ifdef DEBUG
         static uint32_t debug_frame_counter = 0;
@@ -468,6 +471,12 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         PERF_MON_END(perf_voice_alloc_);
         PERF_MON_START(perf_dco_);
         #endif
+        
+        // Pre-calculate pitch envelope modulation ratio (used in all modes)
+        float pitch_mod_ratio = 1.0f;
+        if (fabsf(env_pitch_depth) > kMinModulation) {
+            pitch_mod_ratio = powf(2.0f, vcf_env_out_ * env_pitch_depth / 12.0f);
+        }
         
         if (current_mode_ == dsp::SYNTH_MODE_POLYPHONIC) {
             // POLYPHONIC MODE: Render and mix multiple independent voices
@@ -547,19 +556,19 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
                 float voice_freq2 = voice.pitch_hz * dco2_oct_mult * detune_ratio;
                 
                 // Apply LFO vibrato
-                if (lfo_vco_depth > 0.001f) {
+                if (lfo_vco_depth > kMinModulation) {
                     const float lfo_mod = 1.0f + lfo_out_ * lfo_vco_depth * 0.05f;
                     voice_freq1 *= lfo_mod;
                     voice_freq2 *= lfo_mod;
                 }
                 
                 // Apply pitch envelope modulation (Task 2.2.1: Per-voice pitch envelope)
-                if (fabsf(env_pitch_depth) > 0.001f) {
+                if (pitch_mod_ratio != 1.0f) {
                     // Use per-voice pitch envelope for independent pitch modulation
                     const float voice_env_pitch = voice_mut.env_pitch.Process();
-                    const float pitch_mod_ratio = powf(2.0f, voice_env_pitch * env_pitch_depth / 12.0f);
-                    voice_freq1 *= pitch_mod_ratio;
-                    voice_freq2 *= pitch_mod_ratio;
+                    const float voice_pitch_ratio = powf(2.0f, voice_env_pitch * env_pitch_depth / 12.0f);
+                    voice_freq1 *= voice_pitch_ratio;
+                    voice_freq2 *= voice_pitch_ratio;
                 }
                 
                 voice_mut.dco1.SetFrequency(voice_freq1);
@@ -577,7 +586,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
                 float voice_dco1 = voice_mut.dco1.Process();
                 float voice_dco2 = 0.0f;
                 
-                if (dco2_level > 0.001f) {
+                if (dco2_level > kMinModulation) {
                     voice_dco2 = voice_mut.dco2.Process();
                 }
                 
@@ -622,16 +631,13 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
             
             // Calculate frequency with LFO modulation
             float unison_freq = current_freq_hz_ * dco1_oct_mult;
-            if (lfo_vco_depth > 0.001f) {
+            if (lfo_vco_depth > kMinModulation) {
                 const float lfo_mod = 1.0f + lfo_out_ * lfo_vco_depth * 0.05f;
                 unison_freq *= lfo_mod;
             }
             
-            // Apply pitch envelope modulation
-            if (fabsf(env_pitch_depth) > 0.001f) {
-                const float pitch_mod_ratio = powf(2.0f, vcf_env_out_ * env_pitch_depth / 12.0f);
-                unison_freq *= pitch_mod_ratio;
-            }
+            // Apply pitch envelope modulation (pre-calculated)
+            unison_freq *= pitch_mod_ratio;
             
             unison_osc.SetFrequency(unison_freq);
             
@@ -645,16 +651,13 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
             // Also process DCO2 (like in MONO mode)
             dco2_->SetPulseWidth(modulated_pw);
             float freq2 = current_freq_hz_ * dco2_oct_mult * detune_ratio;
-            if (lfo_vco_depth > 0.001f) {
+            if (lfo_vco_depth > kMinModulation) {
                 const float lfo_mod = 1.0f + lfo_out_ * lfo_vco_depth * 0.05f;
                 freq2 *= lfo_mod;
             }
             
-            // Apply pitch envelope modulation to DCO2
-            if (fabsf(env_pitch_depth) > 0.001f) {
-                const float pitch_mod_ratio = powf(2.0f, vcf_env_out_ * env_pitch_depth / 12.0f);
-                freq2 *= pitch_mod_ratio;
-            }
+            // Apply pitch envelope modulation to DCO2 (pre-calculated)
+            freq2 *= pitch_mod_ratio;
             
             dco2_->SetFrequency(freq2);
             dco2_out_ = dco2_->Process();
@@ -671,24 +674,21 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
             float freq2 = current_freq_hz_ * dco2_oct_mult * detune_ratio;
         
             // Apply LFO modulation to frequencies (vibrato)
-            if (lfo_vco_depth > 0.001f) {
+            if (lfo_vco_depth > kMinModulation) {
                 const float lfo_mod = 1.0f + lfo_out_ * lfo_vco_depth * 0.05f;  // ±5% vibrato
                 freq1 *= lfo_mod;
                 freq2 *= lfo_mod;
             }
             
-            // Apply pitch envelope modulation
-            if (fabsf(env_pitch_depth) > 0.001f) {
-                const float pitch_mod_ratio = powf(2.0f, vcf_env_out_ * env_pitch_depth / 12.0f);
-                freq1 *= pitch_mod_ratio;
-                freq2 *= pitch_mod_ratio;
-            }
+            // Apply pitch envelope modulation (pre-calculated)
+            freq1 *= pitch_mod_ratio;
+            freq2 *= pitch_mod_ratio;
             
             dco1_->SetFrequency(freq1);
             dco2_->SetFrequency(freq2);
             
             // Only process DCO2 if it's audible (level > 0) or needed for XMOD
-            const bool dco2_needed = (dco2_level > 0.001f) || (xmod_depth > 0.001f);
+            const bool dco2_needed = (dco2_level > kMinModulation) || (xmod_depth > kMinModulation);
             
             if (dco2_needed) {
                 // Process DCO2 first to get fresh output for FM
@@ -696,7 +696,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
                 
                 // Cross-modulation (DCO2 -> DCO1 FM) - Jupiter-8 style
                 // Only apply FM if XMOD depth is significant
-                if (xmod_depth > 0.001f) {
+                if (xmod_depth > kMinModulation) {
                     // Scale: 100% XMOD = ±1 semitone = ±1/12 octave
                     dco1_->ApplyFM(dco2_out_ * xmod_depth * 0.083f);
                 } else {
@@ -836,7 +836,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         }
         
         // VCA LFO (tremolo): 0% = no tremolo, 100% = full amplitude modulation
-        if (vca_lfo_depth > 0.001f) {
+        if (vca_lfo_depth > kMinModulation) {
             // Bipolar LFO (-1 to +1) -> unipolar tremolo (0.5 to 1.5)
             const float tremolo = 1.0f + (lfo_out_ * vca_lfo_depth * 0.5f);
             vca_gain *= tremolo;
@@ -844,7 +844,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         
         // VCA Keyboard tracking: higher notes louder
         // 0% = no tracking, 100% = +6dB per octave above C4
-        if (vca_kybd > 0.001f) {
+        if (vca_kybd > kMinModulation) {
             const float note_offset = (static_cast<int32_t>(current_note_) - 60) / 12.0f;  // Octaves from C4
             const float kb_gain = 1.0f + (note_offset * vca_kybd * 0.5f);  // +50% per octave at 100%
             vca_gain *= kb_gain;
