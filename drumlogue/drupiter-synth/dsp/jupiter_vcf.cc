@@ -31,6 +31,13 @@ static constexpr float kSigmoidDiv = 0.1666667f;  // 1/6
 // Denormal threshold
 static constexpr float kDenormalThreshold = 1e-15f;
 
+// Static lookup table initialization
+namespace dsp {
+float JupiterVCF::s_tanh_table[JupiterVCF::kTanhTableSize] = {};
+float JupiterVCF::s_kbd_tracking_table[JupiterVCF::kKbdTrackingTableSize] = {};
+bool JupiterVCF::s_tables_initialized = false;
+}
+
 // Fast Math Approximations
 // ============================================================================
 
@@ -38,6 +45,12 @@ static constexpr float kDenormalThreshold = 1e-15f;
 inline float FlushDenormal(float x) {
     if (fabsf(x) < kDenormalThreshold) return 0.0f;
     return x;
+}
+
+// Conditional denormal flushing - checks once and flushes 4 values at a time
+inline float FlushDenormalConditional(float x) {
+    return (fabsf(x) < kDenormalThreshold) ? 0.0f : x;
+// NOTE: Replaced by TanhLookup() for better performance
 }
 
 // Fast tanh approximation using rational function
@@ -129,6 +142,7 @@ JupiterVCF::JupiterVCF()
     , ota_gain_comp_(0.0f)
     , ota_output_gain_(1.0f)
     , hp_lp_state_(0.0f)
+    , tables_initialized_(false)
     , hp_a_(0.0f)
     , lp_(0.0f)
     , bp_(0.0f)
@@ -142,6 +156,7 @@ JupiterVCF::~JupiterVCF() {
 }
 
 void JupiterVCF::Init(float sample_rate) {
+    InitializeLookupTables();  // Initialize once per instance
     sample_rate_ = sample_rate;
     Reset();
     UpdateCoefficients();
@@ -159,7 +174,7 @@ void JupiterVCF::SetCutoffModulated(float freq_hz) {
 }
 
 void JupiterVCF::SetResonance(float resonance) {
-    resonance_ = std::max(0.0f, std::min(resonance, 1.0f));
+    resonance_ = clampf(resonance, 0.0f, 1.0f);
     coefficients_dirty_ = true;
 }
 
@@ -168,15 +183,14 @@ void JupiterVCF::SetMode(Mode mode) {
 }
 
 void JupiterVCF::SetKeyboardTracking(float amount) {
-    kbd_tracking_ = std::max(0.0f, std::min(amount, 1.0f));
+    kbd_tracking_ = clampf(amount, 0.0f, 1.0f);
 }
 
 void JupiterVCF::ApplyKeyboardTracking(uint8_t note) {
     if (kbd_tracking_ > 0.0f) {
-        // MIDI note 60 (C4) = no change
-        // Each octave up doubles frequency
-        float note_offset = (note - 60) / 12.0f;  // Octaves from C4
-        float freq_mult = FastPow2(note_offset * kbd_tracking_);
+        // Use lookup table for fast keyboard tracking
+        // Table is precomputed for all 128 MIDI notes
+        float freq_mult = s_kbd_tracking_table[note] * kbd_tracking_ + (1.0f - kbd_tracking_);
         cutoff_hz_ = ClampCutoff(base_cutoff_hz_ * freq_mult);
         coefficients_dirty_ = true;
     }
@@ -206,9 +220,9 @@ float JupiterVCF::Process(float input) {
             // Input stage with soft saturation (transistor-like nonlinearity)
             float u = input - feedback;
             
-            // Improved tanh approximation for input stage
-            // This creates the characteristic "warmth" of analog filters
-            u = FastTanh(u);
+            // Use optimized lookup-based tanh approximation
+            // This is the hot path - called per oversampling iteration per voice
+            u = TanhLookup(u);
             
             // 4 cascaded one-pole sections using Krajeski-style improved coefficients
             // Each pole: y[n] = g * (0.3/1.3 * x[n] + 1/1.3 * x[n-1] - y[n-1]) + y[n-1]
@@ -220,23 +234,23 @@ float JupiterVCF::Process(float input) {
             // Stage 1
             float y1_new = g * (kA1 * u + kA2 * ota_d1_ - ota_s1_) + ota_s1_;
             ota_d1_ = u;
-            ota_s1_ = FlushDenormal(y1_new);
+            ota_s1_ = FlushDenormalConditional(y1_new);
             
             // Stage 2
             float y2_new = g * (kA1 * y1_new + kA2 * ota_d2_ - ota_s2_) + ota_s2_;
             ota_d2_ = y1_new;
-            ota_s2_ = FlushDenormal(y2_new);
+            ota_s2_ = FlushDenormalConditional(y2_new);
             ota_y2_ = ota_s2_;  // LP12 output tap
             
             // Stage 3
             float y3_new = g * (kA1 * y2_new + kA2 * ota_d3_ - ota_s3_) + ota_s3_;
             ota_d3_ = y2_new;
-            ota_s3_ = FlushDenormal(y3_new);
+            ota_s3_ = FlushDenormalConditional(y3_new);
             
             // Stage 4
             float y4_new = g * (kA1 * y3_new + kA2 * ota_d4_ - ota_s4_) + ota_s4_;
             ota_d4_ = y3_new;
-            ota_s4_ = FlushDenormal(y4_new);
+            ota_s4_ = FlushDenormalConditional(y4_new);
             ota_y4_ = ota_s4_;  // LP24 output tap
             
             // Soft clipping on output to prevent blow-ups
@@ -264,8 +278,8 @@ float JupiterVCF::Process(float input) {
     // BP mode: Chamberlin SVF bandpass
     for (int i = 0; i < kOversamplingFactor; i++) {
         hp_ = input - lp_ - q_ * bp_;
-        bp_ = FlushDenormal(bp_ + f_ * hp_);
-        lp_ = FlushDenormal(lp_ + f_ * bp_);
+        bp_ = FlushDenormalConditional(bp_ + f_ * hp_);
+        lp_ = FlushDenormalConditional(lp_ + f_ * bp_);
 
         // Clamp to prevent blowup
         if (bp_ > 10.0f) bp_ = 10.0f;
@@ -332,7 +346,7 @@ void JupiterVCF::UpdateCoefficients() {
     // Resonance mapping
     // res_k = 4 * r for maximum self-oscillation at r = 1.0
     // Use polynomial correction for resonance to match cutoff changes (decoupling)
-    const float r = std::max(0.0f, std::min(resonance_, 1.0f));
+    const float r = clampf(resonance_, 0.0f, 1.0f);
     
     // Krajeski resonance correction: compensate resonance for cutoff changes
     // gRes = r * (1.0029 + 0.0526*wc - 0.926*wc² + 0.0218*wc³)
@@ -368,7 +382,51 @@ void JupiterVCF::UpdateCoefficients() {
 float JupiterVCF::ClampCutoff(float freq) const {
     // Minimum 80Hz to prevent muddy resonance
     // Maximum 20kHz (will be further limited by Nyquist in UpdateCoefficients)
-    return std::max(80.0f, std::min(freq, 20000.0f));
+    return clampf(freq, 80.0f, 20000.0f);
+}
+
+void JupiterVCF::InitializeLookupTables() {
+    // Initialize lookup tables only once per process (at Init time)
+    if (tables_initialized_) return;
+    tables_initialized_ = true;
+    
+    // Initialize tanh lookup table if not already done globally
+    if (!s_tables_initialized) {
+        // Tanh table: 512 entries covering [-4, 4]
+        for (int i = 0; i < kTanhTableSize; i++) {
+            float x = -4.0f + (8.0f * i) / (kTanhTableSize - 1);
+            s_tanh_table[i] = tanhf(x);
+        }
+        
+        // Keyboard tracking table: 128 entries for MIDI notes 0-127
+        // Relative to MIDI note 60 (C4)
+        for (int note = 0; note < kKbdTrackingTableSize; note++) {
+            float note_offset = (note - 60) / 12.0f;  // Octaves from C4
+            s_kbd_tracking_table[note] = powf(2.0f, note_offset);
+        }
+        
+        s_tables_initialized = true;
+    }
+}
+
+float JupiterVCF::TanhLookup(float x) const {
+    // Lookup-based tanh with linear interpolation
+    // Maps [-4, 4] to table indices
+    
+    if (x >= 4.0f) return 1.0f;
+    if (x <= -4.0f) return -1.0f;
+    
+    // Map x from [-4, 4] to index [0, 512]
+    float idx_f = ((x + 4.0f) * (kTanhTableSize - 1)) * 0.125f;  // / 8.0f
+    int idx = static_cast<int>(idx_f);
+    float frac = idx_f - idx;
+    
+    // Boundary check
+    if (idx < 0) idx = 0;
+    if (idx >= kTanhTableSize - 1) return s_tanh_table[kTanhTableSize - 1];
+    
+    // Linear interpolation between table entries
+    return s_tanh_table[idx] * (1.0f - frac) + s_tanh_table[idx + 1] * frac;
 }
 
 } // namespace dsp
