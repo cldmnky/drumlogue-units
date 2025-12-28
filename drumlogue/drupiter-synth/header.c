@@ -27,7 +27,7 @@ const __unit_header unit_header_t unit_header = {
     .unit_id = 0x00000004U,                                // unit id unique within dev_id scope
     .version = 0x010000U,                                // v1.0.0 (major<<16 | minor<<8 | patch)
     .name = "Drupiter",                                    // displayed name, 7-bit ASCII, max 13 chars
-    .num_presets = 6,                                      // 6 presets
+    .num_presets = 12,                                     // 12 presets
     .num_params = 24,                                      // number of parameters (6 pages x 4)
     .params = {
         // Format: min, max, center, default, type, fractional, frac. type, <reserved>, name
