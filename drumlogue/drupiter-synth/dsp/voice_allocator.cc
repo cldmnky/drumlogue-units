@@ -360,9 +360,9 @@ void VoiceAllocator::TriggerVoice(Voice* voice, uint8_t note, uint8_t velocity) 
     float target_hz = common::MidiHelper::NoteToFreq(note);
     
     // Task 2.2.4: Portamento/glide logic
-    // Only glide if voice envelope is still playing (true legato), not on fresh note starts
-    // Check envelope active state, not voice->active flag (which doesn't get cleared on release)
-    bool voice_still_sounding = voice->env_amp.IsActive();
+    // Only glide if the voice was already active (true legato), not on fresh note starts
+    // Use the voice->active flag which tracks if the voice was previously playing
+    bool voice_still_sounding = voice->active;
     
     if (portamento_time_ms_ > 0.01f && voice_still_sounding && voice->pitch_hz > 0.0f) {
         // Enable glide - voice is still sounding, glide to new pitch (legato)
