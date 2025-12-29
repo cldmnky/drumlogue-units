@@ -714,7 +714,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         
 #ifdef DEBUG
         if (should_debug && current_mode_ == dsp::SYNTH_MODE_POLYPHONIC) {
-            fprintf(stderr, "[POLY] After mixing: mixed_=%.3f\\n", mixed_);
+            fprintf(stderr, "[POLY] After mixing: mixed_=%.3f\n", mixed_);
             fflush(stderr);
         }
 #endif
