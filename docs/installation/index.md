@@ -59,9 +59,11 @@ Open the drumlogue drive and navigate to the appropriate folder based on the uni
 - **macOS**: Drag the drive to the Trash or press ⏏ next to the drive in Finder
 - **Linux**: Use your file manager's eject option or `umount` command
 
-### 5. Restart Your drumlogue
+### 5. Load the Units
 
-Power cycle your drumlogue (turn off, then on again) to load the new units.
+After safely ejecting the drumlogue, press the **(PLAYBACK)/(STOP)** button on the drumlogue to load the new units.
+
+**Note**: No power cycling is required - the units will be loaded automatically when you press the PLAYBACK/STOP button.
 
 ---
 
@@ -88,7 +90,7 @@ Power cycle your drumlogue (turn off, then on again) to load the new units.
 ### Unit Doesn't Appear
 
 1. **Check the folder**: Ensure the `.drmlgunit` file is in the correct `Units/` subfolder
-2. **Restart**: Power cycle the drumlogue after installing
+2. **Load units**: Press the **(PLAYBACK)/(STOP)** button on the drumlogue to load units
 3. **File integrity**: Re-download the unit file if it may be corrupted
 4. **Firmware**: Update your drumlogue firmware to the latest version
 
@@ -102,7 +104,7 @@ Power cycle your drumlogue (turn off, then on again) to load the new units.
 ### Unit Crashes or Causes Issues
 
 1. Remove the problematic `.drmlgunit` file
-2. Power cycle the drumlogue
+2. Press the **(PLAYBACK)/(STOP)** button to reload units
 3. Report the issue on the [GitHub Issues](https://github.com/cldmnky/drumlogue-units/issues) page with:
    - Drumlogue firmware version
    - Unit version
@@ -117,7 +119,7 @@ To update a unit to a newer version:
 1. Download the new `.drmlgunit` file
 2. Connect your drumlogue via USB
 3. Copy the new file to the same location, **replacing** the old file
-4. Safely eject and restart
+4. Safely eject and press the **(PLAYBACK)/(STOP)** button to load the updated unit
 
 **Note**: For synth units with preset support, updating will reset to factory presets. Reverb and delay effect units do not support presets due to drumlogue hardware limitations.
 
@@ -130,7 +132,7 @@ To remove a unit:
 1. Connect your drumlogue via USB
 2. Navigate to the appropriate `Units/` subfolder
 3. Delete the `.drmlgunit` file
-4. Safely eject and restart
+4. Safely eject and press the **(PLAYBACK)/(STOP)** button to reload units
 
 ---
 
@@ -176,7 +178,7 @@ The drumlogue natively uses WAV files encoded in **32-bit float** at **48kHz** s
 1. Connect your drumlogue via USB
 2. Copy sample files to the `Samples/` folder
 3. Follow the same naming convention as above
-4. Safely eject and restart the drumlogue
+4. Safely eject and press the **(PLAYBACK)/(STOP)** button to load the samples
 
 ---
 
