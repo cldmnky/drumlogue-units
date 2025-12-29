@@ -51,12 +51,6 @@ inline float FlushDenormal(float x) {
     return x;
 }
 
-// Conditional denormal flushing - checks once and flushes 4 values at a time
-inline float FlushDenormalConditional(float x) {
-    return (fabsf(x) < kDenormalThreshold) ? 0.0f : x;
-// NOTE: Replaced by TanhLookup() for better performance
-}
-
 // Fast tanh approximation using rational function
 // Accurate for full range, proper clamping
 // tanh(x) ≈ x * (27 + x²) / (27 + 9*x²)
