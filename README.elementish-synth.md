@@ -10,6 +10,7 @@ A powerful modal synthesis voice for the Korg drumlogue, inspired by Mutable Ins
 - **12 mallet types** for percussive variety
 - **5 strike modes** including sample, granular, noise, plectrum, and particle
 - **Marbles-inspired generative sequencer** (Lightweight mode) with 16 presets
+- **NEON SIMD optimizations** for improved ARM Cortex-A7 performance
 - **8 built-in presets** covering a range of sounds from mallets to strings to drones
 - **Full velocity response** with expressive dynamics
 - **Pitch bend support** (±2 semitones)

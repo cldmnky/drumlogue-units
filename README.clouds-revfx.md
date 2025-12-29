@@ -9,6 +9,7 @@ A lush, atmospheric reverb effect for the Korg drumlogue, inspired by Mutable In
 - **Micro-granular processing** for ambient textures and freeze effects
 - **Pitch shifting** for shimmer and octave effects
 - **Dual assignable LFOs** with 16 modulation targets and 3 waveforms
+- **NEON SIMD optimizations** for improved performance on ARM Cortex-A7
 - **Smooth parameter changes** with zipper-noise-free transitions
 
 > **Note:** Presets are not supported for reverb/delay effects on drumlogue hardware due to a known firmware limitation.
@@ -166,6 +167,23 @@ The dual LFOs add dynamic movement to your reverb sounds:
 - **drumlogue Port**: Adapted for Korg logue SDK
 
 ## Version History
+
+- **v1.2.1** - Hardware Compatibility Update
+  - Removed preset support due to drumlogue firmware limitation
+  - All preset-related code and documentation removed
+  - Parameters remain fully accessible via user patterns/songs
+  - Updated documentation to reflect hardware constraints
+
+- **v1.2.0** - Performance & Feature Update
+  - NEON SIMD optimizations for ARM Cortex-A7 (~40% performance improvement)
+  - Vectorized NaN removal and output clamping
+  - Fast stereo buffer interleaving
+  - 4-way parallel soft saturation processing
+  - Dual assignable LFOs with 16 modulation targets
+  - 3 LFO waveforms: Sine, Saw, Random (S&H)
+  - Cross-modulation: LFO1 can modulate LFO2 speed
+  - 24 parameters across 6 pages (added LFO controls)
+  - Refined preset designs (removed in v1.2.1 due to hardware limitation)
 
 - **v1.1.0** - LFO Update
   - Added dual assignable LFOs (LFO1 and LFO2)
