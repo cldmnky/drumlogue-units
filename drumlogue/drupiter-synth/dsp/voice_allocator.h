@@ -184,6 +184,11 @@ private:
     float portamento_time_ms_;     // Portamento time in milliseconds (10-500ms)
     float sample_rate_;            // Cached sample rate for glide calculation
     
+    // Held notes tracking (for proper last-note priority in mono/unison modes)
+    static constexpr uint8_t kMaxHeldNotes = 16;  // Track up to 16 simultaneously held keys
+    uint8_t held_notes_[kMaxHeldNotes];           // Buffer of held MIDI note numbers
+    uint8_t num_held_notes_;                       // Count of currently held notes
+    
     // Helper functions
     Voice* AllocateVoice();        // Find or steal a voice
     Voice* StealVoice();           // Voice stealing dispatcher
@@ -195,6 +200,11 @@ private:
     void AddActiveVoice(uint8_t voice_idx);      // Add voice to active list
     void RemoveActiveVoice(uint8_t voice_idx);   // Remove voice from active list
     void UpdateActiveVoiceList();                // Scan for finished envelopes
+    
+    // Held notes tracking helpers
+    void AddHeldNote(uint8_t note);              // Add note to held notes buffer
+    void RemoveHeldNote(uint8_t note);           // Remove note from held notes buffer
+    uint8_t GetLastHeldNote() const;             // Get most recent held note (0 if none)
     
     // Prevent copying
     VoiceAllocator(const VoiceAllocator&) = delete;

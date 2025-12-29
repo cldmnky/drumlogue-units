@@ -67,10 +67,12 @@ VoiceAllocator::VoiceAllocator()
     , allocation_strategy_(ALLOC_ROUND_ROBIN)
     , unison_detune_cents_(10.0f)  // Default 10 cents detune
     , portamento_time_ms_(0.0f)    // Task 2.2.4: Default no glide
-    , sample_rate_(48000.0f) {     // Task 2.2.4: Default sample rate
+    , sample_rate_(48000.0f)       // Task 2.2.4: Default sample rate
+    , num_held_notes_(0) {         // Initialize held notes tracking
     // Zero-initialize all voices
     memset(voices_, 0, sizeof(voices_));
     memset(active_voice_list_, 0, sizeof(active_voice_list_));  // Clear active voice list
+    memset(held_notes_, 0, sizeof(held_notes_));  // Clear held notes buffer
 }
 
 VoiceAllocator::~VoiceAllocator() {
@@ -141,6 +143,9 @@ void VoiceAllocator::UpdateActiveVoiceList() {
 void VoiceAllocator::NoteOn(uint8_t note, uint8_t velocity) {
     timestamp_++;  // Increment for voice stealing
     
+    // Add note to held notes buffer (for mono/unison last-note priority)
+    AddHeldNote(note);
+    
     Voice* voice = nullptr;
     uint8_t voice_idx = 0;
     
@@ -184,13 +189,24 @@ void VoiceAllocator::NoteOn(uint8_t note, uint8_t velocity) {
 }
 
 void VoiceAllocator::NoteOff(uint8_t note) {
+    // Remove note from held notes buffer
+    RemoveHeldNote(note);
+    
     switch (mode_) {
         case SYNTH_MODE_MONOPHONIC:
-            // Monophonic: release voice 0 if it matches
+            // Monophonic: Check if released note matches current playing note
             if (voices_[0].active && voices_[0].midi_note == note) {
-                voices_[0].env_amp.NoteOff();
-                voices_[0].env_filter.NoteOff();
-                voices_[0].env_pitch.NoteOff();
+                // Check if there are other held notes
+                uint8_t last_held = GetLastHeldNote();
+                if (last_held > 0) {
+                    // Retrigger with the most recent held note (last-note priority)
+                    TriggerVoice(&voices_[0], last_held, 64);  // Use default velocity
+                } else {
+                    // No more held notes - release the voice
+                    voices_[0].env_amp.NoteOff();
+                    voices_[0].env_filter.NoteOff();
+                    voices_[0].env_pitch.NoteOff();
+                }
             }
             break;
             
@@ -206,12 +222,24 @@ void VoiceAllocator::NoteOff(uint8_t note) {
             break;
             
         case SYNTH_MODE_UNISON:
-            // Unison: release all voices
-            for (uint8_t i = 0; i < max_voices_; i++) {
-                if (voices_[i].active) {
-                    voices_[i].env_amp.NoteOff();
-                    voices_[i].env_filter.NoteOff();
-                    voices_[i].env_pitch.NoteOff();
+            // Unison: Check if released note matches current playing note
+            if (voices_[0].active && voices_[0].midi_note == note) {
+                // Check if there are other held notes
+                uint8_t last_held = GetLastHeldNote();
+                if (last_held > 0) {
+                    // Retrigger with the most recent held note (last-note priority)
+                    float frequency = common::MidiHelper::NoteToFreq(last_held);
+                    unison_osc_.SetFrequency(frequency);
+                    TriggerVoice(&voices_[0], last_held, 64);  // Use default velocity
+                } else {
+                    // No more held notes - release all voices
+                    for (uint8_t i = 0; i < max_voices_; i++) {
+                        if (voices_[i].active) {
+                            voices_[i].env_amp.NoteOff();
+                            voices_[i].env_filter.NoteOff();
+                            voices_[i].env_pitch.NoteOff();
+                        }
+                    }
                 }
             }
             break;
@@ -399,6 +427,47 @@ void VoiceAllocator::TriggerVoice(Voice* voice, uint8_t note, uint8_t velocity) 
     voice->env_amp.NoteOn();
     voice->env_filter.NoteOn();
     voice->env_pitch.NoteOn();  // Task 2.2.1: Trigger per-voice pitch envelope
+}
+
+// ============================================================================
+// Held Notes Tracking (for last-note priority in mono/unison modes)
+// ============================================================================
+
+void VoiceAllocator::AddHeldNote(uint8_t note) {
+    // Check if already in buffer (avoid duplicates)
+    for (uint8_t i = 0; i < num_held_notes_; i++) {
+        if (held_notes_[i] == note) {
+            // Move to end (most recent)
+            for (uint8_t j = i; j < num_held_notes_ - 1; j++) {
+                held_notes_[j] = held_notes_[j + 1];
+            }
+            held_notes_[num_held_notes_ - 1] = note;
+            return;
+        }
+    }
+    
+    // Add new note if there's room
+    if (num_held_notes_ < kMaxHeldNotes) {
+        held_notes_[num_held_notes_++] = note;
+    }
+}
+
+void VoiceAllocator::RemoveHeldNote(uint8_t note) {
+    // Find and remove note from buffer
+    uint8_t new_count = 0;
+    for (uint8_t i = 0; i < num_held_notes_; i++) {
+        if (held_notes_[i] != note) {
+            held_notes_[new_count++] = held_notes_[i];
+        }
+    }
+    num_held_notes_ = new_count;
+}
+
+uint8_t VoiceAllocator::GetLastHeldNote() const {
+    if (num_held_notes_ > 0) {
+        return held_notes_[num_held_notes_ - 1];  // Return most recent
+    }
+    return 0;  // No held notes
 }
 
 }  // namespace dsp
