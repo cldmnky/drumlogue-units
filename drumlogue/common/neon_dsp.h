@@ -15,6 +15,9 @@
 #include <arm_neon.h>
 #endif
 
+// Include fixed-point math utilities
+#include "./fixed_mathq.h"
+
 #ifndef NEON_DSP_NS
 #define NEON_DSP_NS neon_dsp
 #endif
@@ -493,6 +496,64 @@ inline void WaveshapeTanh(float* buffer, float drive, uint32_t frames) {
 
 } // namespace osc
 } // namespace NEON_DSP_NS
+
+// Q31 Fixed-point DSP functions
+namespace q31 {
+
+/**
+ * @brief Convert float to Q31 format (-1.0 to 1.0 -> INT32_MIN to INT32_MAX)
+ */
+inline q31_t float_to_q31(float f) {
+    // Clamp to [-1.0, 1.0] range
+    f = (f < -1.0f) ? -1.0f : (f > 1.0f) ? 1.0f : f;
+    // Convert to Q31: multiply by 2^31 - 1
+    return static_cast<q31_t>(f * 2147483647.0f);
+}
+
+/**
+ * @brief Convert Q31 to float format (INT32_MIN to INT32_MAX -> -1.0 to 1.0)
+ */
+inline float q31_to_float(q31_t q) {
+    return static_cast<float>(q) / 2147483647.0f;
+}
+
+/**
+ * @brief Q31 linear interpolation for wavetable lookup
+ * @param table Pointer to float wavetable
+ * @param phase Phase from 0.0 to 1.0
+ * @param table_size Size of the wavetable (must be power of 2)
+ * @return Interpolated value
+ */
+inline float q31_wavetable_lookup(const float* table, float phase, uint32_t table_size) {
+    // Clamp phase to [0.0, 1.0)
+    phase = (phase < 0.0f) ? 0.0f : (phase >= 1.0f) ? 0.999999f : phase;
+    
+    // Convert phase to Q31 table position: phase * table_size in Q31 format
+    // Use 64-bit intermediate to avoid overflow
+    uint64_t temp = static_cast<uint64_t>(phase * static_cast<float>(table_size) * 2147483648.0f);
+    q31_t q31_pos = static_cast<q31_t>(temp >> 1);  // Divide by 2 to get proper Q31 range
+    
+    // Extract integer index (top bit) and fractional part (lower 31 bits)
+    uint32_t index = static_cast<uint32_t>(q31_pos) >> 31;
+    uint32_t mask = table_size - 1;
+    index &= mask;
+    
+    // Get table values and convert to Q31
+    q31_t y0 = float_to_q31(table[index]);
+    q31_t y1 = float_to_q31(table[(index + 1) & mask]);
+    
+    // Fractional part for interpolation (0 to 0x7FFFFFFF)
+    q31_t frac = q31_pos & 0x7FFFFFFF;
+    
+    // Linear interpolation using existing linintq31 function
+    q31_t result_q31 = linintq31(frac, y0, y1);
+    
+    // Convert back to float
+    return q31_to_float(result_q31);
+}
+
+} // namespace q31
+
 #endif // USE_NEON
 
 // NOTE: NEON_DSP_NS intentionally not undefined here.

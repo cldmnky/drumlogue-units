@@ -17,7 +17,7 @@
 #include <cmath>
 
 // Include common DSP utilities
-#include "dsp_utils.h"
+#include "../../common/dsp_utils.h"
 
 // Include ARM DSP utilities for NEON optimizations
 #if defined(USE_NEON) && defined(NEON_DCO)
@@ -238,8 +238,13 @@ float JupiterDCO::GenerateWaveform(float phase, float phase_inc) {
     switch (waveform_) {
         case WAVEFORM_SAW:
         {
-            float value = LookupWavetable(ramp_table_, phase);
-            value -= PolyBlep(phase, dt);
+            // Generate naive sawtooth: descending from +1 to -1
+            float value = 1.0f - 2.0f * phase;
+            
+            // Apply PolyBLEP correction at discontinuity (phase = 0)
+            // For a sawtooth, we need to correct the step discontinuity
+            value += PolyBlep(phase, dt);
+            
             return value;
         }
         
@@ -301,18 +306,8 @@ float JupiterDCO::GenerateWaveform(float phase, float phase_inc) {
 
 float JupiterDCO::LookupWavetable(const float* table, float phase) {
 #if defined(USE_NEON) && defined(NEON_DCO)
-    // For now, use standard interpolation - NEON fixed-point needs more careful implementation
-    // TODO: Implement proper Q31 interpolation
-    float table_pos = phase * kWavetableSize;
-    int index = static_cast<int>(table_pos);
-    float frac = table_pos - index;
-    
-    // Bounds check
-    if (index >= kWavetableSize) index = kWavetableSize - 1;
-    if (index < 0) index = 0;
-    
-    // Interpolate between samples
-    return table[index] + (table[index + 1] - table[index]) * frac;
+    // Use Q31 fixed-point interpolation for better performance and precision
+    return q31::q31_wavetable_lookup(table, phase, kWavetableSize);
 #else
     // Standard floating-point interpolation
     float table_pos = phase * kWavetableSize;
