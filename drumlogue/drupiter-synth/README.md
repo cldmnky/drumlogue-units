@@ -65,7 +65,7 @@ Drupiter has 24 parameters organized across 6 pages. Use the drumlogue's page bu
 
 | Parameter | Range | Description |
 |-----------|-------|-------------|
-| **D2 OCT** | 0-127 | Oscillator 2 octave (16', 8', 4') |
+| **D2 OCT** | 0-127 | Oscillator 2 octave (32', 16', 8', 4') |
 | **D2 WAVE** | RAMP/SQR/PULSE/TRI | Waveform selection |
 | **D2 TUNE** | 0-127 | Detune (64 = centered, ±10 cents) |
 | **D2 LEVEL** | 0-127 | Oscillator 2 volume and cross-mod depth |

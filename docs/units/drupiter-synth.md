@@ -27,7 +27,8 @@ Drupiter brings the classic Roland Jupiter-8 sound to the Korg drumlogue with du
 
 ### 🎹 Dual DCO Architecture
 - **5 Waveforms per oscillator:** Ramp, Square, Pulse, Triangle, SAW_PWM
-- **Independent octave selection:** 16', 8', 4' for each DCO
+- **DCO-1 octave selection:** 16', 8', 4'
+- **DCO-2 octave selection:** 32', 16', 8', 4'
 - **Pulse width control** for dynamic timbres
 - **SAW_PWM:** Pulse-width modulated sawtooth for evolving timbral character
 - **DCO2 detune** for thick, chorused sounds
@@ -106,7 +107,7 @@ Drupiter has **24 parameters** organized across **6 pages**. Use the drumlogue's
 
 | Parameter | Range | Description |
 |-----------|-------|-------------|
-| **D2 OCT** | 0-127 | Oscillator 2 octave (16', 8', 4') |
+| **D2 OCT** | 0-127 | Oscillator 2 octave (32', 16', 8', 4') |
 | **D2 WAVE** | RAMP/SQR/PULSE/TRI | Waveform selection |
 | **D2 PW** | 0-127 | Pulse width (affects PULSE waveform) |
 | **D2 LEVEL** | 0-127 | Oscillator 2 volume in mix |

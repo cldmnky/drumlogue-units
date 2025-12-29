@@ -44,7 +44,7 @@ The unit has 24 parameters organized across 6 pages:
 | Parameter | Range | Description |
 |-----------|-------|-------------|
 | **WAVE** | 0-4 | Waveform: SAW, SQR, PULSE, TRI, SAW_PWM |
-| **OCTAVE** | 16', 8', 4' | Oscillator octave |
+| **OCTAVE** | 32', 16', 8', 4' | Oscillator octave |
 | **LEVEL** | 0-127 | Oscillator level in mixer |
 | **DETUNE** | -64 to +63 | Fine tuning (±1 semitone) |
 

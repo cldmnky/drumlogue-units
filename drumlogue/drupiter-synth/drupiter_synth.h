@@ -169,7 +169,7 @@ public:
         PARAM_XMOD,              // 0-100: Cross-mod DCO2->DCO1
         
         // Page 2: DCO-2
-        PARAM_DCO2_OCT,          // 0-2: Octave (16', 8', 4')
+        PARAM_DCO2_OCT,          // 0-3: Octave (32', 16', 8', 4')
         PARAM_DCO2_WAVE,         // 0-3: Waveform
         PARAM_DCO2_TUNE,         // 0-100: Detune (50=center)
         PARAM_SYNC,              // 0-2: OFF/SOFT/HARD

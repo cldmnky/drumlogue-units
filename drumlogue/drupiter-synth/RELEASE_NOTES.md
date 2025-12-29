@@ -82,7 +82,8 @@ First stable release of Drupiter, a Jupiter-8 inspired monophonic synthesizer fo
 - Dual DCOs with 4 waveforms each (Ramp, Square, Pulse, Triangle)
 - Hard sync (DCO1 → DCO2) for aggressive timbres
 - Cross-modulation (DCO2 → DCO1 FM) for complex harmonic content
-- Independent octave selection (16', 8', 4')
+- DCO-1: octave selection (16', 8', 4')
+- DCO-2: octave selection (32', 16', 8', 4')
 - Pulse width control for pulse waveforms
 - Detune control for DCO2
 
