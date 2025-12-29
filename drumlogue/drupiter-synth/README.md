@@ -1,26 +1,32 @@
 # Drupiter - Jupiter-8 Synthesizer for Korg Drumlogue
 
-**Version**: 1.0.0  
+**Version**: 1.1.0  
 **Developer**: CLDM (0x434C444D)  
-**Type**: Monophonic Synthesizer Unit  
+**Type**: Polyphonic/Monophonic Synthesizer Unit  
 **Based on**: Bristol Jupiter-8 Emulation
 
 ---
 
 ## Overview
 
-Drupiter is a monophonic synthesizer unit for the Korg drumlogue that brings the classic Roland Jupiter-8 sound to your fingertips. Featuring dual oscillators, a multi-mode filter, and comprehensive modulation capabilities, Drupiter delivers rich, warm analog-style tones perfect for bass, leads, pads, and more.
+Drupiter is a versatile synthesizer unit for the Korg drumlogue that brings the classic Roland Jupiter-8 sound with modern enhancements. Featuring dual oscillators, multi-mode synthesis (mono/polyphonic/unison), expanded waveforms, and comprehensive modulation capabilities, Drupiter delivers rich, warm analog-style tones perfect for bass, leads, pads, and complex polyphonic arrangements.
 
 ### Key Features
 
-- **Dual DCOs** with 4 waveforms each (Ramp, Square, Pulse, Triangle)
+- **Multi-Mode Synthesis**: Mono, Polyphonic, and Unison modes
+- **Dual DCOs** with 5 waveforms each (Ramp, Square, Pulse, Triangle, PWM Sawtooth)
 - **Hard Sync** (DCO1 → DCO2) for aggressive timbres
 - **Cross-Modulation** (DCO2 → DCO1 FM) for complex harmonic content
+- **Unison Oscillator** with golden ratio detuning and stereo spread
+- **ENV TO PITCH** modulation (±12 semitones)
+- **Portamento/Glide** with true legato detection
 - **Multi-Mode Filter** (LP12, LP24, HP12, BP12) with self-oscillation
 - **Dual ADSR Envelopes** for VCF and VCA
+- **Extended Modulation Hub** (18 destinations)
+- **12 Factory Presets** covering all synthesis modes
 - **LFO** with 4 waveforms and delay envelope
 - **Keyboard Tracking** (50% default) for natural filter response
-- **6 Factory Presets** covering common synth sounds
+- **12 Factory Presets** covering all synthesis modes
 
 ---
 
@@ -305,7 +311,7 @@ This unit is released under MIT License. See LICENSE file for details.
 - Hard sync and cross-modulation
 - Dual ADSR envelopes
 - LFO with 4 waveforms
-- 6 factory presets
+- 12 factory presets
 - Keyboard tracking
 
 ---
