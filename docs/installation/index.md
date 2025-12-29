@@ -119,7 +119,7 @@ To update a unit to a newer version:
 3. Copy the new file to the same location, **replacing** the old file
 4. Safely eject and restart
 
-**Note**: Preset data is stored in the unit file. Updating will reset to default presets.
+**Note**: For synth units with preset support, updating will reset to factory presets. Reverb and delay effect units do not support presets due to drumlogue hardware limitations.
 
 ---
 
