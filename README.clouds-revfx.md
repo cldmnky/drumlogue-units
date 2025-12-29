@@ -9,8 +9,9 @@ A lush, atmospheric reverb effect for the Korg drumlogue, inspired by Mutable In
 - **Micro-granular processing** for ambient textures and freeze effects
 - **Pitch shifting** for shimmer and octave effects
 - **Dual assignable LFOs** with 16 modulation targets and 3 waveforms
-- **8 built-in presets** covering a range of reverb styles
 - **Smooth parameter changes** with zipper-noise-free transitions
+
+> **Note:** Presets are not supported for reverb/delay effects on drumlogue hardware due to a known firmware limitation.
 
 ## Installation
 
@@ -107,21 +108,6 @@ The unit has 24 parameters organized across 6 pages:
 | 1 | SAW | Ramp down from +1 to -1 |
 | 2 | RANDOM | Smoothly interpolated random values (sample & hold with glide) |
 
-## Presets
-
-The unit includes 8 carefully crafted presets:
-
-| # | Name | Description |
-|---|------|-------------|
-| 0 | **INIT** | Clean starting point with moderate reverb settings |
-| 1 | **HALL** | Large concert hall with long decay and enhanced texture |
-| 2 | **PLATE** | Bright plate reverb with maximum diffusion |
-| 3 | **SHIMMER** | Pitched reverb with octave-up shimmer effect |
-| 4 | **CLOUD** | Granular texture combined with reverb for ambient clouds |
-| 5 | **FREEZE** | Long reverb optimized for frozen/pad sounds with heavy texture |
-| 6 | **OCTAVER** | Pitch-shifted reverb with subtle octave-down effect |
-| 7 | **AMBIENT** | Lush ambient wash combining reverb, texture, granular, and subtle shimmer. Includes LFO modulation on texture. |
-
 ## Usage Tips
 
 ### Using the LFOs
@@ -143,15 +129,13 @@ The dual LFOs add dynamic movement to your reverb sounds:
 
 ### Creating Ambient Pads
 
-1. Start with the **FREEZE** or **AMBIENT** preset
-2. Increase **TIME** and **DIFFUSION** for longer, smoother tails
-3. Add **TEXTURE** for additional density
-4. Enable **FREEZE** to capture and sustain a pad from your input
+1. Set **TIME** and **DIFFUSION** to high values for longer, smoother tails
+2. Add **TEXTURE** for additional density
+3. Enable **FREEZE** to capture and sustain a pad from your input
 
 ### Adding Shimmer
 
-1. Start with the **SHIMMER** preset or the **INIT** preset
-2. Set **SHIFT AMT** to taste (60-100 for subtle, higher for obvious shimmer)
+1. Set **SHIFT AMT** to taste (60-100 for subtle, higher for obvious shimmer)
 3. Set **SHFT PTCH** to 88 (+12 semitones/1 octave up) for classic shimmer
 4. Adjust **SHFT SIZE** - smaller values sound more natural
 

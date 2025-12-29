@@ -64,8 +64,8 @@ if [ ! -f "unit_host_arm" ]; then
     make -f Makefile.podman podman-build
 fi
 
-# Check if test signals exist
-if [ ! -f "$INPUT_WAV" ]; then
+# Check if test signals exist (skip if only testing presets)
+if [ -z "$TEST_PRESETS_FLAG" ] && [ ! -f "$INPUT_WAV" ]; then
     echo "⚙️  Generating test signals..."
     python3 generate_signals.py
 fi
@@ -73,7 +73,11 @@ fi
 # Create output directory
 mkdir -p build
 
-echo "🧪 Testing $UNIT_NAME in QEMU ARM emulation..."
+if [ -n "$TEST_PRESETS_FLAG" ]; then
+    echo "🧪 Testing $UNIT_NAME presets in QEMU ARM emulation..."
+else
+    echo "🧪 Testing $UNIT_NAME in QEMU ARM emulation..."
+fi
 echo ""
 
 # Run test
@@ -98,8 +102,10 @@ podman run --rm -it \
 if [ $? -eq 0 ]; then
     echo ""
     echo "✅ Test passed!"
-    echo "📁 Output: $OUTPUT_WAV"
-    ls -lh "$OUTPUT_WAV"
+    if [ -z "$TEST_PRESETS_FLAG" ]; then
+        echo "📁 Output: $OUTPUT_WAV"
+        ls -lh "$OUTPUT_WAV"
+    fi
 else
     echo ""
     echo "❌ Test failed"
