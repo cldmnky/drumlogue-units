@@ -21,51 +21,48 @@ Drupiter brings the classic Roland Jupiter-8 sound to the Korg drumlogue with du
 ## Features
 
 ### 🎹 Synthesis Modes
-- **Polyphonic Mode:** True polyphony with intelligent voice allocation
+- **Polyphonic Mode:** 8-voice polyphony with intelligent voice allocation
 - **Unison Mode:** Rich ensemble effects with golden ratio detuning and stereo spread
 - **Mono Mode:** Classic monophonic operation with portamento/glide
 
 ### 🎹 Dual DCO Architecture
-- **5 Waveforms per oscillator:** Ramp, Square, Pulse, Triangle, SAW_PWM
+- **5 Waveforms per oscillator:** SAW, SQR, PULSE, TRI, SAW_PWM (DCO1), SAW, NOISE, PULSE, SINE, SAW_PWM (DCO2)
 - **DCO-1 octave selection:** 16', 8', 4'
 - **DCO-2 octave selection:** 32', 16', 8', 4'
 - **Pulse width control** for dynamic timbres
 - **SAW_PWM:** Pulse-width modulated sawtooth for evolving timbral character
-- **DCO2 detune** for thick, chorused sounds
-- **Mixer** with independent level controls
+- **DCO2 fine tuning** for thick, chorused sounds
+- **Oscillator mix** with independent level controls
 
 ### ⚡ Modulation Synthesis
-- **Hard Sync:** DCO1 → DCO2 for aggressive timbres
+- **Hard Sync:** DCO2 syncs to DCO1 (OFF/SOFT/HARD modes)
 - **Cross-Modulation:** DCO2 → DCO1 FM for complex harmonic content
 - Variable amount controls for both effects
 
 ### 🔊 Multi-Mode Filter
-- **Four filter types:** LP12, LP24, HP12, BP12
-- **Self-oscillation** capability
+- **State-variable filter** with resonance
+- **Keyboard tracking** (0-120% adjustable)
 - **Envelope amount** (±100%)
-- **Keyboard tracking** (50% default)
-- **Resonance** control
+- **Self-oscillation** capability
 
 ### 📊 Dual ADSR Envelopes
-- **VCF Envelope:** Controls filter cutoff modulation
-- **VCA Envelope:** Controls voice amplitude
+- **Filter Envelope:** Controls filter cutoff modulation
+- **Amp Envelope:** Controls voice amplitude
 - Independent Attack, Decay, Sustain, Release for each
 - Smooth exponential curves
 
-### 🌀 Global LFO
-- **4 Waveforms:** Triangle, Sawtooth, Square, S&H
-- **LFO Delay:** Gradual fade-in for vibrato effects
-- **Rate control:** 0.1Hz - 20Hz
-- Assignable to filter cutoff and pitch
+### 🌀 Global LFO & Modulation Hub
+- **LFO Rate:** 0.1Hz - 50Hz adjustable
+- **Modulation Hub:** 18 modulation destinations including:
+  - Synth mode switching (poly/mono/unison)
+  - Unison detuning and stereo spread
+  - Envelope to pitch modulation
+  - Portamento/glide control
+  - Filter and amplitude modulation
 
-### 🎛️ Modulation Matrix
-- **ENV → Filter:** Bipolar envelope amount
-- **ENV → Pitch:** Filter envelope modulates oscillator pitch (±12 semitones)
-- **LFO → Filter:** Variable modulation depth
-- **LFO → Pitch:** Variable pitch modulation
-- **Key Tracking:** Natural filter response across keyboard
-- **Velocity → VCA:** Dynamic expression
-- **Portamento:** True legato detection with exponential glide curves
+### 🎛️ Effects
+- **Chorus/Space effects** with dry/wet/both modes
+- **Stereo widening** capabilities
 
 ---
 
@@ -98,95 +95,94 @@ Drupiter has **24 parameters** organized across **6 pages**. Use the drumlogue's
 
 | Parameter | Range | Description |
 |-----------|-------|-------------|
-| **D1 OCT** | 0-127 | Oscillator 1 octave (16', 8', 4') |
-| **D1 WAVE** | RAMP/SQR/PULSE/TRI | Waveform selection |
-| **D1 PW** | 0-127 | Pulse width (affects PULSE waveform) |
-| **D1 LEVEL** | 0-127 | Oscillator 1 volume in mix |
+| **D1 OCT** | 0-2 | Oscillator 1 octave (16', 8', 4') |
+| **D1 WAVE** | 0-4 | Waveform: SAW, SQR, PULSE, TRI, SAW_PWM |
+| **D1 PW** | 0-100% | Pulse width (affects PULSE waveform) |
+| **XMOD** | 0-100% | Cross-modulation depth (DCO2 → DCO1 FM) |
 
 ### Page 2: DCO-2 (Oscillator 2)
 
 | Parameter | Range | Description |
 |-----------|-------|-------------|
-| **D2 OCT** | 0-127 | Oscillator 2 octave (32', 16', 8', 4') |
-| **D2 WAVE** | RAMP/SQR/PULSE/TRI | Waveform selection |
-| **D2 PW** | 0-127 | Pulse width (affects PULSE waveform) |
-| **D2 LEVEL** | 0-127 | Oscillator 2 volume in mix |
+| **D2 OCT** | 0-3 | Oscillator 2 octave (32', 16', 8', 4') |
+| **D2 WAVE** | 0-4 | Waveform: SAW, NOISE, PULSE, SINE, SAW_PWM |
+| **D2 TUNE** | 0-100 | Fine tuning (-50 to +50 cents, 50=center) |
+| **SYNC** | 0-2 | Oscillator sync: OFF, SOFT, HARD |
 
-### Page 3: Modulation
-
-| Parameter | Range | Description |
-|-----------|-------|-------------|
-| **DETUNE** | 0-127 | DCO2 fine tuning (±50 cents) |
-| **H SYNC** | 0-127 | Hard sync amount (DCO1 → DCO2) |
-| **X MOD** | 0-127 | Cross-modulation depth (DCO2 → DCO1) |
-| **NOISE** | 0-127 | White noise level |
-
-### Page 4: VCF (Filter)
+### Page 3: Mix & Filter
 
 | Parameter | Range | Description |
 |-----------|-------|-------------|
-| **VCF MODE** | LP12/LP24/HP12/BP12 | Filter type |
-| **CUTOFF** | 0-127 | Filter cutoff frequency |
-| **RES** | 0-127 | Filter resonance |
-| **ENV AMT** | -64/+63 | Filter envelope amount (bipolar) |
+| **MIX** | 0-100% | Oscillator mix (0=DCO1 only, 100=DCO2 only) |
+| **CUTOFF** | 0-100% | Filter cutoff frequency |
+| **RESO** | 0-100% | Filter resonance |
+| **KEYFLW** | 0-100% | Keyboard tracking (0-120%, 50=half tracking) |
 
-### Page 5: VCF Envelope
-
-| Parameter | Range | Description |
-|-----------|-------|-------------|
-| **VCF ATK** | 0-127 | Filter envelope attack time |
-| **VCF DEC** | 0-127 | Filter envelope decay time |
-| **VCF SUS** | 0-127 | Filter envelope sustain level |
-| **VCF REL** | 0-127 | Filter envelope release time |
-
-### Page 6: VCA Envelope & LFO
+### Page 4: Filter Envelope
 
 | Parameter | Range | Description |
 |-----------|-------|-------------|
-| **VCA ATK** | 0-127 | Amp envelope attack time |
-| **VCA DEC** | 0-127 | Amp envelope decay time |
-| **VCA SUS** | 0-127 | Amp envelope sustain level |
-| **VCA REL** | 0-127 | Amp envelope release time |
+| **F.ATK** | 0-100% | Filter envelope attack time |
+| **F.DCY** | 0-100% | Filter envelope decay time |
+| **F.SUS** | 0-100% | Filter envelope sustain level |
+| **F.REL** | 0-100% | Filter envelope release time |
 
-*Note: LFO parameters are accessed via dedicated drumlogue LFO controls.*
+### Page 5: Amp Envelope
+
+| Parameter | Range | Description |
+|-----------|-------|-------------|
+| **A.ATK** | 0-100% | Amp envelope attack time |
+| **A.DCY** | 0-100% | Amp envelope decay time |
+| **A.SUS** | 0-100% | Amp envelope sustain level |
+| **A.REL** | 0-100% | Amp envelope release time |
+
+### Page 6: Modulation Hub
+
+| Parameter | Range | Description |
+|-----------|-------|-------------|
+| **LFO RT** | 0-100% | LFO rate (0.1Hz - 50Hz) |
+| **MOD HUB** | 0-17 | Modulation destination selector |
+| **MOD AMT** | 0-100 | Amount for selected modulation destination |
+| **EFFECT** | 0-3 | Effect: CHORUS, SPACE, DRY, BOTH |
 
 ---
 
 ## Sound Design Tips
 
 ### Rich Bass Sounds
-1. Set DCO1 to **Ramp** at **16'** (sub-octave)
-2. Set DCO2 to **Square** at **8'** with slight **DETUNE**
-3. Use **LP24** filter with moderate resonance
-4. Short **VCF envelope** with positive amount
-5. Try the **Jupiter Bass** preset as starting point
+1. Set DCO1 to **SAW** at **16'** (sub-octave)
+2. Set DCO2 to **SQR** at **8'** with slight **D2 TUNE**
+3. Adjust **MIX** for balance between oscillators
+4. Use filter with moderate **RESO** and **KEYFLW**
+5. Short filter envelope with positive amount
+6. Try the **Jupiter Bass** preset as starting point
 
 ### Cutting Leads
-1. Use **Pulse** or **Square** waveforms
-2. Enable **Hard Sync** for brightness
-3. **LP12** or **BP12** filter for character
-4. Moderate **VCF envelope** amount
-5. Consider **X MOD** for harmonic complexity
+1. Use **PULSE** or **SQR** waveforms
+2. Enable **SYNC** (SOFT or HARD) for brightness
+3. Adjust **MIX** for oscillator balance
+4. Moderate filter envelope amount
+5. Use **XMOD** for harmonic complexity
+6. Check **Sync Lead** preset
 
 ### Warm Pads
-1. Mix **Ramp** (DCO1) and **Triangle** (DCO2)
-2. Detune DCO2 slightly
-3. **LP24** filter with low resonance
-4. Long **VCA attack** and **VCF attack**
+1. Mix **SAW** (DCO1) and **TRI** (DCO2)
+2. Fine-tune DCO2 with **D2 TUNE**
+3. Adjust **MIX** for blend
+4. Long amp envelope **A.ATK** and filter **F.ATK**
 5. Use **Analog Pad** preset
 
 ### Bell Tones
-1. Enable **Cross-Modulation** (X MOD)
-2. Use **Ramp** or **Triangle** waveforms
-3. **BP12** or **HP12** filter
-4. Fast **VCF decay** to zero sustain
-5. Check **FM Bell** preset
+1. Enable **XMOD** (cross-modulation)
+2. Use **SAW** or **TRI** waveforms
+3. Fast filter **F.DCY** to zero sustain
+4. Check **FM Bell** preset
 
 ### Sync Leads
-1. Set DCO1 to **Ramp** or **Pulse**
-2. Set DCO2 to **Ramp** or **Saw**
-3. Enable **Hard Sync** (50-100%)
-4. **LP12** filter with moderate cutoff
+1. Set DCO1 to **SAW** or **PULSE**
+2. Set DCO2 to **SAW** or **SAW_PWM**
+3. Enable **SYNC** (50-100%)
+4. Adjust **MIX** for oscillator balance
 5. Modulate filter with envelope
 
 ---
@@ -206,14 +202,14 @@ Drupiter has **24 parameters** organized across **6 pages**. Use the drumlogue's
 
 ## Technical Specifications
 
-- **Type:** Monophonic Synthesizer
-- **Voices:** 1 (monophonic)
-- **Oscillators:** 2 DCOs with 4 waveforms each
-- **Filter:** Multi-mode state-variable (12/24dB LP, 12dB HP/BP)
+- **Type:** Polyphonic/Monophonic Synthesizer
+- **Voices:** 8-voice polyphony + unison mode
+- **Oscillators:** 2 DCOs with 5 waveforms each
+- **Filter:** Multi-mode state-variable filter
 - **Envelopes:** 2x ADSR (VCF, VCA)
-- **LFO:** 1 global with 4 waveforms
+- **LFO:** 1 global LFO with modulation hub
 - **Parameters:** 24 (6 pages × 4 parameters)
-- **Presets:** 6 factory presets
+- **Presets:** 12 factory presets
 - **Sample Rate:** 48 kHz
 - **MIDI:** Full note on/off with velocity
 

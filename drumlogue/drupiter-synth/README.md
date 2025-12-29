@@ -50,138 +50,108 @@ Drupiter has 24 parameters organized across 6 pages. Use the drumlogue's page bu
 
 | Parameter | Range | Description |
 |-----------|-------|-------------|
-| **D1 OCT** | 0-127 | Oscillator 1 octave (16', 8', 4') |
-| **D1 WAVE** | RAMP/SQR/PULSE/TRI | Waveform selection |
-| **D1 PW** | 0-127 | Pulse width (only affects PULSE waveform) |
-| **D1 LEVEL** | 0-127 | Oscillator 1 volume in mix |
+| **D1 OCT** | 0-2 | Oscillator 1 octave (16', 8', 4') |
+| **D1 WAVE** | 0-4 | Waveform: SAW, SQR, PULSE, TRI, SAW_PWM |
+| **D1 PW** | 0-100% | Pulse width (affects PULSE waveform) |
+| **XMOD** | 0-100% | Cross-modulation depth (DCO2 → DCO1 FM) |
 
 **Tips:**
-- Lower octaves (0-42) = 16' (sub-bass)
-- Mid octaves (43-84) = 8' (standard pitch)
-- High octaves (85-127) = 4' (one octave up)
-- PULSE waveform at PW=64 becomes square wave
+- 16' = sub-bass octave (lower)
+- 8' = standard pitch range
+- 4' = one octave higher
+- SAW_PWM creates evolving timbres with pulse width modulation
 
 ### Page 2: DCO-2 (Oscillator 2)
 
 | Parameter | Range | Description |
 |-----------|-------|-------------|
-| **D2 OCT** | 0-127 | Oscillator 2 octave (32', 16', 8', 4') |
-| **D2 WAVE** | RAMP/SQR/PULSE/TRI | Waveform selection |
-| **D2 TUNE** | 0-127 | Detune (64 = centered, ±10 cents) |
-| **D2 LEVEL** | 0-127 | Oscillator 2 volume and cross-mod depth |
+| **D2 OCT** | 0-3 | Oscillator 2 octave (32', 16', 8', 4') |
+| **D2 WAVE** | 0-4 | Waveform: SAW, NOISE, PULSE, SINE, SAW_PWM |
+| **D2 TUNE** | 0-100 | Fine tuning (-50 to +50 cents, 50=center) |
+| **SYNC** | 0-2 | Oscillator sync: OFF, SOFT, HARD |
 
 **Tips:**
-- Detune DCO2 slightly (60-68) for chorus/detune effect
-- Higher D2 LEVEL increases both volume AND cross-modulation
-- Cross-mod creates FM-style timbres automatically
-- Hard sync is always active (DCO1 syncs DCO2)
+- 32' = ultra-sub-bass octave (DCO-2 only)
+- Fine tune with D2 TUNE for chorus effects
+- SOFT sync = gentle locking, HARD sync = aggressive timbres
+- NOISE waveform for percussive sounds
 
-### Page 3: VCF (Voltage Controlled Filter)
+### Page 3: Mix & Filter
 
 | Parameter | Range | Description |
 |-----------|-------|-------------|
-| **CUTOFF** | 0-127 | Filter cutoff frequency (20Hz - 20kHz) |
-| **RESO** | 0-127 | Filter resonance (self-oscillates at max) |
-| **ENV AMT** | 0-127 | Envelope modulation depth (64=none, ±4 octaves) |
-| **VCF TYP** | LP12/LP24/HP12/BP12 | Filter mode |
+| **MIX** | 0-100% | Oscillator mix (0=DCO1 only, 100=DCO2 only) |
+| **CUTOFF** | 0-100% | Filter cutoff frequency |
+| **RESO** | 0-100% | Filter resonance |
+| **KEYFLW** | 0-100% | Keyboard tracking (0-120%, 50=half tracking) |
 
 **Tips:**
-- LP12 = Classic warm low-pass (12dB/oct)
-- LP24 = Steep low-pass (24dB/oct, cascaded)
-- HP12 = High-pass for thin/bright sounds
-- BP12 = Band-pass for vocal/nasal tones
-- RESO > 100 enters self-oscillation (pure sine tone)
-- ENV AMT < 64 = negative modulation (filter closes)
-- ENV AMT > 64 = positive modulation (filter opens)
+- MIX at 50% = equal balance between oscillators
+- Higher KEYFLW = more natural filter response across keyboard
+- RESO creates emphasis at cutoff frequency
 
-### Page 4: VCF Envelope (Filter)
+### Page 4: Filter Envelope
 
 | Parameter | Range | Description |
 |-----------|-------|-------------|
-| **F.ATK** | 0-127 | Attack time (0 = instant, 127 = ~5 seconds) |
-| **F.DCY** | 0-127 | Decay time (0 = instant, 127 = ~5 seconds) |
-| **F.SUS** | 0-127 | Sustain level (0 = silent, 127 = full) |
-| **F.REL** | 0-127 | Release time (0 = instant, 127 = ~5 seconds) |
+| **F.ATK** | 0-100% | Filter envelope attack time |
+| **F.DCY** | 0-100% | Filter envelope decay time |
+| **F.SUS** | 0-100% | Filter envelope sustain level |
+| **F.REL** | 0-100% | Filter envelope release time |
 
 **Tips:**
-- Fast attack (0-10) + high ENV AMT = plucky sounds
-- Slow attack (80-127) = filter sweeps in gradually
-- Low sustain (0-30) + long decay = percussive filter movement
-- Long release (100-127) = smooth fade-out on note off
+- Fast attack = plucky, percussive filter movement
+- Slow attack = gradual filter opening
+- Low sustain + long decay = sweeping filter effects
 
-### Page 5: VCA Envelope (Amplifier)
+### Page 5: Amp Envelope
 
 | Parameter | Range | Description |
 |-----------|-------|-------------|
-| **A.ATK** | 0-127 | Attack time (0 = instant, 127 = ~5 seconds) |
-| **A.DCY** | 0-127 | Decay time (0 = instant, 127 = ~5 seconds) |
-| **A.SUS** | 0-127 | Sustain level (0 = silent, 127 = full) |
-| **A.REL** | 0-127 | Release time (0 = instant, 127 = ~5 seconds) |
+| **A.ATK** | 0-100% | Amp envelope attack time |
+| **A.DCY** | 0-100% | Amp envelope decay time |
+| **A.SUS** | 0-100% | Amp envelope sustain level |
+| **A.REL** | 0-100% | Amp envelope release time |
 
 **Tips:**
-- Fast attack (0-5) = punchy sounds (bass, plucks)
-- Slow attack (60-127) = pad/string style
-- High sustain (100-127) = held notes maintain volume
-- Long release (80-127) = smooth, flowing sound
+- Fast attack = punchy, percussive sounds
+- Slow attack = pad/string style sounds
+- High sustain = sustained notes maintain volume
 
-### Page 6: LFO & Modulation
+### Page 6: Modulation Hub
 
 | Parameter | Range | Description |
 |-----------|-------|-------------|
-| **LFO RATE** | 0-127 | LFO frequency (0.1Hz - 50Hz) |
-| **LFO WAV** | TRI/RAMP/SQR/S&H | LFO waveform |
-| **LFO>VCO** | 0-127 | LFO to oscillator pitch (vibrato) |
-| **LFO>VCF** | 0-127 | LFO to filter cutoff (±2 octaves) |
+| **LFO RT** | 0-100% | LFO rate (0.1Hz - 50Hz) |
+| **MOD HUB** | 0-17 | Modulation destination selector |
+| **MOD AMT** | 0-100 | Amount for selected modulation destination |
+| **EFFECT** | 0-3 | Effect: CHORUS, SPACE, DRY, BOTH |
 
 **Tips:**
-- TRI = Smooth vibrato/tremolo
-- RAMP = Rising/falling modulation
-- SQR = Trill/alternating effect
-- S&H = Random stepped modulation
-- LFO>VCO at 20-40 = subtle vibrato
-- LFO>VCF at 50-80 = filter sweeps/wobbles
-- Combine LFO>VCO + LFO>VCF for complex movement
+- MOD HUB selects from 18 modulation destinations
+- Includes synth mode switching, unison controls, envelope modulation
+- EFFECT adds chorus/space processing
 
 ---
 
 ## Factory Presets
 
-Drupiter includes 6 carefully crafted factory presets:
+Drupiter includes **12 factory presets** covering common synthesizer sounds:
 
-### 1. Init (Default)
-- Clean starting point
-- Square wave, moderate filter
-- Good for experimentation
-
-### 2. Bass
-- Deep, punchy bass
-- Pulse wave with high resonance
-- Short decay, low sustain
-- Perfect for: basslines, kicks
-
-### 3. Lead
-- Bright, cutting lead sound
-- Ramp wave with vibrato
-- Filter envelope for movement
-- Perfect for: solos, melodies
-
-### 4. Pad
-- Lush, evolving pad
-- Dual DCOs detuned
-- Slow attack/release
-- Perfect for: atmospheres, backing
-
-### 5. Brass
-- Bold brass-like sound
-- Ramp wave, filter envelope
-- Medium attack
-- Perfect for: stabs, hits
-
-### 6. Strings
-- String ensemble sound
-- Dual DCOs detuned
-- Slow attack, high cutoff
-- Perfect for: pads, backgrounds
+| # | Name | Description |
+|---|------|-------------|
+| **1** | **Jupiter Bass** | Deep, punchy bass with filter envelope |
+| **2** | **Jupiter Lead** | Bright, cutting lead with sync |
+| **3** | **Sync Lead** | Hard-synced aggressive lead sound |
+| **4** | **FM Bell** | Cross-modulated bell tones |
+| **5** | **Analog Pad** | Warm, evolving pad with slow attack |
+| **6** | **Poly Arp** | Bright arpeggiator-style sound |
+| **7** | **PWM Lead** | Pulse-width modulated sawtooth lead |
+| **8** | **Unison Pad** | Rich ensemble pad with golden ratio detuning |
+| **9** | **Poly Bass** | Polyphonic bass with glide |
+| **10** | **ENV FM** | Filter envelope modulating pitch |
+| **11** | **Stereo Unison** | Wide stereo ensemble effects |
+| **12** | **Glide Lead** | Smooth portamento lead sound |
 
 ---
 

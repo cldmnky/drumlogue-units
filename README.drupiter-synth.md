@@ -34,30 +34,55 @@ The unit has 24 parameters organized across 6 pages:
 
 | Parameter | Range | Description |
 |-----------|-------|-------------|
-| **WAVE** | 0-4 | Waveform: SAW, SQR, PULSE, TRI, SAW_PWM |
-| **OCTAVE** | 16', 8', 4' | Oscillator octave |
-| **LEVEL** | 0-127 | Oscillator level in mixer |
-| **DETUNE** | -64 to +63 | Fine tuning (±1 semitone) |
+| **D1 OCT** | 0-2 | Oscillator 1 octave (16', 8', 4') |
+| **D1 WAVE** | 0-4 | Waveform: SAW, SQR, PULSE, TRI, SAW_PWM |
+| **D1 PW** | 0-100% | Pulse width (affects PULSE waveform) |
+| **XMOD** | 0-100% | Cross-modulation depth (DCO2 → DCO1 FM) |
 
 ### Page 2: DCO-2 (Oscillator 2)
 
 | Parameter | Range | Description |
 |-----------|-------|-------------|
-| **WAVE** | 0-4 | Waveform: SAW, SQR, PULSE, TRI, SAW_PWM |
-| **OCTAVE** | 32', 16', 8', 4' | Oscillator octave |
-| **LEVEL** | 0-127 | Oscillator level in mixer |
-| **DETUNE** | -64 to +63 | Fine tuning (±1 semitone) |
+| **D2 OCT** | 0-3 | Oscillator 2 octave (32', 16', 8', 4') |
+| **D2 WAVE** | 0-4 | Waveform: SAW, NOISE, PULSE, SINE, SAW_PWM |
+| **D2 TUNE** | 0-100 | Fine tuning (-50 to +50 cents, 50=center) |
+| **SYNC** | 0-2 | Oscillator sync: OFF, SOFT, HARD |
 
-### Page 3: Mixer & Modulation
+### Page 3: Mix & Filter
 
 | Parameter | Range | Description |
 |-----------|-------|-------------|
-| **DCO1 LVL** | 0-127 | DCO1 level |
-| **DCO2 LVL** | 0-127 | DCO2 level |
-| **HARD SYNC** | 0-127 | Hard sync amount (DCO1 → DCO2) |
-| **CROSS MOD** | 0-127 | Cross-modulation amount (DCO2 → DCO1) |
+| **MIX** | 0-100% | Oscillator mix (0=DCO1 only, 100=DCO2 only) |
+| **CUTOFF** | 0-100% | Filter cutoff frequency |
+| **RESO** | 0-100% | Filter resonance |
+| **KEYFLW** | 0-100% | Keyboard tracking (0-120%, 50=half tracking) |
 
-### Page 4: Filter & Envelopes
+### Page 4: Filter Envelope
+
+| Parameter | Range | Description |
+|-----------|-------|-------------|
+| **F.ATK** | 0-100% | Filter envelope attack time |
+| **F.DCY** | 0-100% | Filter envelope decay time |
+| **F.SUS** | 0-100% | Filter envelope sustain level |
+| **F.REL** | 0-100% | Filter envelope release time |
+
+### Page 5: Amp Envelope
+
+| Parameter | Range | Description |
+|-----------|-------|-------------|
+| **A.ATK** | 0-100% | Amp envelope attack time |
+| **A.DCY** | 0-100% | Amp envelope decay time |
+| **A.SUS** | 0-100% | Amp envelope sustain level |
+| **A.REL** | 0-100% | Amp envelope release time |
+
+### Page 6: Modulation Hub
+
+| Parameter | Range | Description |
+|-----------|-------|-------------|
+| **LFO RT** | 0-100% | LFO rate (0.1Hz - 50Hz) |
+| **MOD HUB** | 0-17 | Modulation destination selector |
+| **MOD AMT** | 0-100 | Amount for selected modulation destination |
+| **EFFECT** | 0-3 | Effect: CHORUS, SPACE, DRY, BOTH |
 
 | Parameter | Range | Description |
 |-----------|-------|-------------|
