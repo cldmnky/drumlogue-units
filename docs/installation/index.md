@@ -41,15 +41,15 @@ Open the drumlogue drive and navigate to the appropriate folder based on the uni
 
 | Unit Type | Folder Location |
 |-----------|-----------------|
-| **Synthesizers** | `Units/Synth/` |
-| **Delay Effects** | `Units/DelFX/` |
-| **Reverb Effects** | `Units/RevFX/` |
-| **Master Effects** | `Units/MasterFX/` |
+| **Synthesizers** | `Units/Synths/` |
+| **Delay Effects** | `Units/DelayFXs/` |
+| **Reverb Effects** | `Units/ReverbFXs/` |
+| **Master Effects** | `Units/MasterFXs/` |
 
 ### 3. Copy the Unit Files
 
-- **Clouds Reverb FX** (`clouds_revfx.drmlgunit`) → `Units/RevFX/`
-- **Elementish Synth** (`elementish_synth.drmlgunit`) → `Units/Synth/`
+- **Clouds Reverb FX** (`clouds_revfx.drmlgunit`) → `Units/ReverbFXs/`
+- **Elementish Synth** (`elementish_synth.drmlgunit`) → `Units/Synths/`
 
 ### 4. Safely Eject
 
@@ -146,6 +146,37 @@ The drumlogue has limits on how many user units can be loaded:
 | Master FX | 16 |
 
 If you reach the limit, remove some units to install new ones.
+
+---
+
+## Sample Files
+
+Some units (like synths) may use sample files for additional sounds or drum kits.
+
+### Sample File Naming Rules
+
+Sample files must follow the pattern: `XXX_sample_name.wav`
+
+- **XXX**: Three digits (001-128) indicating the sample index
+- **sample_name**: Only alphanumeric characters and these special characters: `-_!?#$%&'()*+,:;<=>@`
+- **Note**: Filenames only support single-byte ASCII encodings
+- **Invalid files**: Files not following these rules will be deleted from the drumlogue
+
+### Supported Sample Formats
+
+The drumlogue natively uses WAV files encoded in **32-bit float** at **48kHz** sampling rate.
+
+**Supported conversions:**
+- 16-bit, 24-bit, 32-bit PCM
+- Other common sampling rates (automatically converted on startup)
+- **Note**: Converting samples increases startup time
+
+### Installing Sample Files
+
+1. Connect your drumlogue via USB
+2. Copy sample files to the `Samples/` folder
+3. Follow the same naming convention as above
+4. Safely eject and restart the drumlogue
 
 ---
 
