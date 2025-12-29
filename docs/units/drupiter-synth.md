@@ -227,8 +227,8 @@ Drupiter has **24 parameters** organized across **6 pages**. Use the drumlogue's
 ## Download
 
 <div class="download-section">
-  <a href="https://github.com/cldmnky/drumlogue-units/releases/download/drupiter-synth/v1.0.0/drupiter_synth.drmlgunit" class="download-button">
-    ⬇️ Download Drupiter v1.0.0
+  <a href="https://github.com/cldmnky/drumlogue-units/releases/download/drupiter-synth/v1.1.0/drupiter_synth.drmlgunit" class="download-button">
+    ⬇️ Download Drupiter v1.1.0
   </a>
   <p class="download-info">File: drupiter_synth.drmlgunit • Size: 31 KB</p>
 </div>
