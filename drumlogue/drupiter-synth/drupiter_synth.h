@@ -23,6 +23,10 @@
 #include "../common/stereo_widener.h"
 #include "../common/hub_control.h"
 #include "../common/param_format.h"
+#include "../common/perf_mon.h"
+
+// Voice allocation and synthesis modes
+#include "dsp/voice_allocator.h"
 
 // Maximum frames per buffer (drumlogue typically uses 64)
 // Maximum audio buffer size (drumlogue uses 64 frames max)
@@ -43,14 +47,14 @@ namespace dsp {
 // DCO Waveform and Option Names
 // ============================================================================
 
-// DCO1 waveform names
+// DCO1 waveform names (Hoover v2.0: added SAW_PWM)
 static const char* const kDco1WaveNames[] = {
-    "SAW", "SQR", "PUL", "TRI"
+    "SAW", "SQR", "PUL", "TRI", "S-PWM"
 };
 
-// DCO2 waveform names
+// DCO2 waveform names (Hoover v2.0: added SAW_PWM, moved SINE)
 static const char* const kDco2WaveNames[] = {
-    "SAW", "NSE", "PUL", "SIN"
+    "SAW", "NSE", "PUL", "SIN", "S-PWM"
 };
 
 // Octave names (DCO1: 16'/8'/4', DCO2: 32'/16'/8'/4')
@@ -89,6 +93,10 @@ enum ModDestination {
     MOD_VCA_LFO,           // LFO modulation of VCA (tremolo)
     MOD_VCA_KYBD,          // VCA keyboard tracking
     MOD_ENV_KYBD,          // Envelope keyboard tracking (faster at high notes)
+    MOD_SYNTH_MODE,        // Synthesis mode (MONO/POLY/UNISON) - Hoover v2.0
+    MOD_UNISON_DETUNE,     // Unison detune amount (0-50 cents) - Hoover v2.0
+    MOD_ENV_TO_PITCH,      // Filter ENV modulates pitch (±12 semitones) - Phase 2
+    MOD_PORTAMENTO_TIME,   // Portamento/glide time (10-500ms) - Phase 2 Task 2.2.4
     MOD_NUM_DESTINATIONS
 };
 
@@ -100,6 +108,11 @@ static const char* const kVcfTypeNames[] = {
 // LFO waveform names (for LFO WAV hub mode)
 static const char* const kLfoWaveNames[] = {
     "TRI", "RAMP", "SQR", "S&H"
+};
+
+// Synthesis mode names (Hoover v2.0)
+static const char* const kSynthModeNames[] = {
+    "MONO", "POLY", "UNISON"
 };
 
 // Hub control destinations for MOD HUB
@@ -117,7 +130,11 @@ static constexpr common::HubControl<MOD_NUM_DESTINATIONS>::Destination kModDesti
     {"VCA LVL", "%",   0, 100, 100, false, nullptr},       // VCA output level
     {"LFO>VCA", "%",   0, 100, 0,  false, nullptr},        // LFO to VCA (tremolo)
     {"VCA KYB", "%",   0, 100, 0,  false, nullptr},        // VCA keyboard tracking
-    {"ENV KYB", "%",   0, 100, 50, false, nullptr}         // ENV keyboard tracking
+    {"ENV KYB", "%",   0, 100, 50, false, nullptr},        // ENV keyboard tracking
+    {"S MODE",  "",    0, 2,   0,  false, kSynthModeNames}, // Synthesis mode (MONO/POLY/UNISON)
+    {"UNI DET", "ct",  0, 50,  10, false, nullptr},        // Unison detune (cents)
+    {"ENV>PIT", "st",  0, 100, 50, true,  nullptr},        // ENV to pitch (±12 semitones, bipolar!)
+    {"GLIDE",   "ms",  0, 100, 0,  false, nullptr}         // Portamento time (10-500ms exponential)
 };
 
 // Effect mode names
@@ -179,7 +196,7 @@ public:
         PARAM_LFO_RATE,          // 0-100: Direct LFO rate control (NEW!)
         PARAM_MOD_HUB,           // 0-7: Modulation destination selector
         PARAM_MOD_AMT,           // 0-100: Amount for selected destination
-        PARAM_EFFECT,            // 0-1: Effect mode (CHORUS/SPACE)
+        PARAM_EFFECT,            // 0-3: Effect selection (CHORUS/SPACE/DRY/BOTH)
         
         PARAM_COUNT = 24
     };
@@ -277,31 +294,34 @@ public:
     
     /**
      * @brief Load preset
-     * @param preset_id Preset index (0-5)
+     * @param preset_id Preset index (0-11)
      */
     void LoadPreset(uint8_t preset_id);
     
     /**
      * @brief Save current state to preset
-     * @param preset_id Preset index (0-5)
+     * @param preset_id Preset index (0-11)
      */
     void SavePreset(uint8_t preset_id);
     
     /**
      * @brief Get current preset index
-     * @return Current preset index (0-5)
+     * @return Current preset index (0-11)
      */
     uint8_t GetPresetIndex() const { return current_preset_idx_; }
     
     /**
      * @brief Get preset name
-     * @param preset_id Preset index (0-5)
+     * @param preset_id Preset index (0-11)
      * @return Preset name
      */
     const char* GetPresetName(uint8_t preset_id) const;
 
 private:
-    // DSP component instances (forward declared)
+    // Voice allocator (Hoover v2.0)
+    dsp::VoiceAllocator allocator_;
+    
+    // DSP component instances (for mono voice - kept for backward compat)
     dsp::JupiterDCO* dco1_;
     dsp::JupiterDCO* dco2_;
     dsp::JupiterVCF* vcf_;
@@ -311,6 +331,9 @@ private:
     
     // Synthesizer state
     float sample_rate_;
+    dsp::SynthMode current_mode_;  // Runtime mode (MONO/POLY/UNISON)
+    
+    // Oscillator state (monophonic - for backward compatibility)
     bool gate_;                    // Note gate (on/off)
     uint8_t current_note_;         // Current MIDI note
     uint8_t current_velocity_;     // Current note velocity
@@ -425,4 +448,16 @@ private:
     void UpdateVCFParameters();
     void UpdateEnvelopeParameters();
     void UpdateLFOParameters();
+    
+    // ========================================================================
+    // Performance Monitoring (when -DPERF_MON enabled)
+    // ========================================================================
+    
+    #ifdef PERF_MON
+    uint8_t perf_voice_alloc_;    // Voice allocation & gate handling
+    uint8_t perf_dco_;            // DCO oscillator processing
+    uint8_t perf_vcf_;            // VCF filter processing
+    uint8_t perf_effects_;        // Effects (chorus, reverb)
+    uint8_t perf_render_total_;   // Total render time per buffer
+    #endif
 };

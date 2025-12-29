@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <cmath>
+#include "../../common/dsp_utils.h"
 
 namespace dsp {
 
@@ -26,6 +27,10 @@ class JupiterVCF {
 public:
     // Oversampling factor (2x is sufficient with improved ladder topology)
     static constexpr int kOversamplingFactor = 2;
+    
+    // Lookup table sizes
+    static constexpr int kTanhTableSize = 512;        // Tanh[-4,4] with 512 entries
+    static constexpr int kKbdTrackingTableSize = 128;  // One entry per MIDI note
     
     /**
      * @brief Filter modes
@@ -97,11 +102,13 @@ public:
     float Process(float input);
     
     /**
-     * @brief Reset filter state
      */
     void Reset();
 
 private:
+    // Lookup table initialization flag
+    bool tables_initialized_;   // Track if lookup tables are ready
+    
     float sample_rate_;
     float cutoff_hz_;
     float base_cutoff_hz_;     // Base cutoff without modulation
@@ -151,6 +158,33 @@ private:
      * @return Clamped frequency
      */
     float ClampCutoff(float freq) const;
+    
+    /**
+     * @brief Lookup-based tanh approximation (optimized)
+     * @param x Input value
+     * @return tanh(x) approximation from lookup table
+     */
+    float TanhLookup(float x) const;
+
+private:
+    // Lookup tables for optimization
+    static float s_tanh_table[kTanhTableSize];
+    static float s_kbd_tracking_table[kKbdTrackingTableSize];
+    static bool s_tables_initialized;
+    
+    /**
+     * @brief Initialize lookup tables (called from Init())
+     */
+    void InitializeLookupTables();
+    
+    /**
+     * @brief Flush denormal numbers conditionally
+     * @param x Value to check and flush
+     * @return Zero if denormal, original value otherwise
+     */
+    static inline float FlushDenormalConditional(float x) {
+        return (fabsf(x) < 1e-15f) ? 0.0f : x;
+    }
 };
 
 } // namespace dsp

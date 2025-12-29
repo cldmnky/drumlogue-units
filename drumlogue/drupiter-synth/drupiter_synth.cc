@@ -12,6 +12,7 @@
 #include "../common/param_format.h"
 #include "../common/midi_helper.h"
 #include "../common/preset_manager.h"
+#include "../common/dsp_utils.h"
 #include "dsp/jupiter_dco.h"
 #include "dsp/jupiter_vcf.h"
 #include "dsp/jupiter_env.h"
@@ -25,21 +26,45 @@
 #include <arm_neon.h>
 #endif
 
+#define NEON_DSP_NS drupiter
+#include "../common/neon_dsp.h"
+
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
+// Fast pow2 approximation using bit manipulation (from jupiter_dco.cc)
+DRUMLOGUE_ALWAYS_INLINE float fasterpow2f(float p) {
+    float clipp = (p < -126.0f) ? -126.0f : p;
+    union { uint32_t i; float f; } v = { 
+        static_cast<uint32_t>((1 << 23) * (clipp + 126.94269504f))
+    };
+    return v.f;
+}
+
 namespace {
+
+// Threshold constants for modulation and distance checks
+static constexpr float kMinModulation = 0.001f;  // Minimum significant modulation depth
+static constexpr float kMinDistance = 1e-6f;     // Minimum significant log distance for glide
 
 // Fast 2^x approximation (accurate for |x| < 8)
 // Uses polynomial: 2^x ≈ 1 + 0.693x + 0.240x² + 0.056x³
-// Relative error < 0.3% for |x| < 4
+// Relative error < 0.3% for |x| < 4, piecewise approximation for |x| >= 4
 inline float fast_pow2(float x) {
     // Clamp to safe range
     if (x < -8.0f) return 0.00390625f;  // 2^-8
     if (x > 8.0f) return 256.0f;         // 2^8
     
-    // Polynomial approximation (Horner's form)
+    // For |x| >= 4, use piecewise approximation: 2^x = 2^(4 + (x-4)) = 16 * 2^(x-4)
+    // This keeps the polynomial input in the accurate range
+    if (x >= 4.0f) {
+        return 16.0f * fast_pow2(x - 4.0f);
+    } else if (x <= -4.0f) {
+        return fast_pow2(x + 4.0f) * 0.0625f;  // 2^x = 2^((x+4) - 4) = 2^(x+4) / 16
+    }
+    
+    // Polynomial approximation (Horner's form) for |x| < 4
     const float c1 = 0.693147181f;  // ln(2)
     const float c2 = 0.240226507f;  // ln(2)²/2!
     const float c3 = 0.055504109f;  // ln(2)³/3!
@@ -81,19 +106,26 @@ inline uint8_t scale_127_centered_to_100(uint8_t v, uint8_t center_127, uint8_t 
 }  // namespace
 
 DrupiterSynth::DrupiterSynth()
-    : dco1_(nullptr)
+    : allocator_()
+    , dco1_(nullptr)
     , dco2_(nullptr)
     , vcf_(nullptr)
     , lfo_(nullptr)
     , env_vcf_(nullptr)
     , env_vca_(nullptr)
     , sample_rate_(48000.0f)
+    , current_mode_(dsp::SYNTH_MODE_MONOPHONIC)
     , gate_(false)
-    , current_note_(60)
-    , current_velocity_(100)
+    , current_note_(0)
+    , current_velocity_(0)
     , current_freq_hz_(440.0f)
+    , current_preset_()
+    , current_preset_idx_(0)
     , sync_mode_(0)
     , xmod_depth_(0.0f)
+    , mod_hub_(kModDestinations)  // Initialize HubControl
+    , mod_value_str_()
+    , effect_mode_(0)  // CHORUS by default
     , dco1_out_(0.0f)
     , dco2_out_(0.0f)
     , noise_out_(0.0f)
@@ -109,9 +141,6 @@ DrupiterSynth::DrupiterSynth()
     , dco1_level_smooth_(nullptr)
     , dco2_level_smooth_(nullptr)
     , last_cutoff_hz_(1000.0f)
-    , mod_hub_(kModDestinations)  // Initialize HubControl
-    , effect_mode_(0)  // CHORUS by default
-    , current_preset_idx_(0)
     , hpf_prev_output_(0.0f)
     , hpf_prev_input_(0.0f)
 {
@@ -176,8 +205,22 @@ int8_t DrupiterSynth::Init(const unit_runtime_desc_t* desc) {
     space_widener_->SetLfoRate(0.5f);         // 0.5 Hz LFO
     space_widener_->SetMix(0.5f);             // 50% wet/dry mix
     
+    // Initialize voice allocator (Hoover v2.0)
+    allocator_.Init(sample_rate_);
+    allocator_.SetMode(current_mode_);
+    
     // Load init preset (this will set all parameters including smoothed values)
     LoadPreset(0);
+    
+    // Initialize performance monitoring (when -DPERF_MON enabled)
+    #ifdef PERF_MON
+    PERF_MON_INIT();
+    perf_voice_alloc_ = PERF_MON_REGISTER("VoiceAlloc");
+    perf_dco_ = PERF_MON_REGISTER("DCO");
+    perf_vcf_ = PERF_MON_REGISTER("VCF");
+    perf_effects_ = PERF_MON_REGISTER("Effects");
+    perf_render_total_ = PERF_MON_REGISTER("RenderTotal");
+    #endif
     
     return 0;
 }
@@ -266,22 +309,48 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     const float xmod_depth = xmod_depth_;  // Set via PARAM_XMOD in SetParameter
     
     // === Read MOD HUB values ===
-    const float lfo_pwm_depth = mod_hub_.GetValue(MOD_LFO_TO_PWM) / 100.0f;
-    const float lfo_vcf_depth = mod_hub_.GetValue(MOD_LFO_TO_VCF) / 100.0f;
-    const float lfo_vco_depth = mod_hub_.GetValue(MOD_LFO_TO_VCO) / 100.0f;
-    const float env_pwm_depth = mod_hub_.GetValue(MOD_ENV_TO_PWM) / 100.0f;
-    // ENV→VCF is bipolar: 0-100 maps to -1.0 to +1.0 (50 = center/zero)
-    const float env_vcf_depth = (static_cast<int32_t>(mod_hub_.GetValue(MOD_ENV_TO_VCF)) - 50) / 50.0f;
+    // Unipolar destinations (0 to 1.0)
+    const float lfo_pwm_depth = mod_hub_.GetValueNormalizedUnipolar(MOD_LFO_TO_PWM);
+    const float lfo_vcf_depth = mod_hub_.GetValueNormalizedUnipolar(MOD_LFO_TO_VCF);
+    const float lfo_vco_depth = mod_hub_.GetValueNormalizedUnipolar(MOD_LFO_TO_VCO);
+    const float env_pwm_depth = mod_hub_.GetValueNormalizedUnipolar(MOD_ENV_TO_PWM);
+    // Bipolar destinations (-1.0 to +1.0)
+    const float env_vcf_depth = mod_hub_.GetValueNormalizedBipolar(MOD_ENV_TO_VCF);
     const uint8_t hpf_cutoff = mod_hub_.GetValue(MOD_HPF);
     const uint8_t vcf_type = mod_hub_.GetValue(MOD_VCF_TYPE);
     const uint8_t lfo_delay = mod_hub_.GetValue(MOD_LFO_DELAY);
     const uint8_t lfo_wave = mod_hub_.GetValue(MOD_LFO_WAVE);
     
     // New modulation features
-    const float lfo_env_amt = mod_hub_.GetValue(MOD_LFO_ENV_AMT) / 100.0f;    // ENV modulates LFO rate
-    const float vca_level = mod_hub_.GetValue(MOD_VCA_LEVEL) / 100.0f;        // VCA output level
-    const float vca_lfo_depth = mod_hub_.GetValue(MOD_VCA_LFO) / 100.0f;      // LFO->VCA tremolo
-    const float vca_kybd = mod_hub_.GetValue(MOD_VCA_KYBD) / 100.0f;          // VCA keyboard tracking
+    const float lfo_env_amt = mod_hub_.GetValueNormalizedUnipolar(MOD_LFO_ENV_AMT);
+    const float vca_level = mod_hub_.GetValueNormalizedUnipolar(MOD_VCA_LEVEL);
+    const float vca_lfo_depth = mod_hub_.GetValueNormalizedUnipolar(MOD_VCA_LFO);
+    const float vca_kybd = mod_hub_.GetValueNormalizedUnipolar(MOD_VCA_KYBD);
+    
+    // Phase 2: Pitch envelope modulation (ENV→PIT), bipolar scaled by 12 semitones
+    const float env_pitch_depth = mod_hub_.GetValueScaledBipolar(MOD_ENV_TO_PITCH, 12.0f);
+    
+    // Synthesis mode selection (Hoover v2.0) - read from MOD HUB
+    const uint8_t synth_mode_value = mod_hub_.GetValue(MOD_SYNTH_MODE);
+    const dsp::SynthMode synth_mode = static_cast<dsp::SynthMode>(synth_mode_value < 3 ? synth_mode_value : 0);
+    if (synth_mode != current_mode_) {
+        current_mode_ = synth_mode;
+        allocator_.SetMode(current_mode_);
+    }
+    
+    // Unison detune control (Hoover v2.0) - 0-50 cents from MOD HUB
+    const float unison_detune_cents = static_cast<float>(mod_hub_.GetValue(MOD_UNISON_DETUNE));
+    allocator_.SetUnisonDetune(unison_detune_cents);
+    
+    // Portamento time control (Phase 2 Task 2.2.4) - 0-100 maps to 0-500ms exponentially
+    // Special case: 0 = portamento disabled (0ms), 1-100 = 10-500ms exponential
+    const uint8_t porta_param = mod_hub_.GetValue(MOD_PORTAMENTO_TIME);
+    float porta_time_ms = 0.0f;
+    if (porta_param > 0) {
+        const float porta_normalized = porta_param / 100.0f;
+        porta_time_ms = 10.0f * powf(50.0f, porta_normalized);  // 10ms to 500ms exponential
+    }
+    allocator_.SetPortamentoTime(porta_time_ms);
     
     // NOTE: LFO delay and waveform are now set in UpdateLfoSettings()
     // when MOD_HUB or MOD_AMT parameters change (not every buffer)
@@ -316,7 +385,38 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     // Velocity modulation (fixed value for now, TODO: make parameter)
     const float vel_mod = (current_velocity_ / 127.0f) * 0.5f;  // Fixed 50% velocity->VCF
     
+    // Task 2.2.4: Process portamento/glide for MONO/UNISON modes
+    // For polyphonic mode, glide is processed per-voice in the render loop
+    // Use the correct glide increment calculated in voice allocator
+    if (current_mode_ == dsp::SYNTH_MODE_MONOPHONIC || 
+        current_mode_ == dsp::SYNTH_MODE_UNISON) {
+        dsp::Voice& voice0 = allocator_.GetVoiceMutable(0);
+        if (voice0.is_gliding) {
+            // Use the pre-calculated glide increment from voice allocator
+            // This ensures constant speed glide (not slowing down near target)
+            float log_pitch = logf(voice0.pitch_hz);
+            log_pitch += voice0.glide_increment;
+            
+            // Check if we've reached target
+            float log_target = logf(voice0.glide_target_hz);
+            if ((voice0.glide_increment > 0.0f && log_pitch >= log_target) ||
+                (voice0.glide_increment < 0.0f && log_pitch <= log_target)) {
+                voice0.pitch_hz = voice0.glide_target_hz;
+                voice0.is_gliding = false;
+            } else {
+                voice0.pitch_hz = expf(log_pitch);
+            }
+            
+            // Update current_freq_hz_ for MONO/UNISON rendering
+            current_freq_hz_ = voice0.pitch_hz;
+        }
+    }
+    
     // ============ Main DSP loop - render to mix_buffer_ ============
+    #ifdef PERF_MON
+    PERF_MON_START(perf_render_total_);
+    #endif
+    
     for (uint32_t i = 0; i < frames; ++i) {
         // Process envelopes FIRST (needed for LFO rate modulation)
         vcf_env_out_ = env_vcf_->Process();
@@ -324,7 +424,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         
         // Process LFO with optional envelope rate modulation
         // ENV→LFO modulates LFO frequency: 0% = no change, 100% = double rate at peak
-        if (lfo_env_amt > 0.001f) {
+        if (lfo_env_amt > kMinModulation) {
             // Temporarily boost LFO rate based on envelope
             // Store current rate, modulate, process, restore
             // This avoids permanently changing the LFO rate parameter
@@ -346,66 +446,278 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         
         // Add LFO→PWM modulation
         float pw_mod = 0.0f;
-        if (lfo_pwm_depth > 0.001f) {
+        if (lfo_pwm_depth > kMinModulation) {
             pw_mod += lfo_out_ * lfo_pwm_depth * 0.4f;  // ±40% PWM range
         }
         
         // Add ENV→PWM modulation
-        if (env_pwm_depth > 0.001f) {
+        if (env_pwm_depth > kMinModulation) {
             pw_mod += vcf_env_out_ * env_pwm_depth * 0.4f;  // ±40% PWM range
         }
         
         // Apply modulated pulse width, clamped to safe range (10%-90%)
-        float modulated_pw = base_pw + pw_mod;
-        if (modulated_pw < 0.1f) modulated_pw = 0.1f;
-        if (modulated_pw > 0.9f) modulated_pw = 0.9f;
-        dco1_->SetPulseWidth(modulated_pw);
-        dco2_->SetPulseWidth(modulated_pw);  // Both DCOs share PWM
+        float modulated_pw = clampf(base_pw + pw_mod, 0.1f, 0.9f);
         
-        // Calculate DCO frequencies with LFO modulation
-        float freq1 = current_freq_hz_ * dco1_oct_mult;
-        float freq2 = current_freq_hz_ * dco2_oct_mult * detune_ratio;
+#ifdef DEBUG
+        static uint32_t debug_frame_counter = 0;
+        bool should_debug = (debug_frame_counter++ % 4800 == 0); // Every 100ms at 48kHz
+#endif
         
-        // Apply LFO modulation to frequencies (vibrato)
-        if (lfo_vco_depth > 0.001f) {
-            const float lfo_mod = 1.0f + lfo_out_ * lfo_vco_depth * 0.05f;  // ±5% vibrato
-            freq1 *= lfo_mod;
-            freq2 *= lfo_mod;
+        // === MODE-SPECIFIC OSCILLATOR PROCESSING ===
+        #ifdef PERF_MON
+        PERF_MON_START(perf_voice_alloc_);
+        #endif
+        
+        #ifdef PERF_MON
+        PERF_MON_END(perf_voice_alloc_);
+        PERF_MON_START(perf_dco_);
+        #endif
+        
+        // Pre-calculate pitch envelope modulation ratio (used in all modes)
+        float pitch_mod_ratio = 1.0f;
+        if (fabsf(env_pitch_depth) > kMinModulation) {
+            pitch_mod_ratio = powf(2.0f, vcf_env_out_ * env_pitch_depth / 12.0f);
         }
         
-        dco1_->SetFrequency(freq1);
-        dco2_->SetFrequency(freq2);
-        
-        // Only process DCO2 if it's audible (level > 0) or needed for XMOD
-        const bool dco2_needed = (dco2_level > 0.001f) || (xmod_depth > 0.001f);
-        
-        if (dco2_needed) {
-            // Process DCO2 first to get fresh output for FM
+        if (current_mode_ == dsp::SYNTH_MODE_POLYPHONIC) {
+            // POLYPHONIC MODE: Render and mix multiple independent voices
+            mixed_ = 0.0f;
+            uint8_t active_voice_count = 0;
+            
+            // Render each active voice
+            for (uint8_t v = 0; v < DRUPITER_MAX_VOICES; v++) {
+                const dsp::Voice& voice = allocator_.GetVoice(v);
+                
+                // Skip inactive voices (no note or envelope finished)
+                if (!voice.active && !voice.env_amp.IsActive()) {
+                    continue;
+                }
+                
+                active_voice_count++;
+                
+#ifdef DEBUG
+                if (should_debug) {
+                    fprintf(stderr, "[POLY] Voice %d: active=%d note=%d freq=%.2f Hz env_active=%d\n",
+                            v, voice.active, voice.midi_note, voice.pitch_hz, voice.env_amp.IsActive());
+                    fflush(stderr);
+                }
+#endif
+                
+                // Get non-const access to voice for processing
+                dsp::Voice& voice_mut = const_cast<dsp::Voice&>(voice);
+                
+                // Task 2.2.4: Process portamento/glide
+                // Use the pre-calculated glide increment from voice allocator
+                // This ensures constant speed glide (not slowing down near target)
+                if (voice_mut.is_gliding) {
+                    // Use the pre-calculated glide increment from voice allocator
+                    float log_pitch = logf(voice_mut.pitch_hz);
+                    log_pitch += voice_mut.glide_increment;
+                    
+                    // Check if we've reached target
+                    float log_target = logf(voice_mut.glide_target_hz);
+                    if ((voice_mut.glide_increment > 0.0f && log_pitch >= log_target) ||
+                        (voice_mut.glide_increment < 0.0f && log_pitch <= log_target)) {
+                        voice_mut.pitch_hz = voice_mut.glide_target_hz;
+                        voice_mut.is_gliding = false;
+                    } else {
+                        voice_mut.pitch_hz = expf(log_pitch);
+                    }
+                }
+                
+                // Set voice-specific parameters
+                voice_mut.dco1.SetWaveform(static_cast<dsp::JupiterDCO::Waveform>(
+                    current_preset_.params[PARAM_DCO1_WAVE]));
+                voice_mut.dco2.SetWaveform(static_cast<dsp::JupiterDCO::Waveform>(
+                    current_preset_.params[PARAM_DCO2_WAVE]));
+                voice_mut.dco1.SetPulseWidth(modulated_pw);
+                voice_mut.dco2.SetPulseWidth(modulated_pw);
+                
+                // Calculate frequencies for this voice
+                float voice_freq1 = voice.pitch_hz * dco1_oct_mult;
+                float voice_freq2 = voice.pitch_hz * dco2_oct_mult * detune_ratio;
+                
+                // Apply LFO vibrato
+                if (lfo_vco_depth > kMinModulation) {
+                    const float lfo_mod = 1.0f + lfo_out_ * lfo_vco_depth * 0.05f;
+                    voice_freq1 *= lfo_mod;
+                    voice_freq2 *= lfo_mod;
+                }
+                
+                // Apply pitch envelope modulation (Task 2.2.1: Per-voice pitch envelope)
+                if (pitch_mod_ratio != 1.0f) {
+                    // Use per-voice pitch envelope for independent pitch modulation
+                    const float voice_env_pitch = voice_mut.env_pitch.Process();
+                    // Use faster pow2 approximation instead of expensive powf
+                    const float voice_pitch_ratio = fasterpow2f(voice_env_pitch * env_pitch_depth / 12.0f);
+
+                    // NEON-optimized: multiply both frequencies by ratio simultaneously
+#ifdef USE_NEON
+                    float32x2_t freq_pair = vld1_f32(&voice_freq1);  // Load freq1, freq2
+                    float32x2_t ratio_vec = vdup_n_f32(voice_pitch_ratio);  // Duplicate ratio
+                    freq_pair = vmul_f32(freq_pair, ratio_vec);  // Multiply both
+                    vst1_f32(&voice_freq1, freq_pair);  // Store back
+#else
+                    voice_freq1 *= voice_pitch_ratio;
+                    voice_freq2 *= voice_pitch_ratio;
+#endif
+                }
+                
+                voice_mut.dco1.SetFrequency(voice_freq1);
+                voice_mut.dco2.SetFrequency(voice_freq2);
+                
+#ifdef DEBUG
+                if (should_debug) {
+                    fprintf(stderr, "[POLY] Voice %d: freq1=%.2f freq2=%.2f waveform=%d\n",
+                            v, voice_freq1, voice_freq2, current_preset_.params[PARAM_DCO1_WAVE]);
+                    fflush(stderr);
+                }
+#endif
+                
+                // Process voice oscillators
+                float voice_dco1 = voice_mut.dco1.Process();
+                float voice_dco2 = 0.0f;
+                
+                if (dco2_level > kMinModulation) {
+                    voice_dco2 = voice_mut.dco2.Process();
+                }
+                
+                // Mix this voice's oscillators
+                float voice_mix = voice_dco1 * dco1_level + voice_dco2 * dco2_level;
+                
+#ifdef DEBUG
+                if (should_debug) {
+                    fprintf(stderr, "[POLY] Voice %d: dco1=%.3f dco2=%.3f mix=%.3f levels=(%.3f,%.3f)\n",
+                            v, voice_dco1, voice_dco2, voice_mix, dco1_level, dco2_level);
+                    fflush(stderr);
+                }
+#endif
+                
+                // Process voice envelope (each voice has its own envelope)
+                float voice_env = voice_mut.env_amp.Process();
+                
+#ifdef DEBUG
+                if (should_debug) {
+                    fprintf(stderr, "[POLY] Voice %d: voice_env=%.3f\n", v, voice_env);
+                    fflush(stderr);
+                }
+#endif
+                
+                // Apply envelope and add to mix
+                mixed_ += voice_mix * voice_env;
+            }
+            
+            // Scale by voice count to prevent clipping
+            if (active_voice_count > 0) {
+                mixed_ /= sqrtf(static_cast<float>(active_voice_count));
+            }
+            
+        } else if (current_mode_ == dsp::SYNTH_MODE_UNISON) {
+            // UNISON MODE: Use UnisonOscillator for multi-voice detuned stack + DCO2
+            dsp::UnisonOscillator& unison_osc = allocator_.GetUnisonOscillator();
+            
+            // Set waveform and pulse width (same as DCO1)
+            unison_osc.SetWaveform(static_cast<dsp::JupiterDCO::Waveform>(
+                current_preset_.params[PARAM_DCO1_WAVE]));
+            unison_osc.SetPulseWidth(modulated_pw);
+            
+            // Calculate frequency with LFO modulation
+            float unison_freq = current_freq_hz_ * dco1_oct_mult;
+            if (lfo_vco_depth > kMinModulation) {
+                const float lfo_mod = 1.0f + lfo_out_ * lfo_vco_depth * 0.05f;
+                unison_freq *= lfo_mod;
+            }
+            
+            // Apply pitch envelope modulation (pre-calculated)
+            unison_freq *= pitch_mod_ratio;
+            
+            unison_osc.SetFrequency(unison_freq);
+            
+            // Process stereo unison output
+            float unison_left, unison_right;
+            unison_osc.Process(&unison_left, &unison_right);
+            
+            // Average L+R for unison mono signal
+            float unison_mono = (unison_left + unison_right) * 0.5f;
+            
+            // Also process DCO2 (like in MONO mode)
+            dco2_->SetPulseWidth(modulated_pw);
+            float freq2 = current_freq_hz_ * dco2_oct_mult * detune_ratio;
+            if (lfo_vco_depth > kMinModulation) {
+                const float lfo_mod = 1.0f + lfo_out_ * lfo_vco_depth * 0.05f;
+                freq2 *= lfo_mod;
+            }
+            
+            // Apply pitch envelope modulation to DCO2 (pre-calculated)
+            freq2 *= pitch_mod_ratio;
+            
+            dco2_->SetFrequency(freq2);
             dco2_out_ = dco2_->Process();
             
-            // Cross-modulation (DCO2 -> DCO1 FM) - Jupiter-8 style
-            // Only apply FM if XMOD depth is significant
-            if (xmod_depth > 0.001f) {
-                // Scale: 100% XMOD = ±1 semitone = ±1/12 octave
-                dco1_->ApplyFM(dco2_out_ * xmod_depth * 0.083f);
+            // Mix unison stack with DCO2
+            mixed_ = unison_mono * dco1_level + dco2_out_ * dco2_level;
+        } else {
+            // MONO MODE: Use main synth DCOs (monophonic, single voice)
+            dco1_->SetPulseWidth(modulated_pw);
+            dco2_->SetPulseWidth(modulated_pw);  // Both DCOs share PWM
+            
+            // Calculate DCO frequencies with LFO modulation
+            float freq1 = current_freq_hz_ * dco1_oct_mult;
+            float freq2 = current_freq_hz_ * dco2_oct_mult * detune_ratio;
+        
+            // Apply LFO modulation to frequencies (vibrato)
+            if (lfo_vco_depth > kMinModulation) {
+                const float lfo_mod = 1.0f + lfo_out_ * lfo_vco_depth * 0.05f;  // ±5% vibrato
+                freq1 *= lfo_mod;
+                freq2 *= lfo_mod;
+            }
+            
+            // Apply pitch envelope modulation (pre-calculated)
+            freq1 *= pitch_mod_ratio;
+            freq2 *= pitch_mod_ratio;
+            
+            dco1_->SetFrequency(freq1);
+            dco2_->SetFrequency(freq2);
+            
+            // Only process DCO2 if it's audible (level > 0) or needed for XMOD
+            const bool dco2_needed = (dco2_level > kMinModulation) || (xmod_depth > kMinModulation);
+            
+            if (dco2_needed) {
+                // Process DCO2 first to get fresh output for FM
+                dco2_out_ = dco2_->Process();
+                
+                // Cross-modulation (DCO2 -> DCO1 FM) - Jupiter-8 style
+                // Only apply FM if XMOD depth is significant
+                if (xmod_depth > kMinModulation) {
+                    // Scale: 100% XMOD = ±1 semitone = ±1/12 octave
+                    dco1_->ApplyFM(dco2_out_ * xmod_depth * 0.083f);
+                } else {
+                    dco1_->ApplyFM(0.0f);
+                }
             } else {
+                // DCO2 not needed - silence it and ensure no FM
+                dco2_out_ = 0.0f;
                 dco1_->ApplyFM(0.0f);
             }
-        } else {
-            // DCO2 not needed - silence it and ensure no FM
-            dco2_out_ = 0.0f;
-            dco1_->ApplyFM(0.0f);
+            
+            // Process DCO1 (optionally modulated by DCO2)
+            dco1_out_ = dco1_->Process();
+            
+            // Note: Sync disabled when XMOD is active
+            // Jupiter-8 doesn't support sync+xmod simultaneously due to processing order
+            // (DCO2 must be processed first for FM, breaking sync master/slave relationship)
+            
+            // Mix oscillators with smoothed levels
+            mixed_ = dco1_out_ * dco1_level + dco2_out_ * dco2_level;
         }
+        // === END MODE-SPECIFIC PROCESSING ===
         
-        // Process DCO1 (optionally modulated by DCO2)
-        dco1_out_ = dco1_->Process();
-        
-        // Note: Sync disabled when XMOD is active
-        // Jupiter-8 doesn't support sync+xmod simultaneously due to processing order
-        // (DCO2 must be processed first for FM, breaking sync master/slave relationship)
-        
-        // Mix oscillators with smoothed levels
-        mixed_ = dco1_out_ * dco1_level + dco2_out_ * dco2_level;
+#ifdef DEBUG
+        if (should_debug && current_mode_ == dsp::SYNTH_MODE_POLYPHONIC) {
+            fprintf(stderr, "[POLY] After mixing: mixed_=%.3f\n", mixed_);
+            fflush(stderr);
+        }
+#endif
         
         // Soft clamp mixed oscillators to prevent clipping (both at 100% = potential ±2.0)
         if (mixed_ > 1.2f) mixed_ = 1.2f + 0.5f * (mixed_ - 1.2f);
@@ -445,7 +757,11 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
 
         // Keyboard tracking (from MOD HUB)
         const float note_offset = (static_cast<int32_t>(current_note_) - 60) / 12.0f;
-        cutoff_base *= semitones_to_ratio(note_offset * key_track * 12.0f);  // Fast approx
+        // Clamp tracking exponent to ±4 octaves to prevent numerical issues
+        const float tracking_exponent = note_offset * key_track;
+        const float clamped_exponent = (tracking_exponent > 4.0f) ? 4.0f : 
+                                      (tracking_exponent < -4.0f) ? -4.0f : tracking_exponent;
+        cutoff_base *= semitones_to_ratio(clamped_exponent * 12.0f);  // Fast approx
         
         // Combine envelope, LFO, velocity, and hub modulation
         float total_mod = vcf_env_out_ * 2.0f              // Base envelope modulation
@@ -474,7 +790,17 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         if (current_preset_.params[PARAM_VCF_CUTOFF] >= 100) {
             filtered_ = hpf_out;  // Bypass LPF, but keep HPF processing
         } else {
+            #ifdef PERF_MON
+            PERF_MON_END(perf_dco_);
+            PERF_MON_START(perf_vcf_);
+            #endif
+            
             filtered_ = vcf_->Process(hpf_out);  // Process HPF output through LPF
+            
+            #ifdef PERF_MON
+            PERF_MON_END(perf_vcf_);
+            PERF_MON_START(perf_effects_);
+            #endif
             
             // Soft clip filter output to prevent resonance spikes
             if (filtered_ > 1.8f) filtered_ = 1.8f + 0.2f * (filtered_ - 1.8f);
@@ -483,10 +809,30 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         
         // Apply VCA with envelope, LFO tremolo, keyboard tracking, and level control
         // Base VCA envelope
+        // In POLY mode, voices already rendered with their individual envelopes - no additional processing needed
+        // In UNISON mode, use voice 0's envelope and let it complete its release
+        // In MONO mode, use main env_vca_
         float vca_gain = vca_env_out_;
+        if (current_mode_ == dsp::SYNTH_MODE_UNISON) {
+            // In UNISON mode: All unison voices share the same envelope state
+            // CRITICAL: Always process envelope (even during release) to allow proper note-off
+            // Don't check IsAnyVoiceActive() - let envelope complete its full ADSR cycle
+            dsp::Voice& lead_voice = allocator_.GetVoiceMutable(0);
+            vca_gain = lead_voice.env_amp.Process();
+            
+            // Only check envelope state (not voice active flag) to detect true silence
+            if (!lead_voice.env_amp.IsActive()) {
+                vca_gain = 0.0f;  // Envelope fully released = silence
+            }
+        } else if (current_mode_ == dsp::SYNTH_MODE_POLYPHONIC) {
+            // In POLY mode, voices have already been rendered with their individual envelopes
+            // Each voice applied its own envelope at line 473, so no additional envelope processing here
+            // Just use base VCA gain of 1.0 for global modulation (tremolo, keyboard tracking)
+            vca_gain = 1.0f;
+        }
         
         // VCA LFO (tremolo): 0% = no tremolo, 100% = full amplitude modulation
-        if (vca_lfo_depth > 0.001f) {
+        if (vca_lfo_depth > kMinModulation) {
             // Bipolar LFO (-1 to +1) -> unipolar tremolo (0.5 to 1.5)
             const float tremolo = 1.0f + (lfo_out_ * vca_lfo_depth * 0.5f);
             vca_gain *= tremolo;
@@ -494,7 +840,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         
         // VCA Keyboard tracking: higher notes louder
         // 0% = no tracking, 100% = +6dB per octave above C4
-        if (vca_kybd > 0.001f) {
+        if (vca_kybd > kMinModulation) {
             const float note_offset = (static_cast<int32_t>(current_note_) - 60) / 12.0f;  // Octaves from C4
             const float kb_gain = 1.0f + (note_offset * vca_kybd * 0.5f);  // +50% per octave at 100%
             vca_gain *= kb_gain;
@@ -519,7 +865,15 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
 #endif
     }
     
+    #ifdef PERF_MON
+    PERF_MON_END(perf_effects_);
+    #endif
+    
     // ============ Output stage with chorus/space effect ============
+    
+    #ifdef PERF_MON
+    PERF_MON_START(perf_effects_);
+    #endif
     
     // Sanitize buffer (remove NaN/Inf) and apply soft clamp
     drupiter::neon::SanitizeAndClamp(mix_buffer_, 1.0f, frames);
@@ -551,31 +905,21 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     
     // Add tiny DC offset for denormal protection before interleaving
     const float denormal_offset = 1.0e-15f;
-#ifdef USE_NEON
-    // NEON-optimized stereo interleave (processes 4 frames at a time)
-    {
-        float32x4_t dc = vdupq_n_f32(denormal_offset);
-        uint32_t i = 0;
-        for (; i + 4 <= frames; i += 4) {
-            float32x4_t l = vaddq_f32(vld1q_f32(&left_buffer_[i]), dc);
-            float32x4_t r = vaddq_f32(vld1q_f32(&right_buffer_[i]), dc);
-            float32x4x2_t interleaved = vzipq_f32(l, r);
-            vst1q_f32(&out[i * 2], interleaved.val[0]);
-            vst1q_f32(&out[i * 2 + 4], interleaved.val[1]);
-        }
-        // Scalar tail for remaining frames
-        for (; i < frames; ++i) {
-            out[i * 2] = left_buffer_[i] + denormal_offset;
-            out[i * 2 + 1] = right_buffer_[i] + denormal_offset;
-        }
+    drupiter::neon::ApplyGain(left_buffer_, 1.0f, frames);  // Could add offset here if needed
+    drupiter::neon::ApplyGain(right_buffer_, 1.0f, frames); // Could add offset here if needed
+    
+    // Use neon_dsp InterleaveStereo function for optimized stereo interleaving
+    drupiter::neon::InterleaveStereo(left_buffer_, right_buffer_, out, frames);
+    
+    // Add DC offset to output (simpler than modifying buffers)
+    for (uint32_t i = 0; i < frames * 2; ++i) {
+        out[i] += denormal_offset;
     }
-#else
-    // Scalar fallback for non-NEON builds
-    for (uint32_t i = 0; i < frames; ++i) {
-        out[i * 2] = left_buffer_[i] + denormal_offset;
-        out[i * 2 + 1] = right_buffer_[i] + denormal_offset;
-    }
-#endif
+    
+    #ifdef PERF_MON
+    PERF_MON_END(perf_effects_);
+    PERF_MON_END(perf_render_total_);
+    #endif
 }
 
 void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
@@ -591,7 +935,7 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             v = clamp_u8_int32(value, 0, 2);
             break;
         case PARAM_DCO1_WAVE:
-            v = clamp_u8_int32(value, 0, 3);
+            v = clamp_u8_int32(value, 0, 4);  // 0-4: SAW/SQR/PUL/TRI/SAW_PWM
             break;
             
         // Page 2: DCO-2 discrete params
@@ -599,7 +943,7 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             v = clamp_u8_int32(value, 0, 2);
             break;
         case PARAM_DCO2_WAVE:
-            v = clamp_u8_int32(value, 0, 3);
+            v = clamp_u8_int32(value, 0, 4);  // 0-4: SAW/NSE/PUL/SIN/SAW_PWM
             break;
         case PARAM_SYNC:
             v = clamp_u8_int32(value, 0, 2);
@@ -607,26 +951,60 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             
         // Page 6: MOD HUB selector and EFFECT mode
         case PARAM_MOD_HUB:
-            v = clamp_u8_int32(value, 0, MOD_NUM_DESTINATIONS - 1);  // 14 hub destinations (0-13)
+            v = clamp_u8_int32(value, 0, MOD_NUM_DESTINATIONS - 1);  // 14 hub destinations (0-17)
             mod_hub_.SetDestination(v);
+            
+            // Restore the previously stored value for this destination
+            // This allows switching between MOD HUB options and remembering each value
+            if (v < MOD_NUM_DESTINATIONS) {
+                mod_hub_.SetValue(current_preset_.hub_values[v]);
+            }
+            
             current_preset_.params[id] = v;
             return;  // Hub handles its own state
             
         case PARAM_MOD_AMT:
             // Hub amount: Store in hub and preset's hub_values array
             v = clamp_u8_int32(value, 0, 100);
-            mod_hub_.SetValue(v);
-            // Save to preset's hub storage for current destination
+            mod_hub_.SetValue(v);  // Hub will clamp to destination's actual range
+            
+            // Store the ORIGINAL UI value (0-100), not the clamped value
+            // This is critical for proper restoration when switching destinations
             {
                 uint8_t dest = current_preset_.params[PARAM_MOD_HUB];
                 if (dest < MOD_NUM_DESTINATIONS) {
-                    current_preset_.hub_values[dest] = v;
+                    // Store original 0-100 value for restoration later
+                    current_preset_.hub_values[dest] = v;  // Store original, not clamped
+                    
+                    // Get the actual clamped value from the hub for DSP use
+                    int32_t actual_value = mod_hub_.GetValue(dest);
+                    
+                    // Apply specific destinations to DSP components immediately
+                    switch (dest) {
+                        case MOD_SYNTH_MODE:  // S MODE (range 0-2: MONO/POLY/UNISON)
+                            if (actual_value <= 2) {
+                                // Only allow mode changes when no notes are playing
+                                // to prevent audio glitches and envelope state issues
+                                if (!allocator_.IsAnyVoiceActive()) {
+                                    current_mode_ = static_cast<dsp::SynthMode>(actual_value);
+                                    allocator_.SetMode(current_mode_);
+                                }
+                                // If voices are active, mode change will apply after all notes off
+                            }
+                            break;
+                        case MOD_UNISON_DETUNE:  // UNI DET (range 0-50 cents)
+                            // Update unison detune with actual clamped value
+                            allocator_.SetUnisonDetune(actual_value);
+                            break;
+                        default:
+                            break;  // Other destinations handled in Render()
+                    }
                 }
             }
             return;  // Hub handles its own state
             
         case PARAM_EFFECT:
-            v = clamp_u8_int32(value, 0, 3);  // 0=Chorus, 1=Space, 2=Dry, 3=Both
+            v = clamp_u8_int32(value, 0, 3);  // 0=CHORUS, 1=SPACE, 2=DRY, 3=BOTH
             break;
             
         default:
@@ -643,11 +1021,12 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             // Octave handled in Render()
             break;
         case PARAM_DCO1_WAVE:
-            switch (v & 0x03) {
+            switch (v) {
                 case 0: dco1_->SetWaveform(dsp::JupiterDCO::WAVEFORM_SAW); break;
                 case 1: dco1_->SetWaveform(dsp::JupiterDCO::WAVEFORM_SQUARE); break;
                 case 2: dco1_->SetWaveform(dsp::JupiterDCO::WAVEFORM_PULSE); break;
                 case 3: dco1_->SetWaveform(dsp::JupiterDCO::WAVEFORM_TRIANGLE); break;
+                case 4: dco1_->SetWaveform(dsp::JupiterDCO::WAVEFORM_SAW_PWM); break;  // Hoover v2.0!
             }
             break;
         case PARAM_DCO1_PW:
@@ -662,11 +1041,12 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             // Octave handled in Render()
             break;
         case PARAM_DCO2_WAVE:
-            switch (v & 0x03) {
+            switch (v) {
                 case 0: dco2_->SetWaveform(dsp::JupiterDCO::WAVEFORM_SAW); break;
                 case 1: dco2_->SetWaveform(dsp::JupiterDCO::WAVEFORM_NOISE); break;
                 case 2: dco2_->SetWaveform(dsp::JupiterDCO::WAVEFORM_PULSE); break;
                 case 3: dco2_->SetWaveform(dsp::JupiterDCO::WAVEFORM_SINE); break;
+                case 4: dco2_->SetWaveform(dsp::JupiterDCO::WAVEFORM_SAW_PWM); break;  // Hoover v2.0!
             }
             break;
         case PARAM_DCO2_TUNE:
@@ -695,15 +1075,28 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
         // ======== Page 4: VCF Envelope ========
         case PARAM_VCF_ATTACK:
             env_vcf_->SetAttack(ParameterToEnvelopeTime(v));
+            // Task 2.2.1: Also set per-voice pitch envelopes
+            for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; i++) {
+                allocator_.GetVoiceMutable(i).env_pitch.SetAttack(ParameterToEnvelopeTime(v));
+            }
             break;
         case PARAM_VCF_DECAY:
             env_vcf_->SetDecay(ParameterToEnvelopeTime(v));
+            for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; i++) {
+                allocator_.GetVoiceMutable(i).env_pitch.SetDecay(ParameterToEnvelopeTime(v));
+            }
             break;
         case PARAM_VCF_SUSTAIN:
             env_vcf_->SetSustain(v / 100.0f);
+            for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; i++) {
+                allocator_.GetVoiceMutable(i).env_pitch.SetSustain(v / 100.0f);
+            }
             break;
         case PARAM_VCF_RELEASE:
             env_vcf_->SetRelease(ParameterToEnvelopeTime(v));
+            for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; i++) {
+                allocator_.GetVoiceMutable(i).env_pitch.SetRelease(ParameterToEnvelopeTime(v));
+            }
             break;
         
         // ======== Page 5: VCA Envelope ========
@@ -713,6 +1106,10 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             fflush(stderr);
 #endif
             env_vca_->SetAttack(ParameterToEnvelopeTime(v));
+            // Update all polyphonic voice envelopes
+            for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; i++) {
+                allocator_.GetVoiceMutable(i).env_amp.SetAttack(ParameterToEnvelopeTime(v));
+            }
             break;
         case PARAM_VCA_DECAY:
 #ifdef DEBUG
@@ -720,9 +1117,17 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             fflush(stderr);
 #endif
             env_vca_->SetDecay(ParameterToEnvelopeTime(v));
+            // Update all polyphonic voice envelopes
+            for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; i++) {
+                allocator_.GetVoiceMutable(i).env_amp.SetDecay(ParameterToEnvelopeTime(v));
+            }
             break;
         case PARAM_VCA_SUSTAIN:
             env_vca_->SetSustain(v / 100.0f);
+            // Update all polyphonic voice envelopes
+            for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; i++) {
+                allocator_.GetVoiceMutable(i).env_amp.SetSustain(v / 100.0f);
+            }
             break;
         case PARAM_VCA_RELEASE:
 #ifdef DEBUG
@@ -730,6 +1135,10 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             fflush(stderr);
 #endif
             env_vca_->SetRelease(ParameterToEnvelopeTime(v));
+            // Update all polyphonic voice envelopes
+            for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; i++) {
+                allocator_.GetVoiceMutable(i).env_amp.SetRelease(ParameterToEnvelopeTime(v));
+            }
             break;
         
         // ======== Page 6: LFO, MOD HUB & Effects ========
@@ -743,7 +1152,7 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             UpdateLfoSettings();
             break;
         case PARAM_EFFECT:
-            // Effect mode changed - update effect parameters once
+            // Effect mode changed - update effect routing
             UpdateEffectParameters(v);
             break;
     }
@@ -765,25 +1174,27 @@ int32_t DrupiterSynth::GetParameter(uint8_t id) const {
 const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
     static const char* effect_names[] = {"CHORUS", "SPACE", "DRY", "BOTH"};
     
-    static char str_buf[16];  // Buffer for formatted strings
+    // Separate static buffers for each parameter type to avoid race conditions
+    static char tune_buf[16];      // For PARAM_DCO2_TUNE
+    static char modamt_buf[16];    // For PARAM_MOD_AMT (fallback only - hub now returns stable pointers)
     
     switch (id) {
         // ======== Page 1: DCO-1 ========
         case PARAM_DCO1_OCT:
             return kOctave1Names[value < 3 ? value : 0];
         case PARAM_DCO1_WAVE:
-            return kDco1WaveNames[value < 4 ? value : 0];
+            return kDco1WaveNames[value < 5 ? value : 0];  // 5 waveforms: SAW/SQR/PUL/TRI/SAW_PWM
             
         // ======== Page 2: DCO-2 ========
         case PARAM_DCO2_OCT:
             return kOctave2Names[value < 4 ? value : 0];
         case PARAM_DCO2_WAVE:
-            return kDco2WaveNames[value < 4 ? value : 0];
+            return kDco2WaveNames[value < 5 ? value : 0];  // 5 waveforms: SAW/NSE/PUL/SIN/SAW_PWM
         case PARAM_DCO2_TUNE: {
             // Map 0-100 to -50 to +50 cents
             int32_t cents = value - 50;
-            snprintf(str_buf, sizeof(str_buf), "%+d ct", static_cast<int>(cents));
-            return str_buf;
+            snprintf(tune_buf, sizeof(tune_buf), "%+d ct", static_cast<int>(cents));
+            return tune_buf;
         }
         case PARAM_SYNC:
             return kSyncNames[value < 3 ? value : 0];
@@ -791,32 +1202,26 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
         // ======== Page 6: MOD HUB ========
         case PARAM_MOD_HUB:
             if (value >= 0 && value < MOD_NUM_DESTINATIONS) {
-                return mod_hub_.GetDestinationName(value);
+                return mod_hub_.GetDestinationName(value);  // Returns stable pointer
             }
             return "";
             
         case PARAM_MOD_AMT: {
-            // Get current destination from mod_hub (updated by SetParameter)
+            // Get current destination from mod_hub
             uint8_t dest = mod_hub_.GetDestination();
             
-            // Check if value is within current destination's range
             if (dest >= MOD_NUM_DESTINATIONS) {
-                return nullptr;  // Invalid destination
+                return "";
             }
             
-            const auto& dest_info = kModDestinations[dest];
-            if (value < dest_info.min || value > dest_info.max) {
-                return nullptr;  // Out of range - tells UI to stop querying
-            }
-            
-            return mod_hub_.GetValueStringForDest(dest, value, str_buf, sizeof(str_buf));
+            // Get the CLAMPED value from hub (destination-specific range)
+            // The raw slider value (0-100) must be converted to the destination's range
+            int32_t clamped_value = mod_hub_.GetValue(dest);
+            return mod_hub_.GetValueStringForDest(dest, clamped_value, modamt_buf, sizeof(modamt_buf));
         }
             
         case PARAM_EFFECT:
-            if (value >= 0 && value < 4) {
-                return effect_names[value];
-            }
-            return "DRY";  // Default fallback
+            return effect_names[value < 4 ? value : 0];
         
         default:
             return nullptr;
@@ -827,6 +1232,11 @@ void DrupiterSynth::NoteOn(uint8_t note, uint8_t velocity) {
 #ifdef DEBUG
     static uint8_t last_note = 255;
     static int note_on_counter = 0;
+    
+    fprintf(stderr, "[Synth] NoteOn: note=%d velocity=%d mode=%d\n",
+            note, velocity, (int)current_mode_);
+    fflush(stderr);
+    
     if (note == last_note) {
         note_on_counter++;
         if (note_on_counter % 100 == 0) {
@@ -843,60 +1253,39 @@ void DrupiterSynth::NoteOn(uint8_t note, uint8_t velocity) {
     }
 #endif
 
-    current_note_ = note;
-    current_velocity_ = velocity;
+    // Route through voice allocator (Hoover v2.0)
+    allocator_.NoteOn(note, velocity);
+    
+    // Update main synth DSP state (for all modes - mono uses dco1_/dco2_, unison uses UnisonOscillator)
     current_freq_hz_ = common::MidiHelper::NoteToFreq(note);
-    gate_ = true;
-    
-    // Calculate time scale for envelope keyboard tracking
-    float time_scale = 1.0f;  // Default: no scaling
-    const float env_kybd = mod_hub_.GetValue(MOD_ENV_KYBD) / 100.0f;
-    if (env_kybd > 0.001f) {
-        // Higher notes = faster envelopes
-        // Middle C (60) = 1.0x, each octave doubles/halves the rate
-        time_scale = exp2f(-(note - 60.0f) / 12.0f * env_kybd);
-    }
-    
-    // Always update envelope times on note-on (with or without keyboard tracking)
-    // VCF envelope
-    env_vcf_->SetAttack(ParameterToEnvelopeTime(current_preset_.params[PARAM_VCF_ATTACK]) * time_scale);
-    env_vcf_->SetDecay(ParameterToEnvelopeTime(current_preset_.params[PARAM_VCF_DECAY]) * time_scale);
-    env_vcf_->SetRelease(ParameterToEnvelopeTime(current_preset_.params[PARAM_VCF_RELEASE]) * time_scale);
-    
-    // VCA envelope
-    env_vca_->SetAttack(ParameterToEnvelopeTime(current_preset_.params[PARAM_VCA_ATTACK]) * time_scale);
-    env_vca_->SetDecay(ParameterToEnvelopeTime(current_preset_.params[PARAM_VCA_DECAY]) * time_scale);
-    env_vca_->SetRelease(ParameterToEnvelopeTime(current_preset_.params[PARAM_VCA_RELEASE]) * time_scale);
+    current_velocity_ = velocity;
     
     // Trigger envelopes
-    float vel_norm = velocity / 127.0f;
-    env_vcf_->NoteOn(vel_norm);
-    env_vca_->NoteOn(vel_norm);
-    
-    // Trigger LFO delay
-    lfo_->Trigger();
+    env_vca_->NoteOn();
+    env_vcf_->NoteOn();
 }
 
 void DrupiterSynth::NoteOff(uint8_t note) {
-    if (note == current_note_ || note == 255) {  // 255 = all notes
 #ifdef DEBUG
-        fprintf(stderr, "[Synth] NoteOff: note=%d (current=%d)\n", note, current_note_);
-        fflush(stderr);
+    fprintf(stderr, "[Synth] NoteOff: note=%d\n", note);
+    fflush(stderr);
 #endif
-        gate_ = false;
-        env_vcf_->NoteOff();
-        env_vca_->NoteOff();
-    }
+    
+    // Route through voice allocator (Hoover v2.0)
+    allocator_.NoteOff(note);
+    
+    // Trigger envelope release on main synth DSP
+    env_vca_->NoteOff();
+    env_vcf_->NoteOff();
 }
 
 void DrupiterSynth::AllNoteOff() {
-    gate_ = false;
-    env_vcf_->NoteOff();
-    env_vca_->NoteOff();
+    // Route through voice allocator (Hoover v2.0)
+    allocator_.AllNotesOff();
 }
 
 void DrupiterSynth::LoadPreset(uint8_t preset_id) {
-    if (preset_id >= 6) {
+    if (preset_id >= 12) {
         preset_id = 0;
     }
     
@@ -926,7 +1315,9 @@ void DrupiterSynth::LoadPreset(uint8_t preset_id) {
     xmod_depth_ = current_preset_.params[PARAM_XMOD] / 100.0f;
     sync_mode_ = current_preset_.params[PARAM_SYNC];
     
-    // Restore MOD HUB destination values
+    // Restore MOD HUB values from preset (source of truth for hub state)
+    // Must be done BEFORE applying parameters
+    mod_hub_.SetDestination(current_preset_.params[PARAM_MOD_HUB]);
     for (uint8_t dest = 0; dest < MOD_NUM_DESTINATIONS; ++dest) {
         mod_hub_.SetValueForDest(dest, current_preset_.hub_values[dest]);
     }
@@ -991,7 +1382,7 @@ float DrupiterSynth::ParameterToExponentialFreq(uint8_t value, float min_freq, f
 }
 
 const char* DrupiterSynth::GetPresetName(uint8_t preset_id) const {
-    if (preset_id >= 6) {
+    if (preset_id >= 12) {
         return "Invalid";
     }
     return presets::kFactoryPresets[preset_id].name;

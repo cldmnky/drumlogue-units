@@ -27,7 +27,7 @@ const __unit_header unit_header_t unit_header = {
     .unit_id = 0x00000004U,                                // unit id unique within dev_id scope
     .version = 0x010000U,                                // v1.0.0 (major<<16 | minor<<8 | patch)
     .name = "Drupiter",                                    // displayed name, 7-bit ASCII, max 13 chars
-    .num_presets = 6,                                      // 6 presets
+    .num_presets = 12,                                     // 12 presets
     .num_params = 24,                                      // number of parameters (6 pages x 4)
     .params = {
         // Format: min, max, center, default, type, fractional, frac. type, <reserved>, name
@@ -35,8 +35,8 @@ const __unit_header unit_header_t unit_header = {
         // ==================== Page 1: DCO-1 ====================
         // DCO-1 Range: Octave (0=16', 1=8', 2=4')
         {0, 2, 1, 1, k_unit_param_type_strings, 0, 0, 0, {"D1 OCT"}},
-        // DCO-1 Waveform: SAW/SQR/PULSE/TRI
-        {0, 3, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"D1 WAVE"}},
+        // DCO-1 Waveform: SAW/SQR/PULSE/TRI/SAW_PWM (Hoover v2.0)
+        {0, 4, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"D1 WAVE"}},
         // DCO-1 Pulse Width: 0-100%
         {0, 100, 50, 50, k_unit_param_type_percent, 0, 0, 0, {"D1 PW"}},
         // DCO-1 Cross Modulation: DCO2->DCO1 FM depth (Jupiter-8 feature)
@@ -45,8 +45,8 @@ const __unit_header unit_header_t unit_header = {
         // ==================== Page 2: DCO-2 ====================
         // DCO-2 Range: Octave (0=32', 1=16', 2=8', 3=4')
         {0, 3, 1, 1, k_unit_param_type_strings, 0, 0, 0, {"D2 OCT"}},
-        // DCO-2 Waveform: SAW/NOISE/PULSE/SINE
-        {0, 3, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"D2 WAVE"}},
+        // DCO-2 Waveform: SAW/NOISE/PULSE/SINE/SAW_PWM (Hoover v2.0)
+        {0, 4, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"D2 WAVE"}},
         // DCO-2 Detune: 0-100 maps to -50 to +50 cents (50=center/no detune)
         {0, 100, 50, 50, k_unit_param_type_strings, 0, 0, 0, {"D2 TUNE"}},
         // DCO-2 Sync: OFF/SOFT/HARD (VCO2 syncs to VCO1)
@@ -85,11 +85,11 @@ const __unit_header unit_header_t unit_header = {
         // ==================== Page 6: MODULATION ====================
         // LFO RATE: Direct LFO speed control (0.1Hz - 50Hz)
         {0, 100, 0, 32, k_unit_param_type_percent, 0, 0, 0, {"LFO RT"}},
-        // MOD HUB: Modulation destination selector (10 modes)
-        {0, 9, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"MOD HUB"}},
+        // MOD HUB: Modulation destination selector (18 modes including SYNTH MODE, UNISON DETUNE, ENV>PIT, and GLIDE)
+        {0, 17, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"MOD HUB"}},
         // MOD AMT: Value for selected destination (context-sensitive string display)
         {0, 100, 50, 50, k_unit_param_type_strings, 0, 0, 0, {"MOD AMT"}},  
-        // EFFECT: Output effect selector (CHORUS/SPACE/DRY/BOTH)
+        // EFFECT: Effect selection (CHORUS/SPACE/DRY/BOTH)
         {0, 3, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"EFFECT"}},
     }
 };

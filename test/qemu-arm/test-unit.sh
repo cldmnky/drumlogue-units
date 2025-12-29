@@ -2,38 +2,34 @@
 set -e
 
 # Simple test script for drumlogue units in QEMU ARM emulation
-# Usage: ./test-unit.sh <unit-name> [options]
-# Example: ./test-unit.sh clouds-revfx --profile --test-presets
+# Usage: ./test-unit.sh <unit-name> [--profile] [--perf-mon]
+# Example: ./test-unit.sh clouds-revfx --profile --perf-mon
 
 UNIT_NAME="$1"
 PROFILE_FLAG=""
-TEST_PRESETS_FLAG=""
+PERF_MON_FLAG=""
+BUILD_FLAGS=""
 
-# Parse options
+# Parse flags
 shift
-while [ $# -gt 0 ]; do
-    case "$1" in
+for arg in "$@"; do
+    case "$arg" in
         --profile)
             PROFILE_FLAG="--profile"
-            shift
             ;;
-        --test-presets)
-            TEST_PRESETS_FLAG="--test-presets"
-            shift
-            ;;
-        *)
-            echo "Unknown option: $1"
-            exit 1
+        --perf-mon)
+            PERF_MON_FLAG="--perf-mon"
+            BUILD_FLAGS="PERF_MON=1"
             ;;
     esac
 done
 
 if [ -z "$UNIT_NAME" ]; then
-    echo "Usage: $0 <unit-name> [options]"
+    echo "Usage: $0 <unit-name> [--profile] [--perf-mon]"
     echo ""
     echo "Options:"
-    echo "  --profile        Enable CPU profiling"
-    echo "  --test-presets   Test preset loading and switching (requires preset support)"
+    echo "  --profile    Enable CPU profiling (time measurements)"
+    echo "  --perf-mon   Enable PERF_MON (DSP cycle counting)"
     echo ""
     echo "Available units:"
     ls -1 ../../drumlogue/ | grep -v common
@@ -46,8 +42,15 @@ UNIT_FILE="../../drumlogue/${UNIT_NAME}/${UNIT_FILE_NAME}.drmlgunit"
 INPUT_WAV="fixtures/sine_440hz.wav"
 OUTPUT_WAV="build/output_${UNIT_NAME}.wav"
 
-# Check if unit file exists
-if [ ! -f "$UNIT_FILE" ]; then
+# Build or rebuild unit if PERF_MON is requested
+if [ -n "$BUILD_FLAGS" ]; then
+    echo "⚙️  Rebuilding unit with PERF_MON enabled..."
+    (cd ../.. && ./build.sh ${UNIT_NAME} build ${BUILD_FLAGS})
+    if [ $? -ne 0 ]; then
+        echo "❌ Failed to build unit with PERF_MON"
+        exit 1
+    fi
+elif [ ! -f "$UNIT_FILE" ]; then
     echo "❌ Unit file not found: $UNIT_FILE"
     echo ""
     echo "Build it first:"
@@ -93,7 +96,7 @@ podman run --rm -it \
         /repo/drumlogue/${UNIT_NAME}/${UNIT_FILE_NAME}.drmlgunit \
         /workspace/${INPUT_WAV} \
         /workspace/${OUTPUT_WAV} \
-        --verbose $PROFILE_FLAG $TEST_PRESETS_FLAG
+        --verbose $PROFILE_FLAG $PERF_MON_FLAG
 "
 
 if [ $? -eq 0 ]; then

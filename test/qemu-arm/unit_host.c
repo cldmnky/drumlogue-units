@@ -756,6 +756,118 @@ void unit_host_print_profiling_stats(unit_host_state_t* state, unit_host_config_
 }
 
 /**
+ * @brief Print PERF_MON performance data from unit
+ * Reads performance counters if unit was built with PERF_MON=1
+ */
+void unit_host_print_perf_mon(unit_host_state_t* state) {
+    if (!state || !state->unit_handle) {
+        fprintf(stderr, "Warning: No unit loaded for PERF_MON data\n");
+        return;
+    }
+    
+    // Try to load PERF_MON symbols from unit
+    // These are C++ symbols from dsp::PerfMon class
+    typedef uint8_t (*get_counter_count_func)(void);
+    typedef const char* (*get_counter_name_func)(uint8_t);
+    typedef uint32_t (*get_average_cycles_func)(uint8_t);
+    typedef uint32_t (*get_peak_cycles_func)(uint8_t);
+    typedef uint32_t (*get_min_cycles_func)(uint8_t);
+    typedef uint32_t (*get_frame_count_func)(uint8_t);
+    
+    // Load function pointers (mangled C++ names for dsp::PerfMon static methods)
+    get_counter_count_func get_count = (get_counter_count_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon15GetCounterCountEv");
+    get_counter_name_func get_name = (get_counter_name_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon14GetCounterNameEh");
+    get_average_cycles_func get_avg = (get_average_cycles_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon17GetAverageCyclesEh");
+    get_peak_cycles_func get_peak = (get_peak_cycles_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon14GetPeakCyclesEh");
+    get_min_cycles_func get_min = (get_min_cycles_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon13GetMinCyclesEh");
+    get_frame_count_func get_frames = (get_frame_count_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon13GetFrameCountEh");
+    
+    // Check if PERF_MON symbols exist
+    if (!get_count || !get_name || !get_avg || !get_peak || !get_min || !get_frames) {
+        printf("\n");
+        printf("⚠️  PERF_MON Data: Not available\n");
+        printf("   (Unit must be built with: ./build.sh <unit> build PERF_MON=1)\n");
+        return;
+    }
+    
+    uint8_t counter_count = get_count();
+    
+    if (counter_count == 0) {
+        printf("\n");
+        printf("PERF_MON Data: No performance counters registered\n");
+        return;
+    }
+    
+    // Print header
+    printf("\n");
+    printf("═══════════════════════════════════════════════════════════════\n");
+    printf("                    PERF_MON CYCLE COUNTS\n");
+    printf("═══════════════════════════════════════════════════════════════\n");
+    printf("\n");
+    
+    // Assume 48kHz sample rate and typical ARM Cortex-A7 clock (~900MHz)
+    const double CPU_FREQ_MHZ = 900.0;
+    const double SAMPLE_RATE = 48000.0;
+    const double CYCLES_PER_SAMPLE = CPU_FREQ_MHZ * 1e6 / SAMPLE_RATE;  // ~18750 cycles/sample @ 48kHz
+    
+    printf("Counter metrics (assuming %0.f MHz CPU, %.0f Hz sample rate):\n\n", CPU_FREQ_MHZ, SAMPLE_RATE);
+    printf("%-16s %12s %12s %12s %10s %12s\n", 
+           "COUNTER", "AVG CYCLES", "MIN CYCLES", "MAX CYCLES", "FRAMES", "% OF BUDGET");
+    printf("%-16s %12s %12s %12s %10s %12s\n", 
+           "────────────────", "──────────", "──────────", "──────────", "────────", "───────────");
+    
+    uint32_t total_avg_cycles = 0;
+    
+    for (uint8_t i = 0; i < counter_count; i++) {
+        const char* name = get_name(i);
+        uint32_t avg_cycles = get_avg(i);
+        uint32_t min_cycles = get_min(i);
+        uint32_t max_cycles = get_peak(i);
+        uint32_t frames = get_frames(i);
+        
+        if (frames == 0) continue;  // Skip unused counters
+        
+        double percent_of_budget = (avg_cycles / CYCLES_PER_SAMPLE) * 100.0;
+        
+        printf("%-16s %12u %12u %12u %10u %11.2f%%\n",
+               name ? name : "<unnamed>",
+               avg_cycles,
+               min_cycles,
+               max_cycles,
+               frames,
+               percent_of_budget);
+        
+        total_avg_cycles += avg_cycles;
+    }
+    
+    printf("%-16s %12s %12s %12s %10s %12s\n", 
+           "────────────────", "──────────", "──────────", "──────────", "────────", "───────────");
+    
+    double total_percent = (total_avg_cycles / CYCLES_PER_SAMPLE) * 100.0;
+    printf("%-16s %12u %12s %12s %10s %11.2f%%", 
+           "TOTAL", total_avg_cycles, "─", "─", "─", total_percent);
+    
+    // Assessment
+    if (total_percent < 50.0) {
+        printf(" ✅ Excellent\n");
+    } else if (total_percent < 80.0) {
+        printf(" ⚠️  Good\n");
+    } else if (total_percent < 100.0) {
+        printf(" ⚠️  Heavy\n");
+    } else {
+        printf(" ❌ OVERLOAD\n");
+    }
+    
+    printf("\n");
+    printf("Notes:\n");
+    printf("  • Cycle counts are measured using ARM cycle counters\n");
+    printf("  • %% of budget assumes %.0f cycles available per sample\n", CYCLES_PER_SAMPLE);
+    printf("  • Actual performance depends on CPU frequency and load\n");
+    printf("\n");
+    printf("═══════════════════════════════════════════════════════════════\n");
+}
+
+/**
  * @brief Print unit information
  */
 void unit_host_print_info(unit_host_state_t* state) {
@@ -871,6 +983,8 @@ int unit_host_parse_args(int argc, char* argv[], unit_host_config_t* config) {
             config->test_presets = true;
         } else if (strcmp(argv[i], "--profile") == 0) {
             config->profile = true;
+        } else if (strcmp(argv[i], "--perf-mon") == 0) {
+            config->perf_mon = true;
         } else if (strcmp(argv[i], "--verbose") == 0) {
             config->verbose = true;
         }
@@ -985,6 +1099,11 @@ int unit_host_main(int argc, char* argv[]) {
     // Print profiling statistics if enabled
     if (config.profile) {
         unit_host_print_profiling_stats(&g_state, &config);
+    }
+    
+    // Print PERF_MON data if enabled and unit has performance symbols
+    if (config.perf_mon) {
+        unit_host_print_perf_mon(&g_state);
     }
     
     // Cleanup

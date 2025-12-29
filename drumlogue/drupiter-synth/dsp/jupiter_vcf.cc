@@ -16,6 +16,10 @@
 #include <algorithm>
 #include <cmath>
 
+#ifdef __ARM_NEON
+#include <arm_neon.h>
+#endif
+
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -30,6 +34,13 @@ static constexpr float kSigmoidDiv = 0.1666667f;  // 1/6
 
 // Denormal threshold
 static constexpr float kDenormalThreshold = 1e-15f;
+
+// Static lookup table initialization
+namespace dsp {
+float JupiterVCF::s_tanh_table[JupiterVCF::kTanhTableSize] = {};
+float JupiterVCF::s_kbd_tracking_table[JupiterVCF::kKbdTrackingTableSize] = {};
+bool JupiterVCF::s_tables_initialized = false;
+}
 
 // Fast Math Approximations
 // ============================================================================
@@ -49,6 +60,36 @@ inline float FastTanh(float x) {
     float x2 = x * x;
     return x * (27.0f + x2) / (27.0f + 9.0f * x2);
 }
+
+#ifdef __ARM_NEON
+// NEON-optimized tanh using vectorized polynomial evaluation
+// Processes single float but uses NEON for internal calculations
+inline float FastTanh_NEON(float x) {
+    if (x > 4.0f) return 1.0f;
+    if (x < -4.0f) return -1.0f;
+    
+    // Load single value into NEON register
+    float32x4_t vx = vdupq_n_f32(x);
+    float32x4_t vx2 = vmulq_f32(vx, vx);
+    
+    // Compute numerator: x * (27 + x²)
+    float32x4_t num = vmulq_f32(vx, vaddq_f32(vdupq_n_f32(27.0f), vx2));
+    
+    // Compute denominator: 27 + 9*x²
+    float32x4_t den = vaddq_f32(vdupq_n_f32(27.0f), 
+                               vmulq_f32(vdupq_n_f32(9.0f), vx2));
+    
+    // Use reciprocal approximation for division (faster than vdivq_f32)
+    float32x4_t recip_den = vrecpeq_f32(den);
+    recip_den = vmulq_f32(recip_den, vrecpsq_f32(recip_den, den));  // Newton-Raphson iteration
+    
+    // Compute result
+    float32x4_t result = vmulq_f32(num, recip_den);
+    
+    // Extract single float result
+    return vgetq_lane_f32(result, 0);
+}
+#endif
 
 // Fast pow(2, x) approximation for keyboard tracking
 // Uses bit manipulation for integer part + polynomial for fractional
@@ -129,6 +170,7 @@ JupiterVCF::JupiterVCF()
     , ota_gain_comp_(0.0f)
     , ota_output_gain_(1.0f)
     , hp_lp_state_(0.0f)
+    , tables_initialized_(false)
     , hp_a_(0.0f)
     , lp_(0.0f)
     , bp_(0.0f)
@@ -142,6 +184,7 @@ JupiterVCF::~JupiterVCF() {
 }
 
 void JupiterVCF::Init(float sample_rate) {
+    InitializeLookupTables();  // Initialize once per instance
     sample_rate_ = sample_rate;
     Reset();
     UpdateCoefficients();
@@ -159,7 +202,7 @@ void JupiterVCF::SetCutoffModulated(float freq_hz) {
 }
 
 void JupiterVCF::SetResonance(float resonance) {
-    resonance_ = std::max(0.0f, std::min(resonance, 1.0f));
+    resonance_ = clampf(resonance, 0.0f, 1.0f);
     coefficients_dirty_ = true;
 }
 
@@ -168,15 +211,15 @@ void JupiterVCF::SetMode(Mode mode) {
 }
 
 void JupiterVCF::SetKeyboardTracking(float amount) {
-    kbd_tracking_ = std::max(0.0f, std::min(amount, 1.0f));
+    kbd_tracking_ = clampf(amount, 0.0f, 1.0f);
 }
 
 void JupiterVCF::ApplyKeyboardTracking(uint8_t note) {
     if (kbd_tracking_ > 0.0f) {
-        // MIDI note 60 (C4) = no change
-        // Each octave up doubles frequency
-        float note_offset = (note - 60) / 12.0f;  // Octaves from C4
-        float freq_mult = FastPow2(note_offset * kbd_tracking_);
+        // Linear interpolation between no tracking (1.0) and full tracking
+        // This maintains the original behavior while using the lookup table
+        float full_tracking_ratio = s_kbd_tracking_table[note];
+        float freq_mult = 1.0f + (full_tracking_ratio - 1.0f) * kbd_tracking_;
         cutoff_hz_ = ClampCutoff(base_cutoff_hz_ * freq_mult);
         coefficients_dirty_ = true;
     }
@@ -206,9 +249,13 @@ float JupiterVCF::Process(float input) {
             // Input stage with soft saturation (transistor-like nonlinearity)
             float u = input - feedback;
             
-            // Improved tanh approximation for input stage
+            // Use NEON-optimized tanh approximation for saturation
             // This creates the characteristic "warmth" of analog filters
+#ifdef __ARM_NEON
+            u = FastTanh_NEON(u);
+#else
             u = FastTanh(u);
+#endif
             
             // 4 cascaded one-pole sections using Krajeski-style improved coefficients
             // Each pole: y[n] = g * (0.3/1.3 * x[n] + 1/1.3 * x[n-1] - y[n-1]) + y[n-1]
@@ -323,7 +370,19 @@ void JupiterVCF::UpdateCoefficients() {
     const float wc2 = wc * wc;
     const float wc3 = wc2 * wc;
     const float wc4 = wc3 * wc;
+    
+#ifdef __ARM_NEON
+    // NEON-optimized polynomial evaluation for g coefficient
+    // ota_g_ = 0.9892f * wc - 0.4342f * wc2 + 0.1381f * wc3 - 0.0202f * wc4
+    float32x4_t wc_powers = {wc, wc2, wc3, wc4};
+    float32x4_t g_coeffs = {0.9892f, -0.4342f, 0.1381f, -0.0202f};
+    float32x4_t g_result = vmulq_f32(wc_powers, g_coeffs);
+    // Horizontal sum using pairwise addition (compatible with older NEON)
+    float32x2_t g_sum2 = vpadd_f32(vget_low_f32(g_result), vget_high_f32(g_result));
+    ota_g_ = vget_lane_f32(vpadd_f32(g_sum2, g_sum2), 0);
+#else
     ota_g_ = 0.9892f * wc - 0.4342f * wc2 + 0.1381f * wc3 - 0.0202f * wc4;
+#endif
     
     // Clamp g to prevent instability
     if (ota_g_ < 0.0f) ota_g_ = 0.0f;
@@ -332,11 +391,21 @@ void JupiterVCF::UpdateCoefficients() {
     // Resonance mapping
     // res_k = 4 * r for maximum self-oscillation at r = 1.0
     // Use polynomial correction for resonance to match cutoff changes (decoupling)
-    const float r = std::max(0.0f, std::min(resonance_, 1.0f));
+    const float r = clampf(resonance_, 0.0f, 1.0f);
     
     // Krajeski resonance correction: compensate resonance for cutoff changes
     // gRes = r * (1.0029 + 0.0526*wc - 0.926*wc² + 0.0218*wc³)
+#ifdef __ARM_NEON
+    // NEON-optimized polynomial evaluation for resonance correction
+    float32x4_t res_powers = {1.0f, wc, wc2, wc3};
+    float32x4_t res_coeffs = {1.0029f, 0.0526f, -0.926f, 0.0218f};
+    float32x4_t res_result = vmulq_f32(res_powers, res_coeffs);
+    // Horizontal sum using pairwise addition
+    float32x2_t res_sum2 = vpadd_f32(vget_low_f32(res_result), vget_high_f32(res_result));
+    const float res_correction = vget_lane_f32(vpadd_f32(res_sum2, res_sum2), 0);
+#else
     const float res_correction = 1.0029f + 0.0526f * wc - 0.926f * wc2 + 0.0218f * wc3;
+#endif
     ota_res_k_ = 4.0f * r * res_correction;
     
     // Limit resonance to prevent self-oscillation going out of control
@@ -368,7 +437,51 @@ void JupiterVCF::UpdateCoefficients() {
 float JupiterVCF::ClampCutoff(float freq) const {
     // Minimum 80Hz to prevent muddy resonance
     // Maximum 20kHz (will be further limited by Nyquist in UpdateCoefficients)
-    return std::max(80.0f, std::min(freq, 20000.0f));
+    return clampf(freq, 80.0f, 20000.0f);
+}
+
+void JupiterVCF::InitializeLookupTables() {
+    // Initialize lookup tables only once per process (at Init time)
+    if (tables_initialized_) return;
+    tables_initialized_ = true;
+    
+    // Initialize tanh lookup table if not already done globally
+    if (!s_tables_initialized) {
+        // Tanh table: 512 entries covering [-4, 4]
+        for (int i = 0; i < kTanhTableSize; i++) {
+            float x = -4.0f + (8.0f * i) / (kTanhTableSize - 1);
+            s_tanh_table[i] = tanhf(x);
+        }
+        
+        // Keyboard tracking table: 128 entries for MIDI notes 0-127
+        // Relative to MIDI note 60 (C4)
+        for (int note = 0; note < kKbdTrackingTableSize; note++) {
+            float note_offset = (note - 60) / 12.0f;  // Octaves from C4
+            s_kbd_tracking_table[note] = powf(2.0f, note_offset);
+        }
+        
+        s_tables_initialized = true;
+    }
+}
+
+float JupiterVCF::TanhLookup(float x) const {
+    // Lookup-based tanh with linear interpolation
+    // Maps [-4, 4] to table indices
+    
+    if (x >= 4.0f) return 1.0f;
+    if (x <= -4.0f) return -1.0f;
+    
+    // Map x from [-4, 4] to index [0, 512]
+    float idx_f = ((x + 4.0f) * (kTanhTableSize - 1)) * 0.125f;  // / 8.0f
+    int idx = static_cast<int>(idx_f);
+    float frac = idx_f - idx;
+    
+    // Boundary check
+    if (idx < 0) idx = 0;
+    if (idx >= kTanhTableSize - 1) return s_tanh_table[kTanhTableSize - 1];
+    
+    // Linear interpolation between table entries
+    return s_tanh_table[idx] * (1.0f - frac) + s_tanh_table[idx + 1] * frac;
 }
 
 } // namespace dsp

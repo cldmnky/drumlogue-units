@@ -16,11 +16,16 @@ CSRC = header.c
 CXXSRC = unit.cc
 CXXSRC += drupiter_synth.cc
 
+# Common utilities (conditionally compiled based on PERF_MON)
+# CXXSRC += ../common/perf_mon.cc  # Only when PERF_MON is defined
+
 # DSP component sources
 CXXSRC += dsp/jupiter_dco.cc
 CXXSRC += dsp/jupiter_vcf.cc
 CXXSRC += dsp/jupiter_env.cc
 CXXSRC += dsp/jupiter_lfo.cc
+CXXSRC += dsp/voice_allocator.cc
+CXXSRC += dsp/unison_oscillator.cc
 
 # List ASM source files here
 ASMSRC = 
@@ -58,12 +63,48 @@ ULIBS += -lc
 # Additional defines
 #
 
-# Enable ARM NEON optimizations for better performance
-UDEFS = -DUSE_NEON
+# === Synthesis Mode Configuration (Hoover v2.0) ===
+# NOTE: Mode selection is now RUNTIME via parameter (no recompilation needed)
+# Voice counts still compile-time (for buffer allocation)
+UNISON_VOICES ?= 4
+DRUPITER_MAX_VOICES ?= 4
+
+# Unison detune range (cents)
+UNISON_MAX_DETUNE ?= 50
+
+
+# Build defines - Synthesis mode
+# Enable performance monitoring via command line: ./build.sh drupiter-synth PERF_MON=1
+ifeq ($(PERF_MON),1)
+  UDEFS = -DPERF_MON
+  CXXSRC += ../common/perf_mon.cc
+else
+  UDEFS =
+endif
+
+UDEFS += -DDRUPITER_MAX_VOICES=$(DRUPITER_MAX_VOICES)
+UDEFS += -DUNISON_MAX_DETUNE=$(UNISON_MAX_DETUNE)
+
+# Feature flags - NEON always enabled for ARM (Task 2.5)
+UDEFS += -DUSE_NEON
+UDEFS += -mfpu=neon
+UDEFS += -mfloat-abi=hard
+
+# Enable NEON-optimized DCO processing (requires USE_NEON)
+UDEFS += -DNEON_DCO
+
+# Enable PolyBLEP anti-aliasing
 UDEFS += -DENABLE_POLYBLEP
+
+# Performance optimizations
+UDEFS += -O2
+UDEFS += -ffast-math
 
 # Optional: Enable debug profiling
 # UDEFS += -DENABLE_PROFILING
+
+# Debug output removed for production (Phase 1 complete)
+# UDEFS += -DDEBUG
 
 ##############################################################################
 # Linker Options
