@@ -21,7 +21,7 @@ Drupiter brings the classic Roland Jupiter-8 sound to the Korg drumlogue with du
 ## Features
 
 ### 🎹 Synthesis Modes
-- **Polyphonic Mode:** 8-voice polyphony with intelligent voice allocation
+- **Polyphonic Mode:** 4-voice polyphony with intelligent voice allocation
 - **Unison Mode:** Rich ensemble effects with golden ratio detuning and stereo spread
 - **Mono Mode:** Classic monophonic operation with portamento/glide
 
@@ -203,7 +203,7 @@ Drupiter has **24 parameters** organized across **6 pages**. Use the drumlogue's
 ## Technical Specifications
 
 - **Type:** Polyphonic/Monophonic Synthesizer
-- **Voices:** 8-voice polyphony + unison mode
+- **Voices:** 4-voice polyphony + unison mode
 - **Oscillators:** 2 DCOs with 5 waveforms each
 - **Filter:** Multi-mode state-variable filter
 - **Envelopes:** 2x ADSR (VCF, VCA)
@@ -212,6 +212,7 @@ Drupiter has **24 parameters** organized across **6 pages**. Use the drumlogue's
 - **Presets:** 12 factory presets
 - **Sample Rate:** 48 kHz
 - **MIDI:** Full note on/off with velocity
+- **CPU Usage:** High (approaches drumlogue limits)
 
 ---
 
