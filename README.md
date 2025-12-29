@@ -12,12 +12,12 @@ Custom DSP units for the **Korg drumlogue** drum machine, bringing professional-
 
 ## 🎛️ Available Units
 
-### 🌫️ Clouds Reverb FX (v1.1.0)
+### 🌫️ Clouds Reverb FX (v1.2.1)
 Lush atmospheric reverb with texture processing, micro-granular effects, pitch shifting, and dual assignable LFOs. Based on Mutable Instruments Clouds.
 
 **Features:** Granular reverb • Pitch shifter • Diffuser • Dual LFOs • 4 texture modes
 
-[Documentation](https://cldmnky.github.io/drumlogue-units/units/clouds-revfx/) • [Download](https://github.com/cldmnky/drumlogue-units/releases/tag/clouds-revfx/v1.1.0)
+[Documentation](https://cldmnky.github.io/drumlogue-units/units/clouds-revfx/) • [Download](https://github.com/cldmnky/drumlogue-units/releases/tag/clouds-revfx/v1.2.1)
 
 ### 🔔 Elementish Synth (v1.2.0)
 Modal synthesis voice combining bow, blow, and strike exciters with versatile resonator models. Based on Mutable Instruments Elements.
@@ -33,12 +33,12 @@ Modal synthesis voice combining bow, blow, and strike exciters with versatile re
 
 [Documentation](https://cldmnky.github.io/drumlogue-units/units/pepege-synth/) • [Download](https://github.com/cldmnky/drumlogue-units/releases/tag/pepege-synth/v1.0.0)
 
-### 🪐 Drupiter Synth (v1.0.0)
-Jupiter-8 inspired monophonic synthesizer with dual DCOs, multi-mode filter, hard sync, and cross-modulation. Based on Bristol Jupiter-8 emulation.
+### 🪐 Drupiter Synth (v1.1.0)
+Jupiter-8 inspired polyphonic/monophonic synthesizer with dual DCOs, multi-mode filter, hard sync, and cross-modulation. Based on Bristol Jupiter-8 emulation.
 
-**Features:** Dual DCOs • Hard sync • Cross-modulation • Multi-mode filter • Dual ADSR • 6 presets
+**Features:** Polyphonic/Unison/Mono modes • Dual DCOs • Hard sync • Cross-modulation • Multi-mode filter • Dual ADSR • 12 presets
 
-[Documentation](https://cldmnky.github.io/drumlogue-units/units/drupiter-synth/) • [Download](https://github.com/cldmnky/drumlogue-units/releases/tag/drupiter-synth/v1.0.0)
+[Documentation](https://cldmnky.github.io/drumlogue-units/units/drupiter-synth/) • [Download](https://github.com/cldmnky/drumlogue-units/releases/tag/drupiter-synth/v1.1.0)
 
 ---
 

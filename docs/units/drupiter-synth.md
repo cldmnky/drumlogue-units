@@ -3,27 +3,33 @@ layout: unit
 title: Drupiter Synth
 unit_name: drupiter-synth
 unit_type: synth
-version: v1.0.0
+version: v1.1.0
 icon: 🪐
-tagline: Jupiter-8 inspired monophonic synthesizer
-description: Classic analog-style synthesis with dual DCOs, multi-mode filter, hard sync, cross-modulation, and comprehensive modulation capabilities.
+tagline: Jupiter-8 inspired polyphonic/monophonic synthesizer
+description: Classic analog-style synthesis with dual DCOs, multi-mode filter, hard sync, cross-modulation, and comprehensive modulation capabilities. Now with polyphonic and unison modes.
 permalink: /units/drupiter-synth/
 ---
 
 # Drupiter Synth
 
-**Jupiter-8 Inspired Monophonic Synthesizer**
+**Jupiter-8 Inspired Polyphonic/Monophonic Synthesizer**
 
-Drupiter brings the classic Roland Jupiter-8 sound to the Korg drumlogue with dual oscillators, a multi-mode filter, and comprehensive modulation capabilities. Built on Bristol Jupiter-8 emulation, it delivers rich, warm analog-style tones perfect for bass, leads, pads, and more.
+Drupiter brings the classic Roland Jupiter-8 sound to the Korg drumlogue with dual oscillators, a multi-mode filter, and comprehensive modulation capabilities. Now featuring polyphonic and unison modes alongside the original monophonic operation. Built on Bristol Jupiter-8 emulation, it delivers rich, warm analog-style tones perfect for bass, leads, pads, and more.
 
 ---
 
 ## Features
 
+### 🎹 Synthesis Modes
+- **Polyphonic Mode:** True polyphony with intelligent voice allocation
+- **Unison Mode:** Rich ensemble effects with golden ratio detuning and stereo spread
+- **Mono Mode:** Classic monophonic operation with portamento/glide
+
 ### 🎹 Dual DCO Architecture
-- **4 Waveforms per oscillator:** Ramp, Square, Pulse, Triangle
+- **5 Waveforms per oscillator:** Ramp, Square, Pulse, Triangle, SAW_PWM
 - **Independent octave selection:** 16', 8', 4' for each DCO
 - **Pulse width control** for dynamic timbres
+- **SAW_PWM:** Pulse-width modulated sawtooth for evolving timbral character
 - **DCO2 detune** for thick, chorused sounds
 - **Mixer** with independent level controls
 
@@ -53,15 +59,18 @@ Drupiter brings the classic Roland Jupiter-8 sound to the Korg drumlogue with du
 
 ### 🎛️ Modulation Matrix
 - **ENV → Filter:** Bipolar envelope amount
+- **ENV → Pitch:** Filter envelope modulates oscillator pitch (±12 semitones)
 - **LFO → Filter:** Variable modulation depth
+- **LFO → Pitch:** Variable pitch modulation
 - **Key Tracking:** Natural filter response across keyboard
 - **Velocity → VCA:** Dynamic expression
+- **Portamento:** True legato detection with exponential glide curves
 
 ---
 
 ## Factory Presets
 
-Drupiter includes **6 factory presets** covering common synthesizer sounds:
+Drupiter includes **12 factory presets** covering common synthesizer sounds:
 
 | # | Name | Description |
 |---|------|-------------|
@@ -71,6 +80,12 @@ Drupiter includes **6 factory presets** covering common synthesizer sounds:
 | **4** | **FM Bell** | Cross-modulated bell tones |
 | **5** | **Analog Pad** | Warm, evolving pad with slow attack |
 | **6** | **Poly Arp** | Bright arpeggiator-style sound |
+| **7** | **PWM Lead** | Pulse-width modulated sawtooth lead |
+| **8** | **Unison Pad** | Rich ensemble pad with golden ratio detuning |
+| **9** | **Poly Bass** | Polyphonic bass with glide |
+| **10** | **ENV FM** | Filter envelope modulating pitch |
+| **11** | **Stereo Unison** | Wide stereo ensemble effects |
+| **12** | **Glide Lead** | Smooth portamento lead sound |
 
 ---
 

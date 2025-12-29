@@ -16,7 +16,7 @@ Browse all available drumlogue units. Each unit can be downloaded and installed 
     <div class="unit-info">
       <h3>Clouds Reverb FX</h3>
       <span class="unit-type-badge reverb">Reverb Effect</span>
-      <span class="unit-version">v1.1.0</span>
+      <span class="unit-version">v1.2.1</span>
       <p>Lush atmospheric reverb with texture processing, micro-granular effects, pitch shifting, and dual assignable LFOs. Based on Mutable Instruments Clouds.</p>
     </div>
   </a>
@@ -46,8 +46,8 @@ Browse all available drumlogue units. Each unit can be downloaded and installed 
     <div class="unit-info">
       <h3>Drupiter Synth</h3>
       <span class="unit-type-badge synth">Synthesizer</span>
-      <span class="unit-version">v1.0.0</span>
-      <p>Jupiter-8 inspired monophonic synthesizer with dual DCOs, multi-mode filter, hard sync, cross-modulation, and comprehensive modulation capabilities. Based on Bristol Jupiter-8.</p>
+      <span class="unit-version">v1.1.0</span>
+      <p>Jupiter-8 inspired polyphonic/monophonic synthesizer with dual DCOs, multi-mode filter, hard sync, cross-modulation, and comprehensive modulation capabilities. Based on Bristol Jupiter-8.</p>
     </div>
   </a>
 </div>

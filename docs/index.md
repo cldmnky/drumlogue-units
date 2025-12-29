@@ -20,7 +20,7 @@ Custom DSP units for the **Korg drumlogue** drum machine, bringing high-quality 
     <h3>🌫️ Clouds Reverb FX</h3>
     <p class="unit-type">Reverb Effect</p>
     <p>Lush atmospheric reverb with texture processing, micro-granular effects, pitch shifting, and dual assignable LFOs.</p>
-    <p class="unit-version">v1.1.0</p>
+    <p class="unit-version">v1.2.1</p>
     <a href="{{ site.baseurl }}/units/clouds-revfx/" class="btn">Learn More →</a>
   </div>
   
@@ -43,8 +43,8 @@ Custom DSP units for the **Korg drumlogue** drum machine, bringing high-quality 
   <div class="unit-card">
     <h3>🪐 Drupiter Synth</h3>
     <p class="unit-type">Synthesizer</p>
-    <p>Jupiter-8 inspired monophonic synthesizer with dual DCOs, multi-mode filter, hard sync, and cross-modulation.</p>
-    <p class="unit-version">v1.0.0</p>
+    <p>Jupiter-8 inspired polyphonic/monophonic synthesizer with dual DCOs, multi-mode filter, hard sync, and cross-modulation.</p>
+    <p class="unit-version">v1.1.0</p>
     <a href="{{ site.baseurl }}/units/drupiter-synth/" class="btn">Learn More →</a>
   </div>
 </div>

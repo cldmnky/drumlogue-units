@@ -1,0 +1,108 @@
+# Release Notes - Drupiter Synth
+
+## v1.1.0 - 2025-12-29
+
+### 🚀 Major Feature Update
+
+Second major release of Drupiter, introducing polyphonic capabilities, expanded waveforms, and advanced modulation features.
+
+### New Features
+
+**Synthesis Modes:**
+- **Polyphonic Mode**: True polyphony with voice allocation system
+- **Unison Mode**: Rich ensemble effects with golden ratio detuning and stereo spread
+- **Mono Mode**: Classic monophonic operation (backward compatible)
+
+**Expanded Waveforms:**
+- **5 Waveforms per Oscillator**: SAW/SQR/PULSE/TRI/SAW_PWM (previously 4)
+- **SAW PWM**: Pulse-width modulated sawtooth waves for rich, evolving timbral character
+- **Enhanced Pulse Width Control**: Improved PWM implementation for all pulse-based waveforms
+
+**Advanced Modulation:**
+- **ENV TO PITCH**: Filter envelope can now modulate oscillator pitch (±12 semitones)
+- **Extended Modulation Hub**: 18 modulation destinations including:
+  - Synth mode switching (Mono/Poly/Unison)
+  - Unison detune amount
+  - Portamento/glide time
+  - Enhanced LFO routing
+
+**Performance & Playability:**
+- **Portamento/Glide**: True legato detection with exponential glide curves
+- **Voice Allocation**: Intelligent polyphonic voice management
+- **Enhanced Presets**: Expanded from 6 to 12 factory presets covering new features
+
+### Technical Improvements
+
+- **DSP Architecture**: Complete rewrite with modular voice allocation system
+- **Performance Monitoring**: Integrated cycle counting for CPU usage optimization
+- **QEMU ARM Testing**: Enhanced test harness with automatic rebuilding
+- **Build System**: Improved container builds with performance monitoring support
+
+### Presets
+
+**New Presets (7-12):**
+- 7. PWM Lead - Pulse-width modulated sawtooth lead
+- 8. Unison Pad - Rich ensemble pad with golden ratio detuning
+- 9. Poly Bass - Polyphonic bass with glide
+- 10. ENV FM - Filter envelope modulating pitch
+- 11. Stereo Unison - Wide stereo ensemble effects
+- 12. Glide Lead - Smooth portamento lead sound
+
+**Existing Presets (1-6):**
+- 1. Jupiter Bass - Deep, punchy bass
+- 2. Jupiter Lead - Bright, cutting lead
+- 3. Sync Lead - Hard-synced aggressive lead
+- 4. FM Bell - Cross-modulated bell tones
+- 5. Analog Pad - Warm, evolving pad
+- 6. Poly Arp - Bright arpeggiator sound
+
+### Compatibility
+
+- **Backward Compatible**: All existing presets and mono mode operation preserved
+- **Hardware Requirements**: No additional hardware requirements
+- **Firmware**: Compatible with all drumlogue firmware versions
+
+### Bug Fixes
+
+- Improved parameter smoothing for glitch-free modulation
+- Enhanced voice stealing algorithm for better polyphonic performance
+- Fixed edge cases in unison detuning calculations
+
+---
+
+## v1.0.0 - 2024-12-18
+
+### 🎉 Initial Release
+
+First stable release of Drupiter, a Jupiter-8 inspired monophonic synthesizer for Korg drumlogue.
+
+### Features
+
+**Oscillators:**
+- Dual DCOs with 4 waveforms each (Ramp, Square, Pulse, Triangle)
+- Hard sync (DCO1 → DCO2) for aggressive timbres
+- Cross-modulation (DCO2 → DCO1 FM) for complex harmonic content
+- Independent octave selection (16', 8', 4')
+- Pulse width control for pulse waveforms
+- Detune control for DCO2
+
+**Filter:**
+- Multi-mode filter (LP12, LP24, HP12, BP12)
+- Self-oscillation capability
+- Envelope amount and keyboard tracking
+- Resonance control
+
+**Modulation:**
+- Dual ADSR envelopes (VCF and VCA)
+- LFO with 4 waveforms (Triangle, Sawtooth, Square, S&H)
+- LFO delay envelope for gradual modulation
+- LFO rate control
+
+**Presets:**
+- 6 factory presets covering common synth sounds
+
+**User Interface:**
+- 24 parameters across 6 pages
+- Hub control system for efficient parameter organization
+- Clear parameter naming and formatting</content>
+<parameter name="filePath">/Users/mbengtss/code/src/github.com/cldmnky/drumlogue-units/drumlogue/drupiter-synth/RELEASE_NOTES.md
