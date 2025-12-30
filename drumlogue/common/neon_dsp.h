@@ -573,6 +573,9 @@ inline float q31_wavetable_lookup(const float* table, float phase, uint32_t tabl
     uint32_t mask = table_size - 1;
     index &= mask;
     
+    // Defensive bounds check to prevent out-of-bounds access
+    if (index >= table_size) index = table_size - 1;
+    
     // Get table values and convert to Q31
     q31_t y0 = float_to_q31(table[index]);
     q31_t y1 = float_to_q31(table[(index + 1) & mask]);
