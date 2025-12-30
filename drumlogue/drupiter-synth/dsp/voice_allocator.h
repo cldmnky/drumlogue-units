@@ -204,7 +204,8 @@ private:
     // Held notes tracking helpers
     void AddHeldNote(uint8_t note);              // Add note to held notes buffer
     void RemoveHeldNote(uint8_t note);           // Remove note from held notes buffer
-    uint8_t GetLastHeldNote() const;             // Get most recent held note (0 if none)
+    uint8_t GetLastHeldNote() const;             // Get last note added to held-notes buffer
+                                              // (most recent NoteOn among currently held notes, 0 if none)
     
     // Prevent copying
     VoiceAllocator(const VoiceAllocator&) = delete;
