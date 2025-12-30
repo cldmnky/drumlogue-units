@@ -575,16 +575,19 @@ inline float q31_wavetable_lookup(const float* table, float phase, uint32_t tabl
     uint32_t mask = table_size - 1;
     index &= mask;
     
+    // Defensive bounds check to prevent out-of-bounds access
+    if (index >= table_size) index = table_size - 1;
+    
     // Get table values and convert to Q31
     q31_t y0 = float_to_q31(table[index]);
     q31_t y1 = float_to_q31(table[(index + 1) & mask]);
-    
-    // Fractional part for interpolation (0 to 0x7FFFFFFF)
-    q31_t frac = q31_pos & 0x7FFFFFFF;
-    
+
+    // Fractional part for interpolation (0.0f to <1.0f), converted to Q31
+    float frac_f = pos - static_cast<float>(index);
+    q31_t frac = float_to_q31(frac_f);
+
     // Linear interpolation using existing linintq31 function
     q31_t result_q31 = linintq31(frac, y0, y1);
-    
     // Convert back to float
     return q31_to_float(result_q31);
 }
