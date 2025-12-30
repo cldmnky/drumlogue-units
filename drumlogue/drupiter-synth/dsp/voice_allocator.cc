@@ -15,12 +15,29 @@
 #include <algorithm>
 
 // Enable USE_NEON for ARM NEON optimizations
+#ifndef TEST
 #ifdef __ARM_NEON
 #define USE_NEON 1
 #endif
+#endif
 
+// Disable NEON DSP when testing on host
+#ifndef TEST
 #define NEON_DSP_NS drupiter
 #include "../../common/neon_dsp.h"
+#else
+// Stub implementation for testing
+namespace drupiter {
+namespace neon {
+inline void ClearStereoBuffers(float* left, float* right, uint32_t frames) {
+    for (uint32_t i = 0; i < frames; ++i) { 
+        left[i] = 0.0f; 
+        right[i] = 0.0f; 
+    }
+}
+}
+}
+#endif
 
 namespace dsp {
 
@@ -68,8 +85,17 @@ VoiceAllocator::VoiceAllocator()
     , unison_detune_cents_(10.0f)  // Default 10 cents detune
     , portamento_time_ms_(0.0f)    // Task 2.2.4: Default no glide
     , sample_rate_(48000.0f) {     // Task 2.2.4: Default sample rate
-    // Zero-initialize all voices
-    memset(voices_, 0, sizeof(voices_));
+    // Initialize all voices to inactive state (don't memset - corrupts C++ objects)
+    for (uint8_t i = 0; i < max_voices_; i++) {
+        voices_[i].active = false;
+        voices_[i].midi_note = 0;
+        voices_[i].velocity = 0.0f;
+        voices_[i].pitch_hz = 0.0f;
+        voices_[i].note_on_time = 0;
+        voices_[i].glide_target_hz = 0.0f;
+        voices_[i].glide_increment = 0.0f;
+        voices_[i].is_gliding = false;
+    }
     memset(active_voice_list_, 0, sizeof(active_voice_list_));  // Clear active voice list
 }
 

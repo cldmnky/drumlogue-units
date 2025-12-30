@@ -304,10 +304,17 @@ class PerfMon {
      * Available on ARM Cortex-A and Cortex-M with DWT support
      */
     static inline uint32_t GetCycleCount() {
+#ifdef TEST
+        // For testing on x86_64, use a simple incrementing counter
+        // This simulates cycle counting without requiring ARM hardware
+        static uint32_t test_counter = 0;
+        return ++test_counter;
+#else
         // ARM DWT PMCCNTR register address
         // 0xE0001004 on most Cortex-M/A processors
         volatile uint32_t* pmccntr = (volatile uint32_t*)0xE0001004;
         return *pmccntr;
+#endif
     }
 };
 
