@@ -25,22 +25,22 @@ make list-units                           # List all units
 
 The following instruction files provide detailed guidance for specific areas:
 
-- [C/C++ Coding Standards](instructions/cpp.instructions.md) - DSP code style, real-time constraints, ARM optimization
-- [Build System](instructions/build-system.instructions.md) - Makefiles, config.mk, container builds
-- [Testing Standards](instructions/testing.instructions.md) - Desktop test harnesses, hardware validation
+- <a>C/C++ Coding Standards for Drumlogue Units</a> - DSP code style, real-time constraints, ARM optimization
+- <a>Build System Guidelines</a> - Makefiles, config.mk, container builds
+- <a>Testing Standards for Drumlogue DSP Units</a> - Desktop test harnesses, hardware validation
 
 ## Reusable Prompts
 
 Use these prompts for common development tasks:
 
-- [Create New Unit](prompts/create-unit.prompt.md) - Template-based unit creation
-- [Debug Unit](prompts/debug-unit.prompt.md) - Build, runtime, and DSP debugging
-- [Port MI DSP](prompts/port-mi-dsp.prompt.md) - Porting Mutable Instruments modules
-- [Release Unit](prompts/release-unit.prompt.md) - Complete release workflow
+- <a>Create New Drumlogue Unit</a> - Template-based unit creation
+- <a>Debug Drumlogue Unit</a> - Build, runtime, and DSP debugging
+- <a>Port Mutable Instruments DSP to Drumlogue</a> - Porting Mutable Instruments modules
+- <a>Release Drumlogue Unit</a> - Complete release workflow
 
 ## Specialized Agents
 
-- [Drumlogue DSP Expert](agents/drumlogue-dsp-expert.agent.md) - Expert mode for DSP development
+- <a>Drumlogue DSP Expert Agent</a> - Expert mode for DSP development
 
 ## Building Units
 
