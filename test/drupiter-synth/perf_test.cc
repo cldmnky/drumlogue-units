@@ -49,6 +49,16 @@ static constexpr uint32_t kFramesPerBuffer = 128;   // Typical drumlogue buffer 
 // CPU frequency for utilization calculation (ARM Cortex-A7 typical)
 static constexpr uint32_t kCpuFrequencyHz = 600000000;  // 600 MHz
 
+// Structure to store performance results for summary table
+struct PerfResult {
+    std::string mode_name;
+    uint32_t total_avg_cycles;
+    uint32_t total_peak_cycles;
+    float total_avg_util;
+    float total_peak_util;
+    std::string rating;
+};
+
 class PerfTest {
 public:
     PerfTest() : synth_(), test_buffer_(kFramesPerBuffer * 2) {}
@@ -65,6 +75,9 @@ public:
         TestVoiceCount("2 Voices (Poly)", 2);
         TestVoiceCount("4 Voices (Poly)", 4);
 
+        // Print summary table
+        PrintSummaryTable();
+
         std::cout << "=== Performance Summary ===\n";
         PrintUtilizationGuide();
     }
@@ -72,6 +85,7 @@ public:
 private:
     DrupiterSynth synth_;
     std::vector<float> test_buffer_;
+    std::vector<PerfResult> results_;
 
     void TestVoiceCount(const std::string& mode_name, int voice_count) {
         std::cout << "Testing " << mode_name << "...\n";
@@ -92,12 +106,13 @@ private:
         }
         std::cout << "Synth initialized successfully\n";
 
-        // Set synthesis mode via parameter (MOD_SYNTH_MODE maps to a parameter)
-        // The mode parameter is handled internally by the modulation hub
-        // For testing, we'll rely on the voice allocator's default mode and test different voice counts
+        // Set synthesis mode via hub control (not default voice allocator)
+        // MOD_SYNTH_MODE = 14, values: 0=MONO, 1=POLY, 2=UNISON
+        const uint8_t synth_mode = (voice_count == 1) ? 0 : 1;  // MONO for 1 voice, POLY for 2+ voices
+        synth_.SetHubValue(14, synth_mode);  // MOD_SYNTH_MODE
 
         // Reset performance counters
-        // PERF_MON_RESET();  // Temporarily disabled for debugging
+        PERF_MON_RESET();
 
         // Warm up (1 second)
         std::cout << "  Warming up...\n";
@@ -106,14 +121,69 @@ private:
         std::cout << "  Warmup complete\n";
 
         // Reset counters again for actual test
-        // PERF_MON_RESET();  // Temporarily disabled for debugging
+        PERF_MON_RESET();
 
         // Run actual test
         std::cout << "  Running performance test...\n";
         RunTestSequence(static_cast<float>(kTestDurationSeconds), voice_count);
 
         // Collect and display results
+        CollectPerformanceResults(mode_name);
         PrintPerformanceResults(mode_name);
+        std::cout << "\n";
+    }
+
+    void CollectPerformanceResults(const std::string& mode_name) {
+        // Calculate cycles per second for utilization
+        const uint32_t cycles_per_second = kCpuFrequencyHz;
+        const uint32_t cycles_per_sample = cycles_per_second / kSampleRate;
+
+        // Total utilization
+        uint32_t total_avg_cycles = PERF_MON_TOTAL_AVG();
+        uint32_t total_peak_cycles = PERF_MON_TOTAL_PEAK();
+        float total_avg_util = (static_cast<float>(total_avg_cycles) / cycles_per_sample) * 100.0f;
+        float total_peak_util = (static_cast<float>(total_peak_cycles) / cycles_per_sample) * 100.0f;
+
+        // Performance rating
+        std::string rating;
+        if (total_avg_util < 50.0f) rating = "EXCELLENT";
+        else if (total_avg_util < 70.0f) rating = "GOOD";
+        else if (total_avg_util < 80.0f) rating = "FAIR";
+        else rating = "POOR";
+
+        // Store result
+        results_.push_back({
+            mode_name,
+            total_avg_cycles,
+            total_peak_cycles,
+            total_avg_util,
+            total_peak_util,
+            rating
+        });
+    }
+
+    void PrintSummaryTable() {
+        std::cout << "=== Performance Summary Table ===\n";
+        std::cout << std::fixed << std::setprecision(1);
+        std::cout << "+----------------+--------+--------+--------+--------+\n";
+        std::cout << "| Mode          | Avg CPU| Peak CPU| Avg Cyc| Peak Cyc|\n";
+        std::cout << "+----------------+--------+--------+--------+--------+\n";
+
+        for (const auto& result : results_) {
+            std::cout << "| " << std::left << std::setw(14) << result.mode_name << " | "
+                      << std::right << std::setw(6) << result.total_avg_util << "% | "
+                      << std::setw(6) << result.total_peak_util << "% | "
+                      << std::setw(6) << result.total_avg_cycles << " | "
+                      << std::setw(6) << result.total_peak_cycles << " |\n";
+        }
+
+        std::cout << "+----------------+--------+--------+--------+--------+\n";
+
+        // Show ratings
+        std::cout << "Performance Ratings:\n";
+        for (const auto& result : results_) {
+            std::cout << "  " << std::left << std::setw(16) << result.mode_name << ": " << result.rating << "\n";
+        }
         std::cout << "\n";
     }
 
@@ -128,24 +198,24 @@ private:
 
         for (uint32_t buffer = 0; buffer < buffers_to_process; ++buffer) {
             // Skip note triggering for now to isolate the crash
-            // if (buffer % (buffers_to_process / voice_count) == 0 && note_index < voice_count) {
-            //     synth_.NoteOn(notes[note_index % 4], velocities[note_index % 4]);
-            //     note_index++;
-            // }
+            if (buffer % (buffers_to_process / voice_count) == 0 && note_index < voice_count) {
+                synth_.NoteOn(notes[note_index % 4], velocities[note_index % 4]);
+                note_index++;
+            }
 
             // Process audio buffer
             synth_.Render(test_buffer_.data(), kFramesPerBuffer);
         }
 
         // Release all notes
-        // for (int i = 0; i < voice_count; ++i) {
-        //     synth_.NoteOff(notes[i % 4]);
-        // }
-
+        for (int i = 0; i < voice_count; ++i) {
+            synth_.NoteOff(notes[i % 4]);
+        }
+        
         // Let envelopes finish
-        // for (int i = 0; i < 100; ++i) {
-        //     synth_.Render(test_buffer_.data(), kFramesPerBuffer);
-        // }
+        for (int i = 0; i < 100; ++i) {
+            synth_.Render(test_buffer_.data(), kFramesPerBuffer);
+        }
     }
 
     void PrintPerformanceResults(const std::string& mode_name) {
@@ -157,8 +227,7 @@ private:
 
         // Display each counter
         for (uint8_t i = 0; i < ::dsp::PerfMon::GetCounterCount(); ++i) {
-            // ::dsp::PerfStats stats = PERF_MON_GET_STATS(i);  // Temporarily disabled
-            ::dsp::PerfStats stats = {0};  // Mock stats for debugging
+            ::dsp::PerfStats stats = PERF_MON_GET_STATS(i);
             
             if (stats.frame_count == 0) continue;
 
@@ -177,10 +246,8 @@ private:
         }
 
         // Total utilization
-        // uint32_t total_avg_cycles = PERF_MON_TOTAL_AVG();  // Temporarily disabled
-        // uint32_t total_peak_cycles = PERF_MON_TOTAL_PEAK();  // Temporarily disabled
-        uint32_t total_avg_cycles = 1000;  // Mock for debugging
-        uint32_t total_peak_cycles = 1500;  // Mock for debugging
+        uint32_t total_avg_cycles = PERF_MON_TOTAL_AVG();
+        uint32_t total_peak_cycles = PERF_MON_TOTAL_PEAK();
         float total_avg_util = (static_cast<float>(total_avg_cycles) / cycles_per_sample) * 100.0f;
         float total_peak_util = (static_cast<float>(total_peak_cycles) / cycles_per_sample) * 100.0f;
 

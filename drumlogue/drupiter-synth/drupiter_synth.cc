@@ -1246,6 +1246,14 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
     }
 }
 
+void DrupiterSynth::SetHubValue(uint8_t destination, uint8_t value) {
+    if (destination < MOD_NUM_DESTINATIONS) {
+        mod_hub_.SetValueForDest(destination, value);
+        // Also update the preset storage for consistency
+        current_preset_.hub_values[destination] = value;
+    }
+}
+
 void DrupiterSynth::NoteOn(uint8_t note, uint8_t velocity) {
 #ifdef DEBUG
     static uint8_t last_note = 255;
