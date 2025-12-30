@@ -10,6 +10,7 @@
  */
 
 #include <stdint.h>
+#include <cfloat>
 
 #ifdef USE_NEON
 #include <arm_neon.h>
@@ -560,14 +561,17 @@ inline float q31_to_float(q31_t q) {
  *     preferable for readability.
  */
 inline float q31_wavetable_lookup(const float* table, float phase, uint32_t table_size) {
-    // Clamp phase to [0.0, 1.0)
-    phase = (phase < 0.0f) ? 0.0f : (phase >= 1.0f) ? 0.999999f : phase;
-
-    // Compute table position in floating point: [0, table_size)
-    float pos = phase * static_cast<float>(table_size);
-
-    // Integer index into table, wrap using mask (table_size must be power of 2)
-    uint32_t index = static_cast<uint32_t>(pos);
+    // Clamp phase to [0.0, 1.0) using FLT_EPSILON for precise upper bound
+    // This ensures phase * table_size never reaches table_size, preventing index overflow
+    phase = (phase < 0.0f) ? 0.0f : (phase >= 1.0f) ? (1.0f - FLT_EPSILON) : phase;
+    
+    // Convert phase to Q31 table position: phase * table_size in Q31 format
+    // Use 64-bit intermediate to avoid overflow
+    uint64_t temp = static_cast<uint64_t>(phase * static_cast<float>(table_size) * 2147483648.0f);
+    q31_t q31_pos = static_cast<q31_t>(temp >> 1);  // Divide by 2 to get proper Q31 range
+    
+    // Extract integer index (top bit) and fractional part (lower 31 bits)
+    uint32_t index = static_cast<uint32_t>(q31_pos) >> 31;
     uint32_t mask = table_size - 1;
     index &= mask;
     
