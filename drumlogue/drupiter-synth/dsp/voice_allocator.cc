@@ -144,7 +144,9 @@ void VoiceAllocator::NoteOn(uint8_t note, uint8_t velocity) {
     timestamp_++;  // Increment for voice stealing
     
     // Add note to held notes buffer (for mono/unison last-note priority)
-    AddHeldNote(note);
+    if (mode_ == SYNTH_MODE_MONOPHONIC || mode_ == SYNTH_MODE_UNISON) {
+        AddHeldNote(note);
+    }
     
     Voice* voice = nullptr;
     uint8_t voice_idx = 0;
