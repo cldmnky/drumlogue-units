@@ -405,14 +405,14 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     // Task 2.2.4: Process portamento/glide for MONO/UNISON modes
     // For polyphonic mode, glide is processed per-voice in the render loop
     // Use the correct glide increment calculated in voice allocator
+    // CRITICAL: Apply glide increment for EACH FRAME in the buffer, not just once
     if (current_mode_ == dsp::SYNTH_MODE_MONOPHONIC || 
         current_mode_ == dsp::SYNTH_MODE_UNISON) {
         dsp::Voice& voice0 = allocator_.GetVoiceMutable(0);
         if (voice0.is_gliding) {
-            // Use the pre-calculated glide increment from voice allocator
-            // This ensures constant speed glide (not slowing down near target)
+            // Apply glide increment per-frame for correct timing
             float log_pitch = logf(voice0.pitch_hz);
-            log_pitch += voice0.glide_increment;
+            log_pitch += voice0.glide_increment * frames;  // Multiply by frame count
             
             // Check if we've reached target
             float log_target = logf(voice0.glide_target_hz);
@@ -525,12 +525,11 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
                 dsp::Voice& voice_mut = const_cast<dsp::Voice&>(voice);
                 
                 // Task 2.2.4: Process portamento/glide
-                // Use the pre-calculated glide increment from voice allocator
-                // This ensures constant speed glide (not slowing down near target)
+                // CRITICAL: Apply glide increment for EACH FRAME in the buffer, not just once
                 if (voice_mut.is_gliding) {
-                    // Use the pre-calculated glide increment from voice allocator
+                    // Apply glide increment per-frame for correct timing
                     float log_pitch = logf(voice_mut.pitch_hz);
-                    log_pitch += voice_mut.glide_increment;
+                    log_pitch += voice_mut.glide_increment * frames;  // Multiply by frame count
                     
                     // Check if we've reached target
                     float log_target = logf(voice_mut.glide_target_hz);
