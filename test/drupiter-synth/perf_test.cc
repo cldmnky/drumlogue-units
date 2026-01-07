@@ -207,8 +207,8 @@ private:
             synth_.Render(test_buffer_.data(), kFramesPerBuffer);
         }
 
-        // Release all notes
-        for (int i = 0; i < voice_count; ++i) {
+        // Release all notes that were actually triggered
+        for (int i = 0; i < note_index; ++i) {
             synth_.NoteOff(notes[i % 4]);
         }
         
