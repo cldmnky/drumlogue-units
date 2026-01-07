@@ -3,7 +3,7 @@
 
 CXX := g++
 CXXFLAGS := -std=c++17 -O2 -Wall -Wextra -DTEST
-CXXFLAGS += -I../../drumlogue/drupiter-synth -I../../drumlogue/common -I../../eurorack/stmlib -I../../eurorack
+CXXFLAGS += -I../../drumlogue/drupiter-synth -I../../drumlogue/common -I../../eurorack/stmlib -I../../eurorack -I.
 
 # Platform detection for libsndfile
 UNAME_S := $(shell uname -s)
@@ -21,14 +21,27 @@ endif
 
 # Source files
 DSP_SOURCES := ../../drumlogue/drupiter-synth/dsp/jupiter_dco.cc
+DSP_SOURCES += ../../drumlogue/drupiter-synth/dsp/jupiter_vcf.cc
+DSP_SOURCES += ../../drumlogue/drupiter-synth/dsp/jupiter_env.cc
+DSP_SOURCES += ../../drumlogue/drupiter-synth/dsp/jupiter_lfo.cc
+DSP_SOURCES += ../../drumlogue/drupiter-synth/dsp/voice_allocator.cc
+DSP_SOURCES += ../../drumlogue/drupiter-synth/dsp/unison_oscillator.cc
+DSP_SOURCES += ../../drumlogue/drupiter-synth/drupiter_synth.cc
+DSP_SOURCES += ../../drumlogue/common/perf_mon.cc
+
 TEST_SOURCES := main.cc
+PERF_SOURCES := perf_test.cc
 
 TARGET := drupiter_test
+PERF_TARGET := perf_test
 
-all: $(TARGET)
+all: $(TARGET) $(PERF_TARGET)
 
 $(TARGET): $(TEST_SOURCES) $(DSP_SOURCES)
 	$(CXX) $(CXXFLAGS) $^ $(LDFLAGS) -o $@
+
+$(PERF_TARGET): $(PERF_SOURCES) $(DSP_SOURCES)
+	$(CXX) $(CXXFLAGS) -DPERF_MON $^ $(LDFLAGS) -o $@
 
 clean:
 	rm -rf $(TARGET) *.wav fixtures/
@@ -54,4 +67,10 @@ test: test-single test-multi
 	@echo "=== All tests completed ==="
 	@echo "Check fixtures/ directory for output WAV files"
 
-.PHONY: all clean test test-single test-multi generate-fixtures
+perf-test: $(PERF_TARGET)
+	@echo "=== Running Performance Tests ==="
+	@echo "Note: Build with PERF_MON=1 for accurate results"
+	@echo "Example: make clean && make PERF_MON=1 perf-test"
+	./$(PERF_TARGET)
+
+.PHONY: all clean test test-single test-multi generate-fixtures perf-test

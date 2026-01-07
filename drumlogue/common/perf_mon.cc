@@ -8,6 +8,8 @@
 
 #include "perf_mon.h"
 
+#ifdef PERF_MON
+
 namespace dsp {
 
 // Static member definitions
@@ -15,3 +17,5 @@ PerfCounter PerfMon::counters_[PerfMon::kMaxCounters];
 uint8_t PerfMon::counter_count_ = 0;
 
 }  // namespace dsp
+
+#endif  // PERF_MON

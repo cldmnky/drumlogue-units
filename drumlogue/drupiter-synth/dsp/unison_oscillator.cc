@@ -13,12 +13,17 @@
 #include <cstring>
 
 // Enable USE_NEON for ARM NEON optimizations
+#ifndef TEST
 #ifdef __ARM_NEON
 #define USE_NEON 1
 #endif
+#endif
 
+// Disable NEON DSP when testing on host
+#ifndef TEST
 #define NEON_DSP_NS drupiter
-#include "../common/neon_dsp.h"
+#include "../../common/neon_dsp.h"
+#endif
 
 namespace dsp {
 

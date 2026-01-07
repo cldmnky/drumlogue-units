@@ -275,6 +275,13 @@ public:
     const char* GetParameterStr(uint8_t id, int32_t value);
     
     /**
+     * @brief Set hub control value for testing (bypasses parameter system)
+     * @param destination Hub destination (0-17)
+     * @param value Hub value (0-100)
+     */
+    void SetHubValue(uint8_t destination, uint8_t value);
+    
+    /**
      * @brief Note on event
      * @param note MIDI note number (0-127)
      * @param velocity Note velocity (0-127)

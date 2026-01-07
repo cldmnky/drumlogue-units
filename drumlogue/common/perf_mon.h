@@ -28,6 +28,9 @@
 
 #include <cstdint>
 #include <cstdio>
+#ifdef TEST
+#include <chrono>
+#endif
 
 namespace dsp {
 
@@ -300,14 +303,25 @@ class PerfMon {
     static uint8_t counter_count_;
     
     /**
-     * @brief Read ARM cycle counter (DWT PMCCNTR)
+     * @brief Read cycle counter (DWT PMCCNTR on ARM, high-res timer on desktop)
      * Available on ARM Cortex-A and Cortex-M with DWT support
+     * On desktop, uses high-resolution clock for timing simulation
      */
     static inline uint32_t GetCycleCount() {
+#ifdef TEST
+        // For testing on x86_64, use high-resolution clock converted to "cycles"
+        // Simulate ~600MHz ARM clock (600 cycles per microsecond)
+        using namespace std::chrono;
+        static auto start_time = high_resolution_clock::now();
+        auto now = high_resolution_clock::now();
+        auto elapsed_us = duration_cast<microseconds>(now - start_time).count();
+        return static_cast<uint32_t>(elapsed_us * 600);  // 600 cycles per microsecond
+#else
         // ARM DWT PMCCNTR register address
         // 0xE0001004 on most Cortex-M/A processors
         volatile uint32_t* pmccntr = (volatile uint32_t*)0xE0001004;
         return *pmccntr;
+#endif
     }
 };
 

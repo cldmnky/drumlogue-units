@@ -17,9 +17,11 @@
 #include "jupiter_dco.h"
 
 // Enable USE_NEON for ARM NEON optimizations
+#ifndef TEST
 #ifdef __ARM_NEON
 #define USE_NEON 1
 #include <arm_neon.h>
+#endif
 #endif
 
 namespace dsp {

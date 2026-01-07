@@ -21,13 +21,20 @@
 #include <cmath>
 #include <cstring>
 #include <cstdio>
+#include <iostream>
 
-#ifdef USE_NEON
-#include <arm_neon.h>
+// Enable USE_NEON for ARM NEON optimizations (but not in test builds)
+#ifndef TEST
+#ifdef __ARM_NEON
+#define USE_NEON 1
+#endif
 #endif
 
+// Disable NEON DSP when testing on host
+#ifndef TEST
 #define NEON_DSP_NS drupiter
 #include "../common/neon_dsp.h"
+#endif
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -222,6 +229,14 @@ int8_t DrupiterSynth::Init(const unit_runtime_desc_t* desc) {
     perf_render_total_ = PERF_MON_REGISTER("RenderTotal");
     #endif
     
+    // Initialize audio buffers to zero
+    std::memset(mix_buffer_, 0, sizeof(mix_buffer_));
+    std::memset(left_buffer_, 0, sizeof(left_buffer_));
+    std::memset(right_buffer_, 0, sizeof(right_buffer_));
+    
+    // Initialize buffer guard
+    buffer_guard_ = 0xDEADBEEFDEADBEEF;
+    
     return 0;
 }
 
@@ -265,6 +280,7 @@ void DrupiterSynth::Suspend() {
 }
 
 void DrupiterSynth::Render(float* out, uint32_t frames) {
+    
     // Safety: ensure output buffer and internal buffers can handle the request
     if (!out || frames == 0) return;
     
@@ -314,6 +330,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     const float lfo_vcf_depth = mod_hub_.GetValueNormalizedUnipolar(MOD_LFO_TO_VCF);
     const float lfo_vco_depth = mod_hub_.GetValueNormalizedUnipolar(MOD_LFO_TO_VCO);
     const float env_pwm_depth = mod_hub_.GetValueNormalizedUnipolar(MOD_ENV_TO_PWM);
+    
     // Bipolar destinations (-1.0 to +1.0)
     const float env_vcf_depth = mod_hub_.GetValueNormalizedBipolar(MOD_ENV_TO_VCF);
     const uint8_t hpf_cutoff = mod_hub_.GetValue(MOD_HPF);
@@ -342,7 +359,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     const float unison_detune_cents = static_cast<float>(mod_hub_.GetValue(MOD_UNISON_DETUNE));
     allocator_.SetUnisonDetune(unison_detune_cents);
     
-    // Portamento time control (Phase 2 Task 2.2.4) - 0-100 maps to 0-500ms exponentially
+    // Portamento time control (Phase 2.2.4) - 0-100 maps to 0-500ms exponentially
     // Special case: 0 = portamento disabled (0ms), 1-100 = 10-500ms exponential
     const uint8_t porta_param = mod_hub_.GetValue(MOD_PORTAMENTO_TIME);
     float porta_time_ms = 0.0f;
@@ -372,7 +389,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     float hpf_alpha = 0.0f;  // 0 = bypass HPF
     if (hpf_cutoff > 0) {
         const float hpf_freq = 20.0f + (hpf_cutoff / 100.0f) * 1980.0f;  // 20Hz-2kHz
-        const float rc = 1.0f / (2.0f * static_cast<float>(M_PI) * hpf_freq);
+        const float rc = 1.0f / (2.0f * M_PI * hpf_freq);
         const float dt = 1.0f / sample_rate_;
         hpf_alpha = rc / (rc + dt);
     }
@@ -388,14 +405,14 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     // Task 2.2.4: Process portamento/glide for MONO/UNISON modes
     // For polyphonic mode, glide is processed per-voice in the render loop
     // Use the correct glide increment calculated in voice allocator
+    // CRITICAL: Apply glide increment for EACH FRAME in the buffer, not just once
     if (current_mode_ == dsp::SYNTH_MODE_MONOPHONIC || 
         current_mode_ == dsp::SYNTH_MODE_UNISON) {
         dsp::Voice& voice0 = allocator_.GetVoiceMutable(0);
         if (voice0.is_gliding) {
-            // Use the pre-calculated glide increment from voice allocator
-            // This ensures constant speed glide (not slowing down near target)
+            // Apply glide increment per-frame for correct timing
             float log_pitch = logf(voice0.pitch_hz);
-            log_pitch += voice0.glide_increment;
+            log_pitch += voice0.glide_increment * frames;  // Multiply by frame count
             
             // Check if we've reached target
             float log_target = logf(voice0.glide_target_hz);
@@ -418,6 +435,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     #endif
     
     for (uint32_t i = 0; i < frames; ++i) {
+        
         // Process envelopes FIRST (needed for LFO rate modulation)
         vcf_env_out_ = env_vcf_->Process();
         vca_env_out_ = env_vca_->Process();
@@ -507,12 +525,11 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
                 dsp::Voice& voice_mut = const_cast<dsp::Voice&>(voice);
                 
                 // Task 2.2.4: Process portamento/glide
-                // Use the pre-calculated glide increment from voice allocator
-                // This ensures constant speed glide (not slowing down near target)
+                // CRITICAL: Apply glide increment for EACH FRAME in the buffer, not just once
                 if (voice_mut.is_gliding) {
-                    // Use the pre-calculated glide increment from voice allocator
+                    // Apply glide increment per-frame for correct timing
                     float log_pitch = logf(voice_mut.pitch_hz);
-                    log_pitch += voice_mut.glide_increment;
+                    log_pitch += voice_mut.glide_increment * frames;  // Multiply by frame count
                     
                     // Check if we've reached target
                     float log_target = logf(voice_mut.glide_target_hz);
@@ -906,7 +923,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     // Add tiny DC offset for denormal protection before interleaving
     const float denormal_offset = 1.0e-15f;
     drupiter::neon::ApplyGain(left_buffer_, 1.0f, frames);  // Could add offset here if needed
-    drupiter::neon::ApplyGain(right_buffer_, 1.0f, frames); // Could add offset here if needed
+    drupiter::neon::ApplyGain(right_buffer_, 1.0f, frames);  // Could add offset here if needed
     
     // Use neon_dsp InterleaveStereo function for optimized stereo interleaving
     drupiter::neon::InterleaveStereo(left_buffer_, right_buffer_, out, frames);
@@ -1228,6 +1245,14 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
     }
 }
 
+void DrupiterSynth::SetHubValue(uint8_t destination, uint8_t value) {
+    if (destination < MOD_NUM_DESTINATIONS) {
+        mod_hub_.SetValueForDest(destination, value);
+        // Also update the preset storage for consistency
+        current_preset_.hub_values[destination] = value;
+    }
+}
+
 void DrupiterSynth::NoteOn(uint8_t note, uint8_t velocity) {
 #ifdef DEBUG
     static uint8_t last_note = 255;
@@ -1274,9 +1299,25 @@ void DrupiterSynth::NoteOff(uint8_t note) {
     // Route through voice allocator (Hoover v2.0)
     allocator_.NoteOff(note);
     
-    // Trigger envelope release on main synth DSP
-    env_vca_->NoteOff();
-    env_vcf_->NoteOff();
+    // Only trigger envelope release if no notes are still held
+    // In monophonic/unison modes, check if any keys are still down
+    bool has_held_notes = allocator_.HasHeldNotes();
+    
+    if (!has_held_notes) {
+        // No notes held - safe to release main envelopes
+        env_vca_->NoteOff();
+        env_vcf_->NoteOff();
+#ifdef DEBUG
+        fprintf(stderr, "[Synth] No held notes, releasing main envelopes\n");
+        fflush(stderr);
+#endif
+    } else {
+#ifdef DEBUG
+        fprintf(stderr, "[Synth] Notes still held (%d), keeping main envelopes open\n", 
+                has_held_notes);
+        fflush(stderr);
+#endif
+    }
 }
 
 void DrupiterSynth::AllNoteOff() {
