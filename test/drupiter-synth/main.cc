@@ -56,7 +56,7 @@ int main(int argc, char** argv) {
 
     // Check that signal is within reasonable bounds for bandlimited signal
     // Allow some overshoot due to PolyBLEP transitions
-    if (max_val > 1.5f || min_val < -1.5f) {
+    if (max_val > 1.2f || min_val < -1.2f) {
         std::cout << "ERROR: Signal excessively out of bounds!" << std::endl;
         return 1;
     }
