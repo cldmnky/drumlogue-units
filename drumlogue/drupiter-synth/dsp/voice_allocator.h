@@ -151,6 +151,9 @@ public:
     SynthMode GetMode() const { return mode_; }
     UnisonOscillator& GetUnisonOscillator() { return unison_osc_; }
     
+    // Check if any notes are currently held (keys down)
+    bool HasHeldNotes() const { return num_held_notes_ > 0; }
+    
     // Portamento control (Phase 2 - Task 2.2.4)
     void SetPortamentoTime(float time_ms) { portamento_time_ms_ = time_ms; }
     float GetPortamentoTime() const { return portamento_time_ms_; }

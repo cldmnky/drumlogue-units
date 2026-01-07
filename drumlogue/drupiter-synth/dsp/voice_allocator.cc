@@ -14,6 +14,10 @@
 #include <cstring>
 #include <algorithm>
 
+#ifdef TEST
+#include <cstdio>
+#endif
+
 // Enable USE_NEON for ARM NEON optimizations
 #ifndef TEST
 #ifdef __ARM_NEON
@@ -84,7 +88,8 @@ VoiceAllocator::VoiceAllocator()
     , allocation_strategy_(ALLOC_ROUND_ROBIN)
     , unison_detune_cents_(10.0f)  // Default 10 cents detune
     , portamento_time_ms_(0.0f)    // Task 2.2.4: Default no glide
-    , sample_rate_(48000.0f) {     // Task 2.2.4: Default sample rate
+    , sample_rate_(48000.0f)       // Task 2.2.4: Default sample rate
+    , num_held_notes_(0) {         // Initialize held notes counter
     // Initialize all voices to inactive state (don't memset - corrupts C++ objects)
     for (uint8_t i = 0; i < max_voices_; i++) {
         voices_[i].active = false;
@@ -171,6 +176,15 @@ void VoiceAllocator::NoteOn(uint8_t note, uint8_t velocity) {
     // Add note to held notes buffer (for mono/unison last-note priority)
     if (mode_ == SYNTH_MODE_MONOPHONIC || mode_ == SYNTH_MODE_UNISON) {
         AddHeldNote(note);
+#ifdef TEST
+        fprintf(stderr, "[NoteOn] note=%d, mode=%d, num_held=%d, held_notes=[", 
+                note, mode_, num_held_notes_);
+        for (uint8_t i = 0; i < num_held_notes_; i++) {
+            fprintf(stderr, "%d%s", held_notes_[i], i < num_held_notes_ - 1 ? ", " : "");
+        }
+        fprintf(stderr, "]\n");
+        fflush(stderr);
+#endif
     }
     
     Voice* voice = nullptr;
@@ -219,14 +233,36 @@ void VoiceAllocator::NoteOff(uint8_t note) {
     // Remove note from held notes buffer
     RemoveHeldNote(note);
     
+#ifdef TEST
+    fprintf(stderr, "[NoteOff] note=%d, mode=%d, voice[0].active=%d, voice[0].midi_note=%d, num_held=%d\n",
+            note, mode_, voices_[0].active, voices_[0].midi_note, num_held_notes_);
+    if (num_held_notes_ > 0) {
+        fprintf(stderr, "[NoteOff] held_notes = [");
+        for (uint8_t i = 0; i < num_held_notes_; i++) {
+            fprintf(stderr, "%d%s", held_notes_[i], i < num_held_notes_ - 1 ? ", " : "");
+        }
+        fprintf(stderr, "]\n");
+    }
+    fflush(stderr);
+#endif
+    
     switch (mode_) {
         case SYNTH_MODE_MONOPHONIC:
             // Monophonic: Check if released note matches current playing note
             if (voices_[0].active && voices_[0].midi_note == note) {
-                // Check if there are other held notes
+                // The currently playing note was released
                 uint8_t last_held = GetLastHeldNote();
+#ifdef TEST
+                fprintf(stderr, "[NoteOff] Released current note. GetLastHeldNote() = %d\n", last_held);
+                fflush(stderr);
+#endif
                 if (last_held > 0) {
                     // Retrigger with the most recent held note (last-note priority)
+#ifdef TEST
+                    fprintf(stderr, "[NoteOff] Switching to held note %d (was playing %d)\n", 
+                            last_held, voices_[0].midi_note);
+                    fflush(stderr);
+#endif
                     TriggerVoice(&voices_[0], last_held, 64);  // Use default velocity
                 } else {
                     // No more held notes - release the voice
@@ -235,6 +271,14 @@ void VoiceAllocator::NoteOff(uint8_t note) {
                     voices_[0].env_pitch.NoteOff();
                 }
             }
+#ifdef TEST
+            else {
+                fprintf(stderr, "[NoteOff] Released non-current note, continuing to play current note\n");
+                fflush(stderr);
+            }
+#endif
+            // If released note is NOT the current note, it was already removed from held_notes_
+            // and we should continue playing the current note (do nothing)
             break;
             
         case SYNTH_MODE_POLYPHONIC:
@@ -251,7 +295,7 @@ void VoiceAllocator::NoteOff(uint8_t note) {
         case SYNTH_MODE_UNISON:
             // Unison: Check if released note matches current playing note
             if (voices_[0].active && voices_[0].midi_note == note) {
-                // Check if there are other held notes
+                // The currently playing note was released
                 uint8_t last_held = GetLastHeldNote();
                 if (last_held > 0) {
                     // Retrigger with the most recent held note (last-note priority)
@@ -269,6 +313,8 @@ void VoiceAllocator::NoteOff(uint8_t note) {
                     }
                 }
             }
+            // If released note is NOT the current note, it was already removed from held_notes_
+            // and we should continue playing the current note (do nothing)
             break;
     }
 }
@@ -418,6 +464,7 @@ void VoiceAllocator::TriggerVoice(Voice* voice, uint8_t note, uint8_t velocity) 
     // Only glide if the voice was already active (true legato), not on fresh note starts
     // Use the voice->active flag which tracks if the voice was previously playing
     bool voice_still_sounding = voice->active;
+    bool is_legato = voice_still_sounding;  // Legato if voice was already playing
     
     if (portamento_time_ms_ > 0.01f && voice_still_sounding && voice->pitch_hz > 0.0f) {
         // Enable glide - voice is still sounding, glide to new pitch (legato)
@@ -443,17 +490,29 @@ void VoiceAllocator::TriggerVoice(Voice* voice, uint8_t note, uint8_t velocity) 
     voice->velocity = common::MidiHelper::VelocityToFloat(velocity);
     voice->note_on_time = timestamp_;
     
-#ifdef DEBUG
+#ifdef TEST
     int voice_idx = voice - voices_;
-    fprintf(stderr, "[VoiceAlloc] TriggerVoice: voice_idx=%d note=%d freq=%.2f Hz glide=%d\n",
-            voice_idx, note, voice->pitch_hz, voice->is_gliding);
+    fprintf(stderr, "[VoiceAlloc] TriggerVoice: voice_idx=%d note=%d freq=%.2f Hz glide=%d legato=%d\n",
+            voice_idx, note, voice->pitch_hz, voice->is_gliding, is_legato);
     fflush(stderr);
 #endif
     
-    // Trigger envelopes
-    voice->env_amp.NoteOn();
-    voice->env_filter.NoteOn();
-    voice->env_pitch.NoteOn();  // Task 2.2.1: Trigger per-voice pitch envelope
+    // Trigger envelopes ONLY if not legato (voice was not already playing)
+    // In legato mode, envelopes continue from their current position
+    if (!is_legato) {
+        voice->env_amp.NoteOn();
+        voice->env_filter.NoteOn();
+        voice->env_pitch.NoteOn();  // Task 2.2.1: Trigger per-voice pitch envelope
+#ifdef TEST
+        fprintf(stderr, "[VoiceAlloc] Retriggered envelopes (not legato)\n");
+        fflush(stderr);
+#endif
+    } else {
+#ifdef TEST
+        fprintf(stderr, "[VoiceAlloc] Legato - envelopes continue\n");
+        fflush(stderr);
+#endif
+    }
 }
 
 // ============================================================================

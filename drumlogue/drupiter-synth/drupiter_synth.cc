@@ -1300,9 +1300,25 @@ void DrupiterSynth::NoteOff(uint8_t note) {
     // Route through voice allocator (Hoover v2.0)
     allocator_.NoteOff(note);
     
-    // Trigger envelope release on main synth DSP
-    env_vca_->NoteOff();
-    env_vcf_->NoteOff();
+    // Only trigger envelope release if no notes are still held
+    // In monophonic/unison modes, check if any keys are still down
+    bool has_held_notes = allocator_.HasHeldNotes();
+    
+    if (!has_held_notes) {
+        // No notes held - safe to release main envelopes
+        env_vca_->NoteOff();
+        env_vcf_->NoteOff();
+#ifdef DEBUG
+        fprintf(stderr, "[Synth] No held notes, releasing main envelopes\n");
+        fflush(stderr);
+#endif
+    } else {
+#ifdef DEBUG
+        fprintf(stderr, "[Synth] Notes still held (%d), keeping main envelopes open\n", 
+                has_held_notes);
+        fflush(stderr);
+#endif
+    }
 }
 
 void DrupiterSynth::AllNoteOff() {
