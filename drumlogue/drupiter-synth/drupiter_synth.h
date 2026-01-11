@@ -28,20 +28,18 @@
 // Voice allocation and synthesis modes
 #include "dsp/voice_allocator.h"
 
+// DSP component includes (full definitions needed for static members)
+#include "dsp/jupiter_dco.h"
+#include "dsp/jupiter_vcf.h"
+#include "dsp/jupiter_env.h"
+#include "dsp/jupiter_lfo.h"
+#include "../common/smoothed_value.h"
+
 // Maximum frames per buffer (drumlogue typically uses 64)
 // Maximum audio buffer size (drumlogue uses 64 frames max)
 // Add 8 extra floats as safety margin for NEON operations and alignment
 static constexpr uint32_t kMaxFrames = 64;
 static constexpr uint32_t kBufferSize = kMaxFrames + 8;  // Safety margin
-
-// Forward declarations of DSP components
-namespace dsp {
-    class JupiterDCO;
-    class JupiterVCF;
-    class JupiterEnvelope;
-    class JupiterLFO;
-    class SmoothedValue;
-}
 
 // ============================================================================
 // DCO Waveform and Option Names
@@ -329,12 +327,12 @@ private:
     dsp::VoiceAllocator allocator_;
     
     // DSP component instances (for mono voice - kept for backward compat)
-    dsp::JupiterDCO* dco1_;
-    dsp::JupiterDCO* dco2_;
-    dsp::JupiterVCF* vcf_;
-    dsp::JupiterLFO* lfo_;
-    dsp::JupiterEnvelope* env_vcf_;
-    dsp::JupiterEnvelope* env_vca_;
+    dsp::JupiterDCO dco1_;
+    dsp::JupiterDCO dco2_;
+    dsp::JupiterVCF vcf_;
+    dsp::JupiterLFO lfo_;
+    dsp::JupiterEnvelope env_vcf_;
+    dsp::JupiterEnvelope env_vca_;
     
     // Synthesizer state
     float sample_rate_;
@@ -380,15 +378,15 @@ private:
     uint64_t buffer_guard_;
     
     // Chorus stereo effect (delay-based stereo spread)
-    common::ChorusStereoWidener* space_widener_;
+    common::ChorusStereoWidener space_widener_;
     
     // Noise generator state
     uint32_t noise_seed_;
     
     // Parameter smoothing (prevents zipper noise)
-    dsp::SmoothedValue* cutoff_smooth_;
-    dsp::SmoothedValue* dco1_level_smooth_;
-    dsp::SmoothedValue* dco2_level_smooth_;
+    dsp::SmoothedValue cutoff_smooth_;
+    dsp::SmoothedValue dco1_level_smooth_;
+    dsp::SmoothedValue dco2_level_smooth_;
     
     // Cached filter cutoff for coefficient update optimization
     float last_cutoff_hz_;

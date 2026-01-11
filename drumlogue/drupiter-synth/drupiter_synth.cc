@@ -114,12 +114,6 @@ inline uint8_t scale_127_centered_to_100(uint8_t v, uint8_t center_127, uint8_t 
 
 DrupiterSynth::DrupiterSynth()
     : allocator_()
-    , dco1_(nullptr)
-    , dco2_(nullptr)
-    , vcf_(nullptr)
-    , lfo_(nullptr)
-    , env_vcf_(nullptr)
-    , env_vca_(nullptr)
     , sample_rate_(48000.0f)
     , current_mode_(dsp::SYNTH_MODE_MONOPHONIC)
     , gate_(false)
@@ -142,11 +136,7 @@ DrupiterSynth::DrupiterSynth()
     , vca_env_out_(0.0f)
     , lfo_out_(0.0f)
     , buffer_guard_(0xDEADBEEFDEADBEEF)
-    , space_widener_(nullptr)
     , noise_seed_(0x12345678)
-    , cutoff_smooth_(nullptr)
-    , dco1_level_smooth_(nullptr)
-    , dco2_level_smooth_(nullptr)
     , last_cutoff_hz_(1000.0f)
     , hpf_prev_output_(0.0f)
     , hpf_prev_input_(0.0f)
@@ -170,47 +160,25 @@ int8_t DrupiterSynth::Init(const unit_runtime_desc_t* desc) {
     
     sample_rate_ = desc->samplerate;
     
-    // Allocate DSP components
-    dco1_ = new dsp::JupiterDCO();
-    dco2_ = new dsp::JupiterDCO();
-    vcf_ = new dsp::JupiterVCF();
-    lfo_ = new dsp::JupiterLFO();
-    env_vcf_ = new dsp::JupiterEnvelope();
-    env_vca_ = new dsp::JupiterEnvelope();
-    
-    // Allocate parameter smoothing
-    cutoff_smooth_ = new dsp::SmoothedValue();
-    dco1_level_smooth_ = new dsp::SmoothedValue();
-    dco2_level_smooth_ = new dsp::SmoothedValue();
-    
-    // Allocate chorus effect
-    space_widener_ = new common::ChorusStereoWidener();
-    
-    if (!dco1_ || !dco2_ || !vcf_ || !lfo_ || !env_vcf_ || !env_vca_ ||
-        !cutoff_smooth_ || !dco1_level_smooth_ || !dco2_level_smooth_ || !space_widener_) {
-        Teardown();
-        return -1;
-    }
-    
     // Initialize components
-    dco1_->Init(sample_rate_);
-    dco2_->Init(sample_rate_);
-    vcf_->Init(sample_rate_);
-    lfo_->Init(sample_rate_);
-    env_vcf_->Init(sample_rate_);
-    env_vca_->Init(sample_rate_);
+    dco1_.Init(sample_rate_);
+    dco2_.Init(sample_rate_);
+    vcf_.Init(sample_rate_);
+    lfo_.Init(sample_rate_);
+    env_vcf_.Init(sample_rate_);
+    env_vca_.Init(sample_rate_);
     
     // Initialize parameter smoothing (start at 0, will be set by preset load)
-    cutoff_smooth_->Init(0.0f, 0.005f);       // Filter cutoff - slow for smooth sweeps
-    dco1_level_smooth_->Init(0.0f, 0.01f);    // DCO1 level - faster smoothing
-    dco2_level_smooth_->Init(0.0f, 0.01f);    // DCO2 level - faster smoothing
+    cutoff_smooth_.Init(0.0f, 0.005f);       // Filter cutoff - slow for smooth sweeps
+    dco1_level_smooth_.Init(0.0f, 0.01f);    // DCO1 level - faster smoothing
+    dco2_level_smooth_.Init(0.0f, 0.01f);    // DCO2 level - faster smoothing
     
     // Initialize chorus effect (delay-based stereo spread)
-    space_widener_->Init(sample_rate_);
-    space_widener_->SetDelayTime(15.0f);      // 15ms base delay
-    space_widener_->SetModDepth(3.0f);        // ±3ms modulation
-    space_widener_->SetLfoRate(0.5f);         // 0.5 Hz LFO
-    space_widener_->SetMix(0.5f);             // 50% wet/dry mix
+    space_widener_.Init(sample_rate_);
+    space_widener_.SetDelayTime(15.0f);      // 15ms base delay
+    space_widener_.SetModDepth(3.0f);        // ±3ms modulation
+    space_widener_.SetLfoRate(0.5f);         // 0.5 Hz LFO
+    space_widener_.SetMix(0.5f);             // 50% wet/dry mix
     
     // Initialize voice allocator (Hoover v2.0)
     allocator_.Init(sample_rate_);
@@ -241,34 +209,14 @@ int8_t DrupiterSynth::Init(const unit_runtime_desc_t* desc) {
 }
 
 void DrupiterSynth::Teardown() {
-    delete dco1_;
-    delete dco2_;
-    delete vcf_;
-    delete lfo_;
-    delete env_vcf_;
-    delete env_vca_;
-    delete cutoff_smooth_;
-    delete dco1_level_smooth_;
-    delete dco2_level_smooth_;
-    delete space_widener_;
-    
-    dco1_ = nullptr;
-    dco2_ = nullptr;
-    vcf_ = nullptr;
-    lfo_ = nullptr;
-    env_vcf_ = nullptr;
-    env_vca_ = nullptr;
-    cutoff_smooth_ = nullptr;
-    dco1_level_smooth_ = nullptr;
-    dco2_level_smooth_ = nullptr;
-    space_widener_ = nullptr;
+    // No cleanup needed - all objects are static members
 }
 
 void DrupiterSynth::Reset() {
     gate_ = false;
-    if (env_vcf_) env_vcf_->Reset();
-    if (env_vca_) env_vca_->Reset();
-    if (lfo_) lfo_->Reset();
+    env_vcf_.Reset();
+    env_vca_.Reset();
+    lfo_.Reset();
 }
 
 void DrupiterSynth::Resume() {
@@ -305,9 +253,9 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     const float dco2_level_target = osc_mix;         // Direct: 0=none, 100=full
     
     // Update smoothed parameter targets (once per buffer for efficiency)
-    cutoff_smooth_->SetTarget(current_preset_.params[PARAM_VCF_CUTOFF] / 100.0f);
-    dco1_level_smooth_->SetTarget(dco1_level_target);
-    dco2_level_smooth_->SetTarget(dco2_level_target);
+    cutoff_smooth_.SetTarget(current_preset_.params[PARAM_VCF_CUTOFF] / 100.0f);
+    dco1_level_smooth_.SetTarget(dco1_level_target);
+    dco2_level_smooth_.SetTarget(dco2_level_target);
     
     // Pre-calculate DCO constants from direct params
     // DCO1: 0=16', 1=8', 2=4'
@@ -381,7 +329,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     const dsp::JupiterVCF::Mode vcf_mode = (vcf_type < 50) 
         ? dsp::JupiterVCF::MODE_LP12 
         : dsp::JupiterVCF::MODE_LP24;
-    vcf_->SetMode(vcf_mode);
+    vcf_.SetMode(vcf_mode);
     
     // Pre-calculate HPF coefficient ONCE per buffer (not per-sample)
     // HPF cutoff (non-resonant high-pass before low-pass)
@@ -400,7 +348,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     const float key_track = (current_preset_.params[PARAM_VCF_KEYFLW] / 100.0f) * 1.2f;
     
     // Velocity modulation (fixed value for now, TODO: make parameter)
-    const float vel_mod = (current_velocity_ / 127.0f) * 0.5f;  // Fixed 50% velocity->VCF
+    const float vel_mod = (current_velocity_ / 127.0f) * 0.5f;  // Fixed 50% velocity.VCF
     
     // Task 2.2.4: Process portamento/glide for MONO/UNISON modes
     // For polyphonic mode, glide is processed per-voice in the render loop
@@ -437,8 +385,8 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     for (uint32_t i = 0; i < frames; ++i) {
         
         // Process envelopes FIRST (needed for LFO rate modulation)
-        vcf_env_out_ = env_vcf_->Process();
-        vca_env_out_ = env_vca_->Process();
+        vcf_env_out_ = env_vcf_.Process();
+        vca_env_out_ = env_vca_.Process();
         
         // Process LFO with optional envelope rate modulation
         // ENV→LFO modulates LFO frequency: 0% = no change, 100% = double rate at peak
@@ -449,14 +397,14 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
             const float rate_mult = 1.0f + (vcf_env_out_ * lfo_env_amt);  // 1.0-2.0x range
             // Note: LFO doesn't have SetRateMultiplier, so apply via temporary frequency scaling
             // For now, LFO output will be modulated in amplitude instead
-            lfo_out_ = lfo_->Process() * rate_mult;  // Amplitude modulation approximation
+            lfo_out_ = lfo_.Process() * rate_mult;  // Amplitude modulation approximation
         } else {
-            lfo_out_ = lfo_->Process();
+            lfo_out_ = lfo_.Process();
         }
         
         // Get smoothed oscillator levels
-        const float dco1_level = dco1_level_smooth_->Process();
-        const float dco2_level = dco2_level_smooth_->Process();
+        const float dco1_level = dco1_level_smooth_.Process();
+        const float dco2_level = dco2_level_smooth_.Process();
         
         // Apply PWM modulation (LFO and ENV to pulse width)
         // Base pulse width from parameter
@@ -658,7 +606,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
             float unison_mono = (unison_left + unison_right) * 0.5f;
             
             // Also process DCO2 (like in MONO mode)
-            dco2_->SetPulseWidth(modulated_pw);
+            dco2_.SetPulseWidth(modulated_pw);
             float freq2 = current_freq_hz_ * dco2_oct_mult * detune_ratio;
             if (lfo_vco_depth > kMinModulation) {
                 const float lfo_mod = 1.0f + lfo_out_ * lfo_vco_depth * 0.05f;
@@ -668,15 +616,15 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
             // Apply pitch envelope modulation to DCO2 (pre-calculated)
             freq2 *= pitch_mod_ratio;
             
-            dco2_->SetFrequency(freq2);
-            dco2_out_ = dco2_->Process();
+            dco2_.SetFrequency(freq2);
+            dco2_out_ = dco2_.Process();
             
             // Mix unison stack with DCO2
             mixed_ = unison_mono * dco1_level + dco2_out_ * dco2_level;
         } else {
             // MONO MODE: Use main synth DCOs (monophonic, single voice)
-            dco1_->SetPulseWidth(modulated_pw);
-            dco2_->SetPulseWidth(modulated_pw);  // Both DCOs share PWM
+            dco1_.SetPulseWidth(modulated_pw);
+            dco2_.SetPulseWidth(modulated_pw);  // Both DCOs share PWM
             
             // Calculate DCO frequencies with LFO modulation
             float freq1 = current_freq_hz_ * dco1_oct_mult;
@@ -693,32 +641,32 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
             freq1 *= pitch_mod_ratio;
             freq2 *= pitch_mod_ratio;
             
-            dco1_->SetFrequency(freq1);
-            dco2_->SetFrequency(freq2);
+            dco1_.SetFrequency(freq1);
+            dco2_.SetFrequency(freq2);
             
             // Only process DCO2 if it's audible (level > 0) or needed for XMOD
             const bool dco2_needed = (dco2_level > kMinModulation) || (xmod_depth > kMinModulation);
             
             if (dco2_needed) {
                 // Process DCO2 first to get fresh output for FM
-                dco2_out_ = dco2_->Process();
+                dco2_out_ = dco2_.Process();
                 
-                // Cross-modulation (DCO2 -> DCO1 FM) - Jupiter-8 style
+                // Cross-modulation (DCO2 . DCO1 FM) - Jupiter-8 style
                 // Only apply FM if XMOD depth is significant
                 if (xmod_depth > kMinModulation) {
                     // Scale: 100% XMOD = ±1 semitone = ±1/12 octave
-                    dco1_->ApplyFM(dco2_out_ * xmod_depth * 0.083f);
+                    dco1_.ApplyFM(dco2_out_ * xmod_depth * 0.083f);
                 } else {
-                    dco1_->ApplyFM(0.0f);
+                    dco1_.ApplyFM(0.0f);
                 }
             } else {
                 // DCO2 not needed - silence it and ensure no FM
                 dco2_out_ = 0.0f;
-                dco1_->ApplyFM(0.0f);
+                dco1_.ApplyFM(0.0f);
             }
             
             // Process DCO1 (optionally modulated by DCO2)
-            dco1_out_ = dco1_->Process();
+            dco1_out_ = dco1_.Process();
             
             // Note: Sync disabled when XMOD is active
             // Jupiter-8 doesn't support sync+xmod simultaneously due to processing order
@@ -756,7 +704,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         }
         
         // Apply filter with smoothed cutoff, envelope, and LFO modulation
-        const float cutoff_norm = cutoff_smooth_->Process();
+        const float cutoff_norm = cutoff_smooth_.Process();
         
         // Jupiter-8 style cutoff mapping:
         // - At 0%: ~100Hz (closed, but still audible/usable)
@@ -782,7 +730,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         
         // Combine envelope, LFO, velocity, and hub modulation
         float total_mod = vcf_env_out_ * 2.0f              // Base envelope modulation
-                        + env_vcf_depth * vcf_env_out_     // Hub envelope->VCF modulation
+                        + env_vcf_depth * vcf_env_out_     // Hub envelope.VCF modulation
                         + lfo_out_ * lfo_vcf_depth * 1.0f  // LFO modulation
                         + vel_mod * 2.0f;                   // Velocity adds up to +2 octaves
 
@@ -797,7 +745,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         // Only update filter coefficients if cutoff changed significantly (optimization)
         const float cutoff_diff = cutoff_modulated - last_cutoff_hz_;
         if (cutoff_diff > 1.0f || cutoff_diff < -1.0f) {
-            vcf_->SetCutoffModulated(cutoff_modulated);
+            vcf_.SetCutoffModulated(cutoff_modulated);
             last_cutoff_hz_ = cutoff_modulated;
         }
         
@@ -812,7 +760,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
             PERF_MON_START(perf_vcf_);
             #endif
             
-            filtered_ = vcf_->Process(hpf_out);  // Process HPF output through LPF
+            filtered_ = vcf_.Process(hpf_out);  // Process HPF output through LPF
             
             #ifdef PERF_MON
             PERF_MON_END(perf_vcf_);
@@ -850,7 +798,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         
         // VCA LFO (tremolo): 0% = no tremolo, 100% = full amplitude modulation
         if (vca_lfo_depth > kMinModulation) {
-            // Bipolar LFO (-1 to +1) -> unipolar tremolo (0.5 to 1.5)
+            // Bipolar LFO (-1 to +1) . unipolar tremolo (0.5 to 1.5)
             const float tremolo = 1.0f + (lfo_out_ * vca_lfo_depth * 0.5f);
             vca_gain *= tremolo;
         }
@@ -895,29 +843,20 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     // Sanitize buffer (remove NaN/Inf) and apply soft clamp
     drupiter::neon::SanitizeAndClamp(mix_buffer_, 1.0f, frames);
     
-    // Check if effect processor is initialized
-    if (!space_widener_) {
-        // Fallback: bypass effect, copy mono to stereo
+    // Effect mode: 0=Chorus, 1=Space, 2=Dry, 3=Both
+    // Effect parameters are now configured in UpdateEffectParameters() on change,
+    // not every buffer (critical optimization)
+    const uint8_t effect_mode = current_preset_.params[PARAM_EFFECT];
+
+    if (effect_mode == 2) {
+        // DRY mode: Bypass all effects, just copy mono to stereo
         for (uint32_t i = 0; i < frames; i++) {
             left_buffer_[i] = mix_buffer_[i];
             right_buffer_[i] = mix_buffer_[i];
         }
     } else {
-        // Effect mode: 0=Chorus, 1=Space, 2=Dry, 3=Both
-        // Effect parameters are now configured in UpdateEffectParameters() on change,
-        // not every buffer (critical optimization)
-        const uint8_t effect_mode = current_preset_.params[PARAM_EFFECT];
-    
-        if (effect_mode == 2) {
-            // DRY mode: Bypass all effects, just copy mono to stereo
-            for (uint32_t i = 0; i < frames; i++) {
-                left_buffer_[i] = mix_buffer_[i];
-                right_buffer_[i] = mix_buffer_[i];
-            }
-        } else {
-            // CHORUS/SPACE/BOTH: Process with pre-configured parameters
-            space_widener_->ProcessMonoBatch(mix_buffer_, left_buffer_, right_buffer_, frames);
-        }
+        // CHORUS/SPACE/BOTH: Process with pre-configured parameters
+        space_widener_.ProcessMonoBatch(mix_buffer_, left_buffer_, right_buffer_, frames);
     }
     
     // Add tiny DC offset for denormal protection before interleaving
@@ -1039,15 +978,15 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             break;
         case PARAM_DCO1_WAVE:
             switch (v) {
-                case 0: dco1_->SetWaveform(dsp::JupiterDCO::WAVEFORM_SAW); break;
-                case 1: dco1_->SetWaveform(dsp::JupiterDCO::WAVEFORM_SQUARE); break;
-                case 2: dco1_->SetWaveform(dsp::JupiterDCO::WAVEFORM_PULSE); break;
-                case 3: dco1_->SetWaveform(dsp::JupiterDCO::WAVEFORM_TRIANGLE); break;
-                case 4: dco1_->SetWaveform(dsp::JupiterDCO::WAVEFORM_SAW_PWM); break;  // Hoover v2.0!
+                case 0: dco1_.SetWaveform(dsp::JupiterDCO::WAVEFORM_SAW); break;
+                case 1: dco1_.SetWaveform(dsp::JupiterDCO::WAVEFORM_SQUARE); break;
+                case 2: dco1_.SetWaveform(dsp::JupiterDCO::WAVEFORM_PULSE); break;
+                case 3: dco1_.SetWaveform(dsp::JupiterDCO::WAVEFORM_TRIANGLE); break;
+                case 4: dco1_.SetWaveform(dsp::JupiterDCO::WAVEFORM_SAW_PWM); break;  // Hoover v2.0!
             }
             break;
         case PARAM_DCO1_PW:
-            dco1_->SetPulseWidth(v / 100.0f);
+            dco1_.SetPulseWidth(v / 100.0f);
             break;
         case PARAM_XMOD:
             xmod_depth_ = v / 100.0f;
@@ -1059,11 +998,11 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             break;
         case PARAM_DCO2_WAVE:
             switch (v) {
-                case 0: dco2_->SetWaveform(dsp::JupiterDCO::WAVEFORM_SAW); break;
-                case 1: dco2_->SetWaveform(dsp::JupiterDCO::WAVEFORM_NOISE); break;
-                case 2: dco2_->SetWaveform(dsp::JupiterDCO::WAVEFORM_PULSE); break;
-                case 3: dco2_->SetWaveform(dsp::JupiterDCO::WAVEFORM_SINE); break;
-                case 4: dco2_->SetWaveform(dsp::JupiterDCO::WAVEFORM_SAW_PWM); break;  // Hoover v2.0!
+                case 0: dco2_.SetWaveform(dsp::JupiterDCO::WAVEFORM_SAW); break;
+                case 1: dco2_.SetWaveform(dsp::JupiterDCO::WAVEFORM_NOISE); break;
+                case 2: dco2_.SetWaveform(dsp::JupiterDCO::WAVEFORM_PULSE); break;
+                case 3: dco2_.SetWaveform(dsp::JupiterDCO::WAVEFORM_SINE); break;
+                case 4: dco2_.SetWaveform(dsp::JupiterDCO::WAVEFORM_SAW_PWM); break;  // Hoover v2.0!
             }
             break;
         case PARAM_DCO2_TUNE:
@@ -1078,12 +1017,12 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             // Mix handled in Render() with smoothing
             break;
         case PARAM_VCF_CUTOFF:
-            if (cutoff_smooth_) {
-                cutoff_smooth_->SetTarget(v / 100.0f);
+            {
+                cutoff_smooth_.SetTarget(v / 100.0f);
             }
             break;
         case PARAM_VCF_RESONANCE:
-            vcf_->SetResonance(v / 100.0f);
+            vcf_.SetResonance(v / 100.0f);
             break;
         case PARAM_VCF_KEYFLW:
             // Keyboard tracking handled in Render()
@@ -1091,26 +1030,26 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
         
         // ======== Page 4: VCF Envelope ========
         case PARAM_VCF_ATTACK:
-            env_vcf_->SetAttack(ParameterToEnvelopeTime(v));
+            env_vcf_.SetAttack(ParameterToEnvelopeTime(v));
             // Task 2.2.1: Also set per-voice pitch envelopes
             for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; i++) {
                 allocator_.GetVoiceMutable(i).env_pitch.SetAttack(ParameterToEnvelopeTime(v));
             }
             break;
         case PARAM_VCF_DECAY:
-            env_vcf_->SetDecay(ParameterToEnvelopeTime(v));
+            env_vcf_.SetDecay(ParameterToEnvelopeTime(v));
             for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; i++) {
                 allocator_.GetVoiceMutable(i).env_pitch.SetDecay(ParameterToEnvelopeTime(v));
             }
             break;
         case PARAM_VCF_SUSTAIN:
-            env_vcf_->SetSustain(v / 100.0f);
+            env_vcf_.SetSustain(v / 100.0f);
             for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; i++) {
                 allocator_.GetVoiceMutable(i).env_pitch.SetSustain(v / 100.0f);
             }
             break;
         case PARAM_VCF_RELEASE:
-            env_vcf_->SetRelease(ParameterToEnvelopeTime(v));
+            env_vcf_.SetRelease(ParameterToEnvelopeTime(v));
             for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; i++) {
                 allocator_.GetVoiceMutable(i).env_pitch.SetRelease(ParameterToEnvelopeTime(v));
             }
@@ -1119,10 +1058,10 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
         // ======== Page 5: VCA Envelope ========
         case PARAM_VCA_ATTACK:
 #ifdef DEBUG
-            fprintf(stderr, "[Param] VCA_ATTACK value=%d -> time=%.6fs\n", v, ParameterToEnvelopeTime(v));
+            fprintf(stderr, "[Param] VCA_ATTACK value=%d . time=%.6fs\n", v, ParameterToEnvelopeTime(v));
             fflush(stderr);
 #endif
-            env_vca_->SetAttack(ParameterToEnvelopeTime(v));
+            env_vca_.SetAttack(ParameterToEnvelopeTime(v));
             // Update all polyphonic voice envelopes
             for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; i++) {
                 allocator_.GetVoiceMutable(i).env_amp.SetAttack(ParameterToEnvelopeTime(v));
@@ -1130,17 +1069,17 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             break;
         case PARAM_VCA_DECAY:
 #ifdef DEBUG
-            fprintf(stderr, "[Param] VCA_DECAY value=%d -> time=%.6fs\n", v, ParameterToEnvelopeTime(v));
+            fprintf(stderr, "[Param] VCA_DECAY value=%d . time=%.6fs\n", v, ParameterToEnvelopeTime(v));
             fflush(stderr);
 #endif
-            env_vca_->SetDecay(ParameterToEnvelopeTime(v));
+            env_vca_.SetDecay(ParameterToEnvelopeTime(v));
             // Update all polyphonic voice envelopes
             for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; i++) {
                 allocator_.GetVoiceMutable(i).env_amp.SetDecay(ParameterToEnvelopeTime(v));
             }
             break;
         case PARAM_VCA_SUSTAIN:
-            env_vca_->SetSustain(v / 100.0f);
+            env_vca_.SetSustain(v / 100.0f);
             // Update all polyphonic voice envelopes
             for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; i++) {
                 allocator_.GetVoiceMutable(i).env_amp.SetSustain(v / 100.0f);
@@ -1148,10 +1087,10 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             break;
         case PARAM_VCA_RELEASE:
 #ifdef DEBUG
-            fprintf(stderr, "[Param] VCA_RELEASE value=%d -> time=%.6fs\n", v, ParameterToEnvelopeTime(v));
+            fprintf(stderr, "[Param] VCA_RELEASE value=%d . time=%.6fs\n", v, ParameterToEnvelopeTime(v));
             fflush(stderr);
 #endif
-            env_vca_->SetRelease(ParameterToEnvelopeTime(v));
+            env_vca_.SetRelease(ParameterToEnvelopeTime(v));
             // Update all polyphonic voice envelopes
             for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; i++) {
                 allocator_.GetVoiceMutable(i).env_amp.SetRelease(ParameterToEnvelopeTime(v));
@@ -1160,7 +1099,7 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
         
         // ======== Page 6: LFO, MOD HUB & Effects ========
         case PARAM_LFO_RATE:
-            lfo_->SetFrequency(ParameterToExponentialFreq(v, 0.1f, 20.0f));
+            lfo_.SetFrequency(ParameterToExponentialFreq(v, 0.1f, 20.0f));
             break;
         case PARAM_MOD_HUB:
         case PARAM_MOD_AMT:
@@ -1286,8 +1225,8 @@ void DrupiterSynth::NoteOn(uint8_t note, uint8_t velocity) {
     current_velocity_ = velocity;
     
     // Trigger envelopes
-    env_vca_->NoteOn();
-    env_vcf_->NoteOn();
+    env_vca_.NoteOn();
+    env_vcf_.NoteOn();
 }
 
 void DrupiterSynth::NoteOff(uint8_t note) {
@@ -1305,8 +1244,8 @@ void DrupiterSynth::NoteOff(uint8_t note) {
     
     if (!has_held_notes) {
         // No notes held - safe to release main envelopes
-        env_vca_->NoteOff();
-        env_vcf_->NoteOff();
+        env_vca_.NoteOff();
+        env_vcf_.NoteOff();
 #ifdef DEBUG
         fprintf(stderr, "[Synth] No held notes, releasing main envelopes\n");
         fflush(stderr);
@@ -1339,17 +1278,17 @@ void DrupiterSynth::LoadPreset(uint8_t preset_id) {
     std::strcpy(current_preset_.name, factory.name);
     
     // Set smoothed parameters immediately (no smoothing during preset load)
-    if (cutoff_smooth_) {
-        cutoff_smooth_->SetImmediate(current_preset_.params[PARAM_VCF_CUTOFF] / 100.0f);
+    {
+        cutoff_smooth_.SetImmediate(current_preset_.params[PARAM_VCF_CUTOFF] / 100.0f);
     }
     
     // DCO levels from OSC_MIX parameter
     float osc_mix = current_preset_.params[PARAM_OSC_MIX] / 100.0f;
-    if (dco1_level_smooth_) {
-        dco1_level_smooth_->SetImmediate(1.0f - osc_mix);
+    {
+        dco1_level_smooth_.SetImmediate(1.0f - osc_mix);
     }
-    if (dco2_level_smooth_) {
-        dco2_level_smooth_->SetImmediate(osc_mix);
+    {
+        dco2_level_smooth_.SetImmediate(osc_mix);
     }
     
     // Load XMOD and SYNC directly
@@ -1432,25 +1371,25 @@ const char* DrupiterSynth::GetPresetName(uint8_t preset_id) const {
 void DrupiterSynth::UpdateEffectParameters(uint8_t effect_mode) {
     // Configure effect parameters ONCE when mode changes (not every buffer)
     // This is a critical performance optimization
-    if (!space_widener_) return;
+    // space_widener_ is now static object return;
     
     switch (effect_mode) {
         case 0:  // CHORUS mode: Moderate modulation depth, less delay time
-            space_widener_->SetModDepth(3.0f);      // 3ms modulation depth
-            space_widener_->SetMix(0.5f);           // 50% wet/dry mix
-            space_widener_->SetDelayTime(15.0f);    // 15ms delay time
+            space_widener_.SetModDepth(3.0f);      // 3ms modulation depth
+            space_widener_.SetMix(0.5f);           // 50% wet/dry mix
+            space_widener_.SetDelayTime(15.0f);    // 15ms delay time
             break;
         case 1:  // SPACE mode: Wider stereo, more delay time
-            space_widener_->SetModDepth(6.0f);      // 6ms modulation depth
-            space_widener_->SetMix(0.7f);           // 70% wet/dry mix
-            space_widener_->SetDelayTime(35.0f);    // 35ms delay time for wide stereo
+            space_widener_.SetModDepth(6.0f);      // 6ms modulation depth
+            space_widener_.SetMix(0.7f);           // 70% wet/dry mix
+            space_widener_.SetDelayTime(35.0f);    // 35ms delay time for wide stereo
             break;
         case 2:  // DRY mode: No effect processing (handled in Render)
             break;
         case 3:  // BOTH mode: Maximum effect (chorus + space combined)
-            space_widener_->SetModDepth(8.0f);      // 8ms modulation depth
-            space_widener_->SetMix(0.8f);           // 80% wet/dry mix
-            space_widener_->SetDelayTime(40.0f);    // 40ms delay time
+            space_widener_.SetModDepth(8.0f);      // 8ms modulation depth
+            space_widener_.SetMix(0.8f);           // 80% wet/dry mix
+            space_widener_.SetDelayTime(40.0f);    // 40ms delay time
             break;
     }
 }
@@ -1458,14 +1397,14 @@ void DrupiterSynth::UpdateEffectParameters(uint8_t effect_mode) {
 void DrupiterSynth::UpdateLfoSettings() {
     // Update LFO settings when hub parameters change
     // Called from SetParameter when MOD_HUB or MOD_AMT changes
-    if (!lfo_) return;
+    // lfo_ is now static object return;
     
     // Apply LFO delay setting (0-100 maps to 0-5 seconds)
     const uint8_t lfo_delay = mod_hub_.GetValue(MOD_LFO_DELAY);
     const float lfo_delay_sec = (lfo_delay / 100.0f) * 5.0f;
-    lfo_->SetDelay(lfo_delay_sec);
+    lfo_.SetDelay(lfo_delay_sec);
     
     // Apply LFO waveform (0-3: TRI/RAMP/SQR/S&H)
     const uint8_t lfo_wave = mod_hub_.GetValue(MOD_LFO_WAVE);
-    lfo_->SetWaveform(static_cast<dsp::JupiterLFO::Waveform>(lfo_wave & 0x03));
+    lfo_.SetWaveform(static_cast<dsp::JupiterLFO::Waveform>(lfo_wave & 0x03));
 }
