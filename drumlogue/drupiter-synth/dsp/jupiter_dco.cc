@@ -400,7 +400,7 @@ void JupiterDCO::ProcessMultipleOscillators(MultiOscState* states, int num_osc,
 #ifdef NEON_DCO
 void JupiterDCO::ProcessMultipleOscillatorsNEON(MultiOscState* state,
                                               float* outputs[4], uint32_t frames,
-                                              float sync_trigger) {
+                                              float /*sync_trigger*/) {
     // For now, process 4 oscillators using individual processing
     // TODO: Implement full NEON vectorization for multiple oscillators
     
@@ -461,7 +461,7 @@ void JupiterDCO::ProcessMultipleOscillatorsNEON(MultiOscState* state,
 #endif // NEON_DCO
 
 // Helper function for multiple oscillator processing
-float JupiterDCO::GenerateWaveformForMulti(float phase, float phase_inc,
+float JupiterDCO::GenerateWaveformForMulti(float phase, float /*phase_inc*/,
                                           Waveform waveform, float pulse_width) {
     switch (waveform) {
         case WAVEFORM_SAW:

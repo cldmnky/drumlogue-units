@@ -148,7 +148,8 @@ inline float FastSin(float x) {
 namespace dsp {
 
 JupiterVCF::JupiterVCF()
-    : sample_rate_(48000.0f)
+    : tables_initialized_(false)
+    , sample_rate_(48000.0f)
     , cutoff_hz_(1000.0f)
     , base_cutoff_hz_(1000.0f)
     , resonance_(0.0f)
@@ -170,7 +171,6 @@ JupiterVCF::JupiterVCF()
     , ota_gain_comp_(0.0f)
     , ota_output_gain_(1.0f)
     , hp_lp_state_(0.0f)
-    , tables_initialized_(false)
     , hp_a_(0.0f)
     , lp_(0.0f)
     , bp_(0.0f)
