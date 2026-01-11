@@ -583,7 +583,8 @@ inline float q31_wavetable_lookup(const float* table, float phase, uint32_t tabl
     q31_t y1 = float_to_q31(table[(index + 1) & mask]);
 
     // Fractional part for interpolation (0.0f to <1.0f), converted to Q31
-    float frac_f = pos - static_cast<float>(index);
+    // Extract fractional part from Q31 position (lower 31 bits represent 0.0 to <1.0)
+    float frac_f = static_cast<float>(q31_pos & 0x7FFFFFFF) / 2147483648.0f;
     q31_t frac = float_to_q31(frac_f);
 
     // Linear interpolation using existing linintq31 function

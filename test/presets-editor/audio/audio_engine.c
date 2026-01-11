@@ -59,8 +59,9 @@ struct audio_engine {
 static inline float soft_clip(float x) {
     // tanh provides smooth saturation at ±1.0
     // For values near 0, tanh(x) ≈ x, so no distortion at low levels
-    // Scale to make clipping more gradual
-    return tanhf(x * 0.9f) / 0.9f;
+    // Use gentler scaling (0.7 instead of 0.9) for more headroom
+    // This allows synth to peak around ±1.4 before hard clipping
+    return tanhf(x * 0.7f) / 0.7f;
 }
 
 // YIN-style autocorrelation pitch detection with hysteresis
@@ -259,12 +260,15 @@ static int audio_cb(const void* input,
         }
     }
     
-    // Apply master volume and soft-clipping to prevent distortion
+    // Apply output gain staging to match drumlogue hardware behavior
+    // Units render at full scale (±1.0 typical), but hardware has built-in attenuation
+    // Apply 0.6x pre-gain to provide headroom before volume and clipping
+    const float output_pre_gain = 0.6f;
     const float volume = engine->master_volume;
     const uint32_t total_samples = frames * engine->cfg.output_channels;
     for (uint32_t i = 0; i < total_samples; i++) {
-        // Apply volume then soft-clip to prevent digital clipping
-        out[i] = soft_clip(out[i] * volume);
+        // Pre-gain for headroom, then volume, then soft-clip to prevent digital clipping
+        out[i] = soft_clip(out[i] * output_pre_gain * volume);
     }
     
     return paContinue;
