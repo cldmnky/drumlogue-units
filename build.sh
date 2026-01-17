@@ -131,6 +131,38 @@ if [ "$ACTION" != "clean" ]; then
     if [ -f "${OUTPUT_DIR}/${ARTIFACT_NAME}" ]; then
         echo ">> Build artifact: ${OUTPUT_DIR}/${ARTIFACT_NAME}"
         ls -la "${OUTPUT_DIR}/${ARTIFACT_NAME}"
+        
+        # Check for unexpected undefined symbols
+        echo ">> Checking for unresolved symbols..."
+        UNDEFINED_SYMBOLS=$(objdump -T "${OUTPUT_DIR}/${ARTIFACT_NAME}" | \
+            grep "UND" | \
+            grep -v "GLIBC" | \
+            grep -v "GCC_" | \
+            grep -v "CXXABI" | \
+            grep -v "_Jv_RegisterClasses" | \
+            grep -v "_ITM_deregisterTMCloneTable" | \
+            grep -v "_ITM_registerTMCloneTable" | \
+            grep -v "__gmon_start__" || true)
+        
+        if [ -n "$UNDEFINED_SYMBOLS" ]; then
+            echo ">> ERROR: Found unexpected undefined symbols:"
+            echo "$UNDEFINED_SYMBOLS"
+            echo ""
+            echo ">> These symbols are not resolved in the .drmlgunit file."
+            echo ">> Common causes:"
+            echo ">>   - Missing source files in config.mk (CXXSRC/CSRC)"
+            echo ">>   - Stub files in drumlogue/common/ shadowing real implementation"
+            echo ">>   - Missing static constexpr definitions in .cc files"
+            echo ">>   - Missing libraries in config.mk (ULIBS)"
+            echo ""
+            echo ">> Debug with:"
+            echo ">>   objdump -T ${OUTPUT_DIR}/${ARTIFACT_NAME} | grep UND"
+            echo ">>   ls -la drumlogue/${PROJECT}/build/obj/     # Check compiled objects"
+            echo ">>   less drumlogue/${PROJECT}/build/*.map      # View symbol table"
+            exit 1
+        else
+            echo ">> ✓ No unexpected undefined symbols found"
+        fi
     else
         echo ">> Error: Build artifact not found at ${OUTPUT_DIR}/${ARTIFACT_NAME}"
         exit 1
