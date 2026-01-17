@@ -41,10 +41,27 @@ objdump -T drumlogue/<unit>/<unit>.drmlgunit | grep "UND"
 
 # Compare with working unit
 objdump -T drumlogue/elementish-synth/elementish_synth.drmlgunit | grep "UND"
+
+# Analyze build artifacts (preserved after build)
+ls -la drumlogue/<unit>/build/obj/        # Check object files were created
+nm drumlogue/<unit>/build/obj/*.o | grep YourClassName  # Check symbols in objects
+less drumlogue/<unit>/build/<unit>.map    # View memory map and symbol table
 ```
 
+**Use build artifacts for debugging:**
+The build process now preserves all intermediate files in `drumlogue/<unit>/build/`:
+- `obj/*.o` - Object files (check if your code was compiled)
+- `*.map` - Memory map showing all symbols and their sizes
+- `*.list` - Assembly listing for code inspection
+- `*.dmp` - Binary dump with section information
+
 **Common causes:**
-1. **Undefined `static constexpr` members:**
+1. **Missing object file:** Source listed in config.mk but not compiled
+   - Check if `obj/your_file.o` exists
+   - Verify no name conflicts with files in `drumlogue/common/`
+   - Remove any deprecated stub files that might be compiled instead
+
+2. **Undefined `static constexpr` members:**
    ```cpp
    // In header.h
    class Foo {
@@ -55,14 +72,17 @@ objdump -T drumlogue/elementish-synth/elementish_synth.drmlgunit | grep "UND"
    constexpr float Foo::kValues[];
    ```
 
-2. **Missing library functions:** Check if symbol is from standard library (expected) or your code (error)
+3. **Missing library functions:** Check if symbol is from standard library (expected) or your code (error)
 
-3. **Incorrect function signatures:** Verify unit callbacks match SDK API
+4. **Incorrect function signatures:** Verify unit callbacks match SDK API
 
 **Fix:**
+- Verify object file exists in `build/obj/` directory
+- Check `.map` file to see which symbols were linked
 - Add out-of-class definitions for static constexpr members
 - Link required libraries in `config.mk`
 - Check function prototypes match SDK headers
+- Remove stub/deprecated files from `drumlogue/common/`
 
 ### 3. Hardware Load Errors
 **Symptoms:** Unit fails to load on drumlogue (error message on device)
