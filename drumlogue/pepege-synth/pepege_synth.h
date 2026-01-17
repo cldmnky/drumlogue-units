@@ -1,8 +1,8 @@
 /**
  * @file pepege_synth.h
- * @brief 4-Voice Polyphonic Pepege wavetable synthesizer
+ * @brief 2-Voice Polyphonic Pepege wavetable synthesizer
  *
- * Coordinates oscillators, envelopes, filter, and LFO across 4 voices.
+ * Coordinates oscillators, envelopes, filter, and LFO across 2 voices.
  * Uses PPG Wave style oscillators for authentic 8-bit character.
  * 
  * Voice allocation: Round-robin with oldest-note stealing when all voices busy.
@@ -16,14 +16,18 @@
 #include <cstdio>
 #include <cmath>
 
+#ifndef TEST
 #include "unit.h"
-#include "wavetable_osc.h"
+#endif
 #include "envelope.h"
 #include "filter.h"
 #include "lfo.h"
 #include "smoothed_value.h"
 #include "resources/ppg_waves.h"
 #include "../common/stereo_widener.h"
+#include "../common/ppg_osc.h"
+#include "../common/hub_control.h"  // NEW: Advanced hub control
+#include "../common/param_format.h"
 
 // NEON SIMD optimizations (Cortex-A7)
 #ifdef USE_NEON
@@ -78,17 +82,39 @@ enum PepegeParams {
     P_NUM_PARAMS
 };
 
-// MOD HUB destinations (all use 0-127 range; bipolar ones center at 64)
+// MOD HUB destinations (expanded with HubControl)
 enum ModDestination {
-    MOD_LFO_RATE = 0,      // -64..+63 maps to 0.05-20Hz (centered ~2Hz)
-    MOD_LFO_SHAPE,         // -64..+63: use lower 3 bits only (0-5 = shapes)
-    MOD_LFO_TO_MORPH,      // -64..+63 bipolar depth
-    MOD_LFO_TO_FILTER,     // -64..+63 bipolar depth
-    MOD_VEL_TO_FILTER,     // -64..+63 (-64=none, +63=full)
-    MOD_KEY_TRACK,         // -64..+63 (-64=none, +63=full)
-    MOD_OSC_B_DETUNE,      // -64..+63 cents
-    MOD_PB_RANGE,          // -64..+63: use lower 2 bits (0-3 = ranges)
+    MOD_LFO_RATE = 0,      // LFO Rate (0.05-20Hz)
+    MOD_LFO_SHAPE,         // LFO Shape selection
+    MOD_LFO_TO_MORPH,      // LFO modulates morph (bipolar)
+    MOD_LFO_TO_FILTER,     // LFO modulates filter cutoff (bipolar)
+    MOD_VEL_TO_FILTER,     // Velocity to filter cutoff
+    MOD_KEY_TRACK,         // Filter key tracking
+    MOD_OSC_B_DETUNE,      // Osc B detune (cents, bipolar)
+    MOD_PB_RANGE,          // Pitch bend range
     MOD_NUM_DESTINATIONS
+};
+
+// LFO shape names (for enum display)
+static const char* const kLfoShapeNames[] = {
+    "Sine", "Tri", "Saw+", "Saw-", "Square", "S&H"
+};
+
+// Pitch bend range names
+static const char* const kPbRangeNames[] = {
+    "+/-2", "+/-7", "+/-12", "+/-24"
+};
+
+// Hub control destinations for MOD HUB (using HubControl system)
+static constexpr common::HubControl<MOD_NUM_DESTINATIONS>::Destination kModDestinations[] = {
+    {"LFO SPD", "%",   0, 100, 20,  false, nullptr},        // LFO rate (0-100%)
+    {"LFO SHP", "",    0, 5,   0,   false, kLfoShapeNames}, // LFO shape (0-5)
+    {"LFO>MRP", "%",   0, 100, 50,  true,  nullptr},        // LFO to morph (bipolar ±)
+    {"LFO>FLT", "%",   0, 100, 50,  true,  nullptr},        // LFO to filter (bipolar ±)
+    {"VEL>FLT", "%",   0, 100, 0,   false, nullptr},        // Velocity to filter
+    {"KEY TRK", "%",   0, 100, 0,   false, nullptr},        // Key tracking
+    {"B TUNE", "c",    0, 100, 50,  true,  nullptr},        // Osc B detune (bipolar ±50 cents)
+    {"PB RNG",  "",    0, 3,   0,   false, kPbRangeNames}   // Pitch bend range (0-3)
 };
 
 // Filter type names
@@ -124,36 +150,6 @@ static const char* ppg_mode_names[] = {
     "HiFi",   // INTERP_2D - bilinear interpolation (smoothest)
     "LoFi",   // INTERP_1D - sample interpolation only (stepped waves)
     "Raw"     // NO_INTERP - no interpolation (authentic PPG crunch)
-};
-
-// MOD HUB destination names
-static const char* mod_dest_names[] = {
-    "LFO SPD",   // 0: LFO Rate
-    "LFO SHP",   // 1: LFO Shape
-    "LFO>MRP",   // 2: LFO to Morph
-    "LFO>FLT",   // 3: LFO to Filter
-    "VEL>FLT",   // 4: Velocity to Filter
-    "KEY TRK",   // 5: Filter Key Track
-    "B TUNE",    // 6: Osc B Detune
-    "PB RNG"     // 7: Pitch Bend Range
-};
-
-// LFO shape names
-static const char* lfo_shape_names[] = {
-    "Sine",
-    "Tri",
-    "Saw+",
-    "Saw-",
-    "Square",
-    "S&H"
-};
-
-// Pitch bend range names
-static const char* pb_range_names[] = {
-    "+/-2",
-    "+/-7",
-    "+/-12",
-    "+/-24"
 };
 
 // Pitch bend semitone values
@@ -219,6 +215,7 @@ public:
     PepegeSynth() {}
     ~PepegeSynth() {}
     
+#ifndef TEST
     int8_t Init(const unit_runtime_desc_t* desc) {
         sample_rate_ = static_cast<float>(desc->samplerate);
         inv_sample_rate_ = 1.0f / sample_rate_;
@@ -269,22 +266,114 @@ public:
         params_[P_FILTER_ENV] = 32;  // Center point for bipolar
         params_[P_SPACE] = 0;    // Bipolar 0 = normal stereo spread
         
-        // Initialize MOD HUB values (all 0-127 range, 64 = center for bipolar)
-        mod_values_[MOD_LFO_RATE] = 40;      // LFO speed (0-127)
-        mod_values_[MOD_LFO_SHAPE] = 0;      // Sine (0-5 mapped from 0-127)
-        mod_values_[MOD_LFO_TO_MORPH] = 64;  // No modulation (64 = center)
-        mod_values_[MOD_LFO_TO_FILTER] = 64; // No modulation (64 = center)
-        mod_values_[MOD_VEL_TO_FILTER] = 0;  // No velocity to filter (0-127)
-        mod_values_[MOD_KEY_TRACK] = 0;      // No key tracking (0-127)
-        mod_values_[MOD_OSC_B_DETUNE] = 64;  // No detune (64 = center)
-        mod_values_[MOD_PB_RANGE] = 0;       // ±2 semitones (0-3 mapped from 0-127)
+        // Initialize MOD HUB with HubControl
+        mod_hub_ptr_ = new common::HubControl<MOD_NUM_DESTINATIONS>(kModDestinations);
+        
+        // Initialize hub_values storage with defaults (0-100 range)
+        hub_values_[MOD_LFO_RATE] = 20;      // LFO speed (20%)
+        hub_values_[MOD_LFO_SHAPE] = 0;      // Sine shape
+        hub_values_[MOD_LFO_TO_MORPH] = 50;  // No modulation (50 = center)
+        hub_values_[MOD_LFO_TO_FILTER] = 50; // No modulation (50 = center)
+        hub_values_[MOD_VEL_TO_FILTER] = 0;  // No velocity to filter
+        hub_values_[MOD_KEY_TRACK] = 0;      // No key tracking
+        hub_values_[MOD_OSC_B_DETUNE] = 50;  // No detune (50 = center)
+        hub_values_[MOD_PB_RANGE] = 0;       // ±2 semitones
+        
+        // Set destination to first slot initially
+        mod_hub_ptr_->SetDestination(0);
+        
+        // Set default values for each destination in HubControl
+        for (int i = 0; i < MOD_NUM_DESTINATIONS; i++) {
+            mod_hub_ptr_->SetValueForDest(i, hub_values_[i]);
+        }
         
         preset_idx_ = 0;
         
         return k_unit_err_none;
     }
+#else
+    // Test-friendly Init method
+    void Init(float sample_rate = 48000.0f) {
+        sample_rate_ = sample_rate;
+        inv_sample_rate_ = 1.0f / sample_rate_;
+        
+        // Initialize all voices
+        for (uint32_t v = 0; v < kNumVoices; v++) {
+            voices_[v].Init(sample_rate_);
+        }
+        
+        // Initialize bank tracking (force reload on first render)
+        current_bank_a_ = -1;
+        current_bank_b_ = -1;
+        
+        // Initialize global LFO
+        lfo_.Init(sample_rate_);
+        
+        // Initialize parameter smoothing
+        cutoff_smooth_.Init(1.0f, 0.005f);   // Slower for filter
+        osc_mix_smooth_.Init(0.5f, 0.01f);   // Medium for crossfade
+        space_smooth_.Init(0.0f, 0.01f);     // Medium for stereo
+        
+        // Initialize state
+        pitch_bend_ = 0.0f;
+        pressure_ = 0.0f;
+        voice_counter_ = 0;
+        params_dirty_ = 0xFFFFFFFF;  // Mark all params dirty initially
+        
+        // Clear intermediate buffers
+        pepege::neon::ClearBuffer(mix_buffer_, kMaxFrames);
+        
+        // Default parameters
+        for (int i = 0; i < P_NUM_PARAMS; i++) {
+            params_[i] = 0;
+        }
+        
+        // Set some sensible defaults (matching header.c)
+        params_[P_OSC_MODE] = 0;  // HiFi PPG mode by default
+        params_[P_OSC_MIX] = 0;   // Bipolar 0 = 50% mix
+        params_[P_FILTER_CUTOFF] = 127;
+        params_[P_AMP_ATTACK] = 5;
+        params_[P_AMP_DECAY] = 40;
+        params_[P_AMP_SUSTAIN] = 80;
+        params_[P_AMP_RELEASE] = 30;
+        params_[P_FILT_ATTACK] = 10;
+        params_[P_FILT_DECAY] = 50;
+        params_[P_FILT_SUSTAIN] = 40;
+        params_[P_FILT_RELEASE] = 40;
+        params_[P_FILTER_ENV] = 32;  // Center point for bipolar
+        params_[P_SPACE] = 0;    // Bipolar 0 = normal stereo spread
+        
+        // Initialize MOD HUB with HubControl
+        mod_hub_ptr_ = new common::HubControl<MOD_NUM_DESTINATIONS>(kModDestinations);
+        
+        // Initialize hub_values storage with defaults (0-100 range)
+        hub_values_[MOD_LFO_RATE] = 20;      // LFO speed (20%)
+        hub_values_[MOD_LFO_SHAPE] = 0;      // Sine shape
+        hub_values_[MOD_LFO_TO_MORPH] = 50;  // No modulation (50 = center)
+        hub_values_[MOD_LFO_TO_FILTER] = 50; // No modulation (50 = center)
+        hub_values_[MOD_VEL_TO_FILTER] = 0;  // No velocity to filter
+        hub_values_[MOD_KEY_TRACK] = 0;      // No key tracking
+        hub_values_[MOD_OSC_B_DETUNE] = 50;  // No detune (50 = center)
+        hub_values_[MOD_PB_RANGE] = 0;       // ±2 semitones
+        
+        // Set destination to first slot initially
+        mod_hub_ptr_->SetDestination(0);
+        
+        // Set default values for each destination in HubControl
+        for (int i = 0; i < MOD_NUM_DESTINATIONS; i++) {
+            mod_hub_ptr_->SetValueForDest(i, hub_values_[i]);
+        }
+        
+        preset_idx_ = 0;
+    }
+#endif
     
-    void Teardown() {}
+    void Teardown() {
+        if (mod_hub_ptr_ != nullptr) {
+            delete mod_hub_ptr_;
+            mod_hub_ptr_ = nullptr;
+        }
+    }
     
     void Reset() {
         for (uint32_t v = 0; v < kNumVoices; v++) {
@@ -297,6 +386,20 @@ public:
     void Resume() {}
     void Suspend() {}
     
+#ifdef TEST
+    // Test-friendly Process method that matches WAV processing expectations
+    void Process(const float* input, float* output, size_t frames, size_t channels) {
+        (void)input;  // Synth doesn't use input
+        Render(output, static_cast<uint32_t>(frames));
+        // If stereo output is expected but Render produces mono, duplicate to stereo
+        if (channels == 2) {
+            for (size_t i = frames; i > 0; --i) {
+                output[i * 2 - 1] = output[i * 2 - 2] = output[i - 1];
+            }
+        }
+    }
+#endif
+    
     void Render(float* out, uint32_t frames) {
         // Limit frames to our buffer size
         if (frames > kMaxFrames) frames = kMaxFrames;
@@ -304,19 +407,23 @@ public:
         // Clear mix buffer
         pepege::neon::ClearBuffer(mix_buffer_, frames);
         
-        // === Read MOD HUB values (all 0-127 range) ===
-        // LFO rate: 0-127 directly for SetRate
-        const int32_t lfo_rate = mod_values_[MOD_LFO_RATE];
-        // LFO shape: 0-127 maps to 0.0-5.0 for smooth morphing between shapes
-        const float lfo_shape_morph = mod_values_[MOD_LFO_SHAPE] * 5.0f / 127.0f;
-        // Bipolar modulation depths: 0-127, 64 = center (no mod)
-        const float lfo_to_morph = (mod_values_[MOD_LFO_TO_MORPH] - 64) / 64.0f;  // -1 to +1
-        const float lfo_to_filter = (mod_values_[MOD_LFO_TO_FILTER] - 64) / 64.0f;  // -1 to +1
-        const float vel_to_filter = mod_values_[MOD_VEL_TO_FILTER] / 127.0f;  // 0-1
-        const float key_track = mod_values_[MOD_KEY_TRACK] / 127.0f;  // 0-1
-        const float osc_b_detune = (mod_values_[MOD_OSC_B_DETUNE] - 64) * 0.5f;  // -32 to +32 cents
-        // PB range: 0-127 maps to 0-3 (index into pb_semitones)
-        const int pb_range_idx = (mod_values_[MOD_PB_RANGE] * 4 / 128) & 3;
+        // === Read MOD HUB values using HubControl ===
+        // LFO rate: 0-100 maps to 0-127 for SetRate
+        const int32_t lfo_rate = mod_hub_ptr_->GetValue(MOD_LFO_RATE) * 127 / 100;
+        // LFO shape: 0-5 directly (enum value)
+        const int32_t lfo_shape_value = mod_hub_ptr_->GetValue(MOD_LFO_SHAPE);
+        const float lfo_shape_morph = lfo_shape_value * 1.0f;  // 0-5 range
+        // Bipolar modulation depths: 0-100, 50 = center (no mod) -> -1 to +1
+        const float lfo_to_morph = mod_hub_ptr_->GetValueNormalizedBipolar(MOD_LFO_TO_MORPH);
+        const float lfo_to_filter = mod_hub_ptr_->GetValueNormalizedBipolar(MOD_LFO_TO_FILTER);
+        // Unipolar values: 0-100 -> 0-1
+        const float vel_to_filter = mod_hub_ptr_->GetValueNormalizedUnipolar(MOD_VEL_TO_FILTER);
+        const float key_track = mod_hub_ptr_->GetValueNormalizedUnipolar(MOD_KEY_TRACK);
+        // Osc B detune: bipolar ±50 cents -> -32 to +32 cents
+        const float osc_b_detune = mod_hub_ptr_->GetValueScaledBipolar(MOD_OSC_B_DETUNE, 32.0f);
+        // PB range: 0-3 directly (enum value)
+        int pb_range_idx = mod_hub_ptr_->GetValue(MOD_PB_RANGE);
+        if (pb_range_idx < 0 || pb_range_idx > 3) pb_range_idx = 0;
         const float pb_range = pb_semitones[pb_range_idx];
         
         // === Update smoothed parameters ===
@@ -454,7 +561,9 @@ public:
                 // Apply filter
                 voice.filter.SetCutoff(cutoff);
                 voice.filter.SetResonance(resonance);
-                voice.filter.SetType(static_cast<FilterType>(params_[P_FILTER_TYPE]));
+                int filter_type = params_[P_FILTER_TYPE];
+                if (filter_type < 0 || filter_type > 3) filter_type = 0;
+                voice.filter.SetType(static_cast<FilterType>(filter_type));
                 float filtered = voice.filter.Process(osc_out);
                 
                 // Apply envelope and velocity, add to mix
@@ -462,7 +571,7 @@ public:
             }
             
             // Store mixed sample (scale by 1/voices for headroom)
-            mix_buffer_[i] = sample_sum * 0.5f;  // -6dB headroom for 4 voices
+            mix_buffer_[i] = sample_sum * (1.0f / kNumVoices);
         }
         
         // === NEON-optimized output stage ===
@@ -470,11 +579,7 @@ public:
         // Sanitize (remove NaN/Inf) and soft clamp
         pepege::neon::SanitizeAndClamp(mix_buffer_, 1.0f, frames);
         
-        // Process smoothed stereo width (call Process() to actually update the value)
-        // Process multiple times to catch up since we're not doing per-sample smoothing
-        for (uint32_t i = 0; i < frames; ++i) {
-            space_smooth_.Process();
-        }
+        // Get current smoothed stereo width value
         const float space = space_smooth_.GetValue();
         stereo_widener_.SetWidth(space);
         
@@ -521,11 +626,32 @@ public:
     }
     
     void SetParameter(uint8_t id, int32_t value) {
-        if (id == P_MOD_VALUE) {
-            // Route MOD_VALUE to the currently selected mod destination
-            int sel = params_[P_MOD_SELECT];
-            if (sel >= 0 && sel < MOD_NUM_DESTINATIONS) {
-                mod_values_[sel] = value;
+        if (id == P_MOD_SELECT) {
+            // Clamp to valid range
+            if (value < 0) value = 0;
+            if (value >= MOD_NUM_DESTINATIONS) value = MOD_NUM_DESTINATIONS - 1;
+            
+            // Set MOD HUB destination
+            mod_hub_ptr_->SetDestination(value);
+            
+            // Restore the previously stored value for this destination
+            // This preserves user edits when switching between destinations
+            mod_hub_ptr_->SetValueForDest(value, hub_values_[value]);
+            
+            // Store in params for GetParameter
+            params_[id] = value;
+        } else if (id == P_MOD_VALUE) {
+            // Clamp to 0-100 range
+            if (value < 0) value = 0;
+            if (value > 100) value = 100;
+            
+            // Set value for currently selected MOD HUB destination
+            mod_hub_ptr_->SetValue(value);
+            
+            // Store the ORIGINAL UI value (0-100) for later restoration
+            uint8_t dest = mod_hub_ptr_->GetDestination();
+            if (dest < MOD_NUM_DESTINATIONS) {
+                hub_values_[dest] = value;
             }
         } else if (id < P_NUM_PARAMS) {
             if (params_[id] != value) {
@@ -536,15 +662,16 @@ public:
     }
     
     int32_t GetParameter(uint8_t id) const {
-        if (id == P_MOD_VALUE) {
-            // Return the value for the currently selected mod destination
-            int sel = params_[P_MOD_SELECT];
-            if (sel >= 0 && sel < MOD_NUM_DESTINATIONS) {
-                return mod_values_[sel];
+        if (id == P_MOD_SELECT) {
+            return mod_hub_ptr_->GetDestination();
+        } else if (id == P_MOD_VALUE) {
+            // Return ORIGINAL 0-100 slider value for UI sync
+            uint8_t dest = mod_hub_ptr_->GetDestination();
+            if (dest < MOD_NUM_DESTINATIONS) {
+                return hub_values_[dest];
             }
             return 0;
-        }
-        if (id < P_NUM_PARAMS) {
+        } else if (id < P_NUM_PARAMS) {
             return params_[id];
         }
         return 0;
@@ -569,54 +696,10 @@ public:
                 }
                 break;
             case P_MOD_SELECT:
-                if (value >= 0 && value < MOD_NUM_DESTINATIONS) {
-                    return mod_dest_names[value];
-                }
-                break;
+                return mod_hub_ptr_->GetCurrentDestinationName();
             case P_MOD_VALUE: {
-                // Return string based on currently selected mod destination
-                // Value is 0-127 range (common for all destinations)
-                int sel = params_[P_MOD_SELECT];
-                switch (sel) {
-                    case MOD_LFO_RATE: {
-                        // Show rate value directly (0-127)
-                        snprintf(mod_value_str_, sizeof(mod_value_str_), "%d", value);
-                        return mod_value_str_;
-                    }
-                    case MOD_LFO_SHAPE: {
-                        // Map 0-127 to 0-5 for shape index
-                        int shape = value * 6 / 128;
-                        if (shape > 5) shape = 5;
-                        return lfo_shape_names[shape];
-                    }
-                    case MOD_LFO_TO_MORPH:
-                    case MOD_LFO_TO_FILTER: {
-                        // Bipolar: 64 = center (0%), show signed percentage
-                        int pct = (value - 64) * 100 / 64;
-                        snprintf(mod_value_str_, sizeof(mod_value_str_), "%+d%%", pct);
-                        return mod_value_str_;
-                    }
-                    case MOD_VEL_TO_FILTER:
-                    case MOD_KEY_TRACK: {
-                        // Unipolar: 0-127 as percentage
-                        int pct = value * 100 / 127;
-                        snprintf(mod_value_str_, sizeof(mod_value_str_), "%d%%", pct);
-                        return mod_value_str_;
-                    }
-                    case MOD_OSC_B_DETUNE: {
-                        // Bipolar: 64 = center (0 cents), show signed cents
-                        int cents = (value - 64) / 2;  // -32 to +31 cents
-                        snprintf(mod_value_str_, sizeof(mod_value_str_), "%+dc", cents);
-                        return mod_value_str_;
-                    }
-                    case MOD_PB_RANGE: {
-                        // Map 0-127 to 0-3 for range index
-                        int range = value * 4 / 128;
-                        if (range > 3) range = 3;
-                        return pb_range_names[range];
-                    }
-                }
-                break;
+                // Use HubControl's built-in string formatting
+                return mod_hub_ptr_->GetCurrentValueString(mod_value_str_, sizeof(mod_value_str_));
             }
         }
         return nullptr;
@@ -735,14 +818,51 @@ public:
             params_[i] = p.params[i];
         }
 
-        // Copy MOD HUB values
+        // Copy MOD HUB values (convert from old 0-127 format to HubControl 0-100 format)
         for (int i = 0; i < MOD_NUM_DESTINATIONS; i++) {
-            mod_values_[i] = p.mod[i];
+            int32_t old_value = p.mod[i];
+            int32_t new_value;
+            
+            // Convert based on destination type
+            switch (i) {
+                case MOD_LFO_RATE:
+                    // 0-127 -> 0-100
+                    new_value = old_value * 100 / 127;
+                    break;
+                case MOD_LFO_SHAPE:
+                    // 0-127 maps to 0-5 -> 0-5 directly
+                    new_value = old_value * 6 / 128;
+                    if (new_value > 5) new_value = 5;
+                    break;
+                case MOD_LFO_TO_MORPH:
+                case MOD_LFO_TO_FILTER:
+                case MOD_OSC_B_DETUNE:
+                    // Bipolar: 0-127 with 64=center -> 0-100 with 50=center
+                    new_value = (old_value * 100 + 63) / 127;  // Round properly
+                    break;
+                case MOD_VEL_TO_FILTER:
+                case MOD_KEY_TRACK:
+                    // Unipolar: 0-127 -> 0-100
+                    new_value = old_value * 100 / 127;
+                    break;
+                case MOD_PB_RANGE:
+                    // 0-127 maps to 0-3 -> 0-3 directly
+                    new_value = old_value * 4 / 128;
+                    if (new_value > 3) new_value = 3;
+                    break;
+                default:
+                    new_value = old_value * 100 / 127;  // Default conversion
+                    break;
+            }
+            
+            // Store in both hub_values and HubControl
+            hub_values_[i] = new_value;
+            mod_hub_ptr_->SetValueForDest(i, new_value);
         }
 
         // Ensure MOD SELECT points to first slot to avoid confusion
         params_[P_MOD_SELECT] = 0;
-        params_[P_MOD_VALUE] = mod_values_[0];
+        mod_hub_ptr_->SetDestination(0);
 
         // Force reload of wavetables and params
         current_bank_a_ = -1;
@@ -922,8 +1042,11 @@ private:
     // Parameters
     int32_t params_[P_NUM_PARAMS];
     
-    // MOD HUB values (stored separately from main params)
-    int32_t mod_values_[MOD_NUM_DESTINATIONS];
+    // MOD HUB control (initialized in Init)
+    common::HubControl<MOD_NUM_DESTINATIONS>* mod_hub_ptr_;
+    
+    // MOD HUB values storage (original 0-100 slider values)
+    int32_t hub_values_[MOD_NUM_DESTINATIONS];
     
     uint8_t preset_idx_;
 };

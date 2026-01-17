@@ -27,11 +27,16 @@
  * 2. Call {@link SetDestination} when the selector parameter changes (e.g., user picks a new MOD target).
  * 3. Feed raw 0–100 slider values from the UI into {@link SetValue}. The hub stores the UI intent and
  *    converts it to the destination-specific range (visible via {@link GetValue}).
- * 4. Use {@link GetValueString} when rendering the parameter value; the returned pointer is stable and safe
+ * 4. Use {@link GetCurrentValueString} or {@link GetValueString} when rendering the parameter value; the
+ *    returned pointer is stable and safe to cache, which prevents screen flicker.
+ * 5. If you need the original UI slider position, read {@link GetOriginalValue}. This is distinct from the
+ *    destination-clamped value returned by {@link GetValue}.
+ * 6. For immediate DSP updates, prefer {@link SetValueAndGetClamped} or
+ *    {@link SetValueForDestAndGetClamped} so you can act on the clamped destination value.
  *    to cache, which prevents screen flicker.
- * 5. In DSP code, read {@link GetValue} or {@link GetCurrentValue} to obtain the clamped value for the
+ * 7. In DSP code, read {@link GetValue} or {@link GetCurrentValue} to obtain the clamped value for the
  *    currently selected destination, or {@link GetValue} with a destination index for others.
- * 6. **Catch behavior**: Once you set a value for a destination, switching to it later will maintain
+ * 8. **Catch behavior**: Once you set a value for a destination, switching to it later will maintain
  *    that modulation level by automatically adjusting the hub value.
  */
 
@@ -72,7 +77,8 @@ class HubStringCache {
     
     // Use function-local static for thread-safe lazy initialization
     static bool initialized = false;
-    static char storage[16][128][8];      // [cache_idx][value_idx][string]
+    static constexpr int kStringSize = 12;
+    static char storage[16][128][kStringSize];      // [cache_idx][value_idx][string]
     static const char* ptrs[16][128];     // [cache_idx][value_idx]
     static int cache_count = 0;
     
@@ -119,11 +125,26 @@ class HubStringCache {
         // Bipolar: center is middle of range
         int32_t center = min + range / 2;
         int32_t offset = value - center;
-        int32_t percent = (offset * 100) / (range / 2);
-        snprintf(storage[idx][i], 8, "%+d%s", percent, unit);
+        int32_t half_range = range / 2;
+        if (half_range == 0) {
+          half_range = 1;
+        }
+        int32_t percent = (offset * 100) / half_range;
+        if (percent > 999) {
+          percent = 999;
+        } else if (percent < -999) {
+          percent = -999;
+        }
+        snprintf(storage[idx][i], kStringSize, "%+d%s", percent, safe_unit);
       } else {
         // Unipolar: direct value
-        snprintf(storage[idx][i], 8, "%d%s", (int)value, unit);
+        int32_t clamped_value = value;
+        if (clamped_value > 9999) {
+          clamped_value = 9999;
+        } else if (clamped_value < -999) {
+          clamped_value = -999;
+        }
+        snprintf(storage[idx][i], kStringSize, "%d%s", (int)clamped_value, safe_unit);
       }
       
       ptrs[idx][i] = storage[idx][i];
@@ -295,6 +316,15 @@ class HubControl {
   int32_t GetValue(uint8_t dest) const {
     return (dest < NUM_DESTINATIONS) ? clamped_values_[dest] : 0;
   }
+
+  /**
+   * @brief Get original UI value (0-100) for a destination
+   * @param dest Destination index
+   * @return Original value, or 0 if invalid
+   */
+  int32_t GetOriginalValue(uint8_t dest) const {
+    return (dest < NUM_DESTINATIONS) ? original_values_[dest] : 0;
+  }
   
   /**
    * @brief Get value for current destination (clamped to destination's range)
@@ -302,6 +332,27 @@ class HubControl {
    */
   int32_t GetCurrentValue() const {
     return clamped_values_[current_dest_];
+  }
+
+  /**
+   * @brief Set value for current destination and return clamped value
+   * @param value New value in 0-100 range (from UI)
+   * @return Clamped destination value
+   */
+  int32_t SetValueAndGetClamped(int32_t value) {
+    SetValue(value);
+    return clamped_values_[current_dest_];
+  }
+
+  /**
+   * @brief Set value for specific destination and return clamped value
+   * @param dest Destination index
+   * @param value New value in 0-100 range (from UI)
+   * @return Clamped destination value
+   */
+  int32_t SetValueForDestAndGetClamped(uint8_t dest, int32_t value) {
+    SetValueForDest(dest, value);
+    return (dest < NUM_DESTINATIONS) ? clamped_values_[dest] : 0;
   }
   
   /**
@@ -339,6 +390,17 @@ class HubControl {
     return GetValueStringForDest(current_dest_, clamped_values_[current_dest_], 
                                   buffer, buf_size);
   }
+
+  /**
+   * @brief Get formatted value string for current destination
+   * @param buffer Output buffer (fallback only)
+   * @param buf_size Buffer size
+   * @return Stable pointer to formatted string
+   */
+  const char* GetCurrentValueString(char* buffer, size_t buf_size) const {
+    return GetValueStringForDest(current_dest_, clamped_values_[current_dest_],
+                                  buffer, buf_size);
+  }
   
   /**
    * @brief Get formatted value string for specific destination and value
@@ -365,8 +427,9 @@ class HubControl {
     }
     
     // Path 2: Numeric values (use cache for ALL numeric)
+    const char* safe_unit = (d.value_unit != nullptr) ? d.value_unit : "";
     const char* const* cached = HubStringCache::GetStrings(
-      d.min, d.max, d.value_unit, d.bipolar);
+      d.min, d.max, safe_unit, d.bipolar);
     
     if (cached != nullptr && value >= d.min && value <= d.max) {
       return cached[value - d.min];  // Cached pointer ✓
@@ -384,9 +447,9 @@ class HubControl {
           half_range = 1;
         }
         int32_t percent = (offset * 100) / half_range;
-        snprintf(buffer, buf_size, "%+d%s", percent, d.value_unit);
+        snprintf(buffer, buf_size, "%+d%s", percent, safe_unit);
       } else {
-        snprintf(buffer, buf_size, "%d%s", (int)value, d.value_unit);
+        snprintf(buffer, buf_size, "%d%s", (int)value, safe_unit);
       }
       return buffer;
     }

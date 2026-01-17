@@ -42,7 +42,10 @@ class ParamFormat {
   static const char* Percent(char* buf, size_t size, int32_t value, 
                              int32_t min = 0, int32_t max = 100) {
     // Map value from [min,max] to [0,100]
-    int32_t percent = ((value - min) * 100) / (max - min);
+    int32_t percent = 0;
+    if (max != min) {
+      percent = ((value - min) * 100) / (max - min);
+    }
     snprintf(buf, size, "%d%%", percent);
     return buf;
   }
@@ -63,7 +66,10 @@ class ParamFormat {
     int32_t center = (min + max) / 2;
     int32_t offset = value - center;
     int32_t range = (max - min) / 2;
-    int32_t percent = (offset * 100) / range;
+    int32_t percent = 0;
+    if (range != 0) {
+      percent = (offset * 100) / range;
+    }
     snprintf(buf, size, "%+d%%", percent);
     return buf;
   }
@@ -100,6 +106,9 @@ class ParamFormat {
    * Auto-scales to kHz if >= 1000 Hz
    */
   static const char* Frequency(char* buf, size_t size, float freq_hz) {
+    if (freq_hz < 0.0f) {
+      freq_hz = 0.0f;
+    }
     if (freq_hz >= 10000.0f) {
       // >= 10kHz: show as integer kHz
       snprintf(buf, size, "%.0fkHz", freq_hz / 1000.0f);
@@ -126,6 +135,9 @@ class ParamFormat {
    * Auto-scales to seconds if >= 1000 ms
    */
   static const char* Time(char* buf, size_t size, float time_ms) {
+    if (time_ms < 0.0f) {
+      time_ms = 0.0f;
+    }
     if (time_ms >= 10000.0f) {
       // >= 10s: show as integer seconds
       snprintf(buf, size, "%.0fs", time_ms / 1000.0f);
@@ -243,6 +255,9 @@ class ParamFormat {
       "C", "C#", "D", "D#", "E", "F", 
       "F#", "G", "G#", "A", "A#", "B"
     };
+    if (midi_note > 127) {
+      midi_note = 127;
+    }
     int octave = (midi_note / 12) - 1;
     const char* note = note_names[midi_note % 12];
     snprintf(buf, size, "%s%d", note, octave);

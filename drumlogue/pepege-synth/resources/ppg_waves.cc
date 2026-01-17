@@ -4,13 +4,13 @@
  *
  * Auto-generated from ppg_data.c
  * 
- * Contains 256 waveforms, each 64 samples of 8-bit unsigned data.
+ * Contains 128 waveforms, each 64 samples of 8-bit unsigned data.
  * The PPG oscillator mirrors these half-cycles to create full 128-sample waves.
  */
 
 #include "ppg_waves.h"
 
-// 256 waveforms x 64 samples = 16384 bytes
+// 128 waveforms x 64 samples = 8192 bytes
 const uint8_t ppg_wave_data[PPG_NUM_WAVES * PPG_SAMPLES_PER_WAVE] = {
     // Wave   0 (0:0)
     131, 162, 188, 205, 211, 208, 196, 181,

@@ -379,40 +379,72 @@ void ImGuiApp::render_ui() {
     
     bool changed = false;
     
-    // String-based parameters use combo box
+    // String-based parameters use combo box (fallback to slider if only one unique string)
     if (p.type == k_unit_param_type_strings && loader_->unit_get_param_str_value) {
-      const char* current_str = loader_->unit_get_param_str_value(static_cast<uint8_t>(i), val);
-      if (ImGui::BeginCombo("##value", current_str ? current_str : "")) {
-        // Track last string to detect when we've exhausted unique options
-        // This handles HUB VALUE params where the range is 0-100 but only a few values are valid
-        const char* last_str = nullptr;
-        int duplicate_count = 0;
-        
-        for (int v = p.min; v <= p.max; ++v) {
-          const char* str = loader_->unit_get_param_str_value(static_cast<uint8_t>(i), v);
-          if (!str || str[0] == '\0') continue;
-          
-          // Stop if we see too many consecutive duplicates (indicates we've hit the end of valid options)
-          if (last_str && strcmp(str, last_str) == 0) {
-            duplicate_count++;
-            if (duplicate_count > 2) break;  // More than 2 duplicates = stop
-            continue;  // Skip this duplicate
-          }
-          duplicate_count = 0;
-          last_str = str;
-          
-          bool is_selected = (val == v);
-          ImGui::PushID(v);
-          if (ImGui::Selectable(str, is_selected)) {
-            val = v;
-            changed = true;
-          }
-          ImGui::PopID();
-          if (is_selected) {
-            ImGui::SetItemDefaultFocus();
-          }
+      int unique_count = 0;
+      const char* unique_a = nullptr;
+      const char* unique_b = nullptr;
+      for (int v = p.min; v <= p.max; ++v) {
+        const char* str = loader_->unit_get_param_str_value(static_cast<uint8_t>(i), v);
+        if (!str || str[0] == '\0') {
+          continue;
         }
-        ImGui::EndCombo();
+        if (!unique_a) {
+          unique_a = str;
+          unique_count = 1;
+          continue;
+        }
+        if (strcmp(str, unique_a) == 0) {
+          continue;
+        }
+        if (!unique_b) {
+          unique_b = str;
+          unique_count = 2;
+          break;
+        }
+      }
+
+      const bool use_combo = (unique_count > 1);
+      const char* current_str = loader_->unit_get_param_str_value(static_cast<uint8_t>(i), val);
+
+      if (use_combo) {
+        if (ImGui::BeginCombo("##value", current_str ? current_str : "")) {
+          // Track last string to detect when we've exhausted unique options
+          // This handles HUB VALUE params where the range is 0-100 but only a few values are valid
+          const char* last_str = nullptr;
+          int duplicate_count = 0;
+          
+          for (int v = p.min; v <= p.max; ++v) {
+            const char* str = loader_->unit_get_param_str_value(static_cast<uint8_t>(i), v);
+            if (!str || str[0] == '\0') continue;
+            
+            // Stop if we see too many consecutive duplicates (indicates we've hit the end of valid options)
+            if (last_str && strcmp(str, last_str) == 0) {
+              duplicate_count++;
+              if (duplicate_count > 2) break;  // More than 2 duplicates = stop
+              continue;  // Skip this duplicate
+            }
+            duplicate_count = 0;
+            last_str = str;
+            
+            bool is_selected = (val == v);
+            ImGui::PushID(v);
+            if (ImGui::Selectable(str, is_selected)) {
+              val = v;
+              changed = true;
+            }
+            ImGui::PopID();
+            if (is_selected) {
+              ImGui::SetItemDefaultFocus();
+            }
+          }
+          ImGui::EndCombo();
+        }
+      } else {
+        ImGui::SetNextItemWidth(-80);
+        changed = ImGui::SliderInt("##slider", &val, p.min, p.max);
+        ImGui::SameLine();
+        ImGui::Text("%s", current_str ? current_str : "");
       }
     } else {
       // Numeric slider with value display
@@ -429,16 +461,17 @@ void ImGuiApp::render_ui() {
       
       // HUB support: when a HUB selector changes, refresh its value parameter
       // This allows virtual parameter routing where selecting a destination shows its stored value
-      // DCO1 HUB: param 0 (D1 SEL) -> refresh param 1 (D1 VAL)
-      // DCO2 HUB: param 2 (D2 SEL) -> refresh param 3 (D2 VAL)  
-      // MOD HUB: param 20 (MOD SEL) -> refresh param 21 (MOD VAL)
       if (loader_->unit_get_param_value) {
         if (i == 0 && param_values_.size() > 1) {
           param_values_[1] = loader_->unit_get_param_value(1);
         } else if (i == 2 && param_values_.size() > 3) {
           param_values_[3] = loader_->unit_get_param_value(3);
-        } else if (i == 20 && param_values_.size() > 21) {
-          param_values_[21] = loader_->unit_get_param_value(21);
+        } else if (p.name[0] != '\0') {
+          const bool is_mod_selector = (strcmp(p.name, "MOD SEL") == 0) ||
+                                       (strcmp(p.name, "MOD HUB") == 0);
+          if (is_mod_selector && (i + 1) < static_cast<int>(param_values_.size())) {
+            param_values_[i + 1] = loader_->unit_get_param_value(static_cast<uint8_t>(i + 1));
+          }
         }
       }
     }
@@ -587,6 +620,9 @@ void ImGuiApp::render_piano_roll() {
           }
         }
         active_notes_[note] = true;
+#ifdef DEBUG
+        fprintf(stderr, "[PresetEditor] Key down: note=%u\n", note);
+#endif
       } else if (!is_down && was_down) {
         // Key released
         if (!arp_enabled_) {
@@ -600,6 +636,9 @@ void ImGuiApp::render_piano_roll() {
           active_notes_[note] = false;
         }
         // In arp + hold mode, keep note active
+#ifdef DEBUG
+        fprintf(stderr, "[PresetEditor] Key up: note=%u\n", note);
+#endif
       }
     }
   }
@@ -619,6 +658,9 @@ void ImGuiApp::render_piano_roll() {
           }
         }
         active_notes_[note] = true;
+#ifdef DEBUG
+        fprintf(stderr, "[PresetEditor] Key down: note=%u\n", note);
+#endif
       } else if (!is_down && was_down) {
         // Key released
         if (!arp_enabled_) {
@@ -632,6 +674,9 @@ void ImGuiApp::render_piano_roll() {
           active_notes_[note] = false;
         }
         // In arp + hold mode, keep note active
+#ifdef DEBUG
+        fprintf(stderr, "[PresetEditor] Key up: note=%u\n", note);
+#endif
       }
     }
   }
@@ -671,6 +716,7 @@ void ImGuiApp::render_piano_roll() {
   }  // End of keyboard input check
   
   // Draw white keys first
+  int mouse_clicked_note = -1;
   int white_key_index = 0;
   for (int i = 0; i < 12; ++i) {
     int note_in_scale = i % 12;
@@ -689,25 +735,9 @@ void ImGuiApp::render_piano_roll() {
         // Check mouse interaction
         if (ImGui::IsMouseHoveringRect(key_min, key_max)) {
           col = is_active ? IM_COL32(80, 130, 235, 255) : IM_COL32(230, 230, 230, 255);
-          if (ImGui::IsMouseClicked(0)) {
-            if (!arp_enabled_) {
-              // Direct note triggering when arp is off
-              loader_->unit_note_on(note, 100);
-            }
-            active_notes_[note] = true;
+          if (ImGui::IsMouseClicked(0) && mouse_clicked_note < 0) {
+            mouse_clicked_note = note;
           }
-        }
-        
-        if (is_active && ImGui::IsMouseReleased(0)) {
-          if (!arp_enabled_) {
-            // Direct note off when arp is off
-            loader_->unit_note_off(note);
-            active_notes_[note] = false;
-          } else if (!arp_hold_) {
-            // In arp mode without hold, clear the note
-            active_notes_[note] = false;
-          }
-          // In arp + hold mode, keep note active
         }
         
         draw_list->AddRectFilled(key_min, key_max, col);
@@ -747,22 +777,8 @@ void ImGuiApp::render_piano_roll() {
           if (ImGui::IsMouseHoveringRect(key_min, key_max)) {
             col = is_active ? IM_COL32(40, 80, 180, 255) : IM_COL32(50, 50, 50, 255);
             if (ImGui::IsMouseClicked(0)) {
-              if (!arp_enabled_) {
-                loader_->unit_note_on(note, 100);
-              }
-              active_notes_[note] = true;
+              mouse_clicked_note = note;
             }
-          }
-          
-          if (is_active && ImGui::IsMouseReleased(0)) {
-            if (!arp_enabled_) {
-              loader_->unit_note_off(note);
-              active_notes_[note] = false;
-            } else if (!arp_hold_) {
-              // In arp mode without hold, clear the note
-              active_notes_[note] = false;
-            }
-            // In arp + hold mode, keep note active
           }
           
           draw_list->AddRectFilled(key_min, key_max, col);
@@ -775,6 +791,36 @@ void ImGuiApp::render_piano_roll() {
   
   // Reserve space for the keyboard
   ImGui::Dummy(canvas_sz);
+
+  // Apply mouse note events after drawing (single-note mouse tracking)
+  if (mouse_clicked_note >= 0) {
+    const int release_note = mouse_note_state_.OnMouseClick(mouse_clicked_note);
+    if (release_note >= 0 && release_note < 128) {
+      if (!arp_enabled_ && loader_ && loader_->unit_note_off) {
+        loader_->unit_note_off(static_cast<uint8_t>(release_note));
+      }
+      if (!arp_hold_) {
+        active_notes_[release_note] = false;
+      }
+    }
+
+    if (!arp_enabled_ && loader_ && loader_->unit_note_on) {
+      loader_->unit_note_on(static_cast<uint8_t>(mouse_clicked_note), 100);
+    }
+    active_notes_[mouse_clicked_note] = true;
+  }
+
+  if (ImGui::IsMouseReleased(0)) {
+    const int release_note = mouse_note_state_.OnMouseRelease();
+    if (release_note >= 0 && release_note < 128) {
+      if (!arp_enabled_ && loader_ && loader_->unit_note_off) {
+        loader_->unit_note_off(static_cast<uint8_t>(release_note));
+      }
+      if (!arp_hold_) {
+        active_notes_[release_note] = false;
+      }
+    }
+  }
   
   ImGui::Spacing();
   if (arp_enabled_ && !arp_notes_.empty()) {
