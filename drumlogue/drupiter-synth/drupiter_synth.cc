@@ -184,6 +184,11 @@ int8_t DrupiterSynth::Init(const unit_runtime_desc_t* desc) {
     allocator_.Init(sample_rate_);
     allocator_.SetMode(current_mode_);
     
+    // Initialize MOD HUB UI cache (prevents flickering on mod hub page)
+    last_mod_hub_dest_ = 255;
+    last_mod_amt_value_ = 255;
+    cached_mod_str_[0] = '\0';
+    
     // Load init preset (this will set all parameters including smoothed values)
     LoadPreset(0);
     
@@ -1136,7 +1141,6 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
     
     // Separate static buffers for each parameter type to avoid race conditions
     static char tune_buf[16];      // For PARAM_DCO2_TUNE
-    static char modamt_buf[16];    // For PARAM_MOD_AMT (fallback only - hub now returns stable pointers)
     
     switch (id) {
         // ======== Page 1: DCO-1 ========
@@ -1167,14 +1171,32 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
             return "";
             
         case PARAM_MOD_AMT: {
-            // Get current destination from mod_hub
-            uint8_t dest = mod_hub_.GetDestination();
+            // OPTIMIZATION: Cache the formatted string to prevent flickering
+            // Only reformat if destination or value actually changed
+            uint8_t current_dest = mod_hub_.GetDestination();
+            uint8_t current_value = static_cast<uint8_t>(value & 0xFF);
             
-            if (dest >= MOD_NUM_DESTINATIONS) {
-                return "";
+            // Check if cache is valid (destination or value changed)
+            if (current_dest == last_mod_hub_dest_ && 
+                current_value == last_mod_amt_value_) {
+                // Cache hit - return cached string (prevents UI flickering)
+                return cached_mod_str_;
             }
             
-            return mod_hub_.GetCurrentValueString(modamt_buf, sizeof(modamt_buf));
+            // Cache miss - reformat string
+            last_mod_hub_dest_ = current_dest;
+            last_mod_amt_value_ = current_value;
+            
+            // Use common buffer for formatting, then copy to cache
+            const char* str = mod_hub_.GetCurrentValueString(mod_value_str_, sizeof(mod_value_str_));
+            if (str != nullptr) {
+                strncpy(cached_mod_str_, str, sizeof(cached_mod_str_) - 1);
+                cached_mod_str_[sizeof(cached_mod_str_) - 1] = '\0';
+            } else {
+                cached_mod_str_[0] = '\0';
+            }
+            
+            return cached_mod_str_;
         }
             
         case PARAM_EFFECT:

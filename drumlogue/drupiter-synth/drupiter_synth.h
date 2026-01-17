@@ -356,6 +356,11 @@ private:
     common::HubControl<MOD_NUM_DESTINATIONS> mod_hub_;
     mutable char mod_value_str_[16];  // Buffer for GetParameterStr display
     
+    // MOD HUB UI Caching (prevents flickering from excessive string formatting)
+    uint8_t last_mod_hub_dest_ = 255;       // Last destination displayed (255 = invalid/uninitialized)
+    uint8_t last_mod_amt_value_ = 255;      // Last MOD AMT value displayed
+    mutable char cached_mod_str_[16] = "";  // Cached formatted string
+    
     // Effect mode (0=CHORUS, 1=SPACE, 2=DRY, 3=BOTH)
     uint8_t effect_mode_;
     
