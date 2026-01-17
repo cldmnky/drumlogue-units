@@ -24,9 +24,11 @@ CXXSRC += dsp/jupiter_dco.cc
 CXXSRC += dsp/jupiter_vcf.cc
 CXXSRC += dsp/jupiter_env.cc
 CXXSRC += dsp/jupiter_lfo.cc
-CXXSRC += dsp/voice_allocator.cc
-CXXSRC += ../common/voice_allocator_core.cc
+CXXSRC += dsp/voice_allocator.cc   # Drupiter-specific voice allocator
 CXXSRC += dsp/unison_oscillator.cc
+
+# Common voice allocator core (from drumlogue/common)
+CXXSRC += ../common/voice_allocator_core.cc
 
 # List ASM source files here
 ASMSRC = 
