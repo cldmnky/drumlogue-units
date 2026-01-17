@@ -82,6 +82,13 @@ endif
 
 BIN_DIR := bin
 TARGET  := $(BIN_DIR)/presets-editor-cli
+NOTE_TEST_TARGET := $(BIN_DIR)/note-priority-test
+NOTE_TEST_SRC := app/note_priority_test.cpp
+NOTE_TEST_OBJ := build/app/note_priority_test.o
+NOTE_TEST_OBJS := $(NOTE_TEST_OBJ) build/sdk/runtime_stubs.o build/core/unit_loader.o
+MOUSE_NOTE_TEST_TARGET := $(BIN_DIR)/mouse-note-test
+MOUSE_NOTE_TEST_SRC := app/mouse_note_state_test.cpp
+MOUSE_NOTE_TEST_OBJ := build/app/mouse_note_state_test.o
 
 # GUI dependencies (SDL2 + ImGui)
 SDL_CFLAGS := $(shell pkg-config --cflags sdl2 2>/dev/null)
@@ -143,7 +150,14 @@ IMGUI_VERSION := 1.91.6
 IMGUI_URL := https://github.com/ocornut/imgui/archive/refs/tags/v$(IMGUI_VERSION).tar.gz
 VENDOR_DIR := vendor
 
-.PHONY: all clean build-unit setup-vendor
+.PHONY: all clean build-unit setup-vendor note-priority-test mouse-note-test
+
+note-priority-test: $(NOTE_TEST_TARGET)
+	@echo "Built $(NOTE_TEST_TARGET)"
+
+mouse-note-test: $(MOUSE_NOTE_TEST_TARGET)
+	@echo "Built $(MOUSE_NOTE_TEST_TARGET)"
+
 
 all: $(TARGET)
 	@echo "Built $(TARGET)"
@@ -189,6 +203,12 @@ build:
 
 $(BIN_DIR):
 	@mkdir -p $(BIN_DIR)
+
+$(NOTE_TEST_TARGET): $(NOTE_TEST_OBJS) | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(MOUSE_NOTE_TEST_TARGET): $(MOUSE_NOTE_TEST_OBJ) | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 clean:
 	rm -rf build $(TARGET)

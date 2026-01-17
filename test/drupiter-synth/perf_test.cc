@@ -290,6 +290,8 @@ private:
 };
 
 int main(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
     std::cout << "Drupiter Synth Performance Monitor Test\n";
     std::cout << "=======================================\n\n";
 

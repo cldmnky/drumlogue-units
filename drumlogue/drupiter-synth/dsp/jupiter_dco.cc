@@ -353,7 +353,8 @@ void JupiterDCO::InitWavetables() {
 
 void JupiterDCO::ProcessMultipleOscillators(MultiOscState* states, int num_osc,
                                           float* outputs[4], uint32_t frames,
-                                          float sync_trigger) {
+                                            float sync_trigger) {
+    (void)sync_trigger;
     // Ensure tables are initialized
     if (!tables_initialized_) {
         InitWavetables();

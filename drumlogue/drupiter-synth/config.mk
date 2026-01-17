@@ -25,6 +25,7 @@ CXXSRC += dsp/jupiter_vcf.cc
 CXXSRC += dsp/jupiter_env.cc
 CXXSRC += dsp/jupiter_lfo.cc
 CXXSRC += dsp/voice_allocator.cc
+CXXSRC += ../common/voice_allocator_core.cc
 CXXSRC += dsp/unison_oscillator.cc
 
 # List ASM source files here

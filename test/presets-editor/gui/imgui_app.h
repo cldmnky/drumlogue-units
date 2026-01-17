@@ -16,6 +16,7 @@ extern "C" {
 #include "../core/unit_loader.h"
 #include "../audio/audio_engine.h"
 #include "../presets/preset_manager.h"
+#include "mouse_note_state.h"
 
 #ifdef __cplusplus
 }
@@ -72,6 +73,7 @@ class ImGuiApp {
   // Piano roll state
   std::vector<bool> active_notes_;  // 128 notes (MIDI range)
   int octave_offset_;               // Octave shift for piano roll
+  MouseNoteState mouse_note_state_;
   
   // Arpeggiator state
   bool arp_enabled_;

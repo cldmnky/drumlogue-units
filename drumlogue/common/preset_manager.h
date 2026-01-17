@@ -48,8 +48,10 @@ class PresetManager {
       num_factory_presets_(num_presets),
       current_preset_idx_(0) {
     // Initialize current preset from factory preset 0
-    if (num_presets > 0) {
+    if (num_presets > 0 && factory_presets != nullptr) {
       current_preset_ = factory_presets[0];
+    } else {
+      memset(&current_preset_, 0, sizeof(current_preset_));
     }
   }
   
@@ -59,7 +61,7 @@ class PresetManager {
    * @return True if loaded successfully, false if invalid index
    */
   bool LoadPreset(uint8_t idx) {
-    if (idx >= num_factory_presets_) {
+    if (idx >= num_factory_presets_ || factory_presets_ == nullptr) {
       return false;  // Invalid index
     }
     
@@ -74,7 +76,7 @@ class PresetManager {
    * @return Preset name, or "Invalid" if index out of range
    */
   const char* GetPresetName(uint8_t idx) const {
-    return (idx < num_factory_presets_) 
+    return (idx < num_factory_presets_ && factory_presets_ != nullptr) 
       ? factory_presets_[idx].name 
       : "Invalid";
   }
@@ -186,7 +188,9 @@ class PresetManager {
    * @return Pointer to factory preset, or nullptr if invalid index
    */
   const Preset* GetFactoryPreset(uint8_t idx) const {
-    return (idx < num_factory_presets_) ? &factory_presets_[idx] : nullptr;
+    return (idx < num_factory_presets_ && factory_presets_ != nullptr)
+      ? &factory_presets_[idx]
+      : nullptr;
   }
   
  private:

@@ -570,6 +570,11 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
                 
                 // Apply envelope and add to mix
                 mixed_ += voice_mix * voice_env;
+
+                // If envelope is fully released, mark voice inactive so it can retrigger
+                if (!voice_mut.env_amp.IsActive()) {
+                    allocator_.MarkVoiceInactive(v);
+                }
             }
             
             // Scale by voice count to prevent clipping
@@ -788,6 +793,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
             // Only check envelope state (not voice active flag) to detect true silence
             if (!lead_voice.env_amp.IsActive()) {
                 vca_gain = 0.0f;  // Envelope fully released = silence
+                allocator_.MarkVoiceInactive(0);
             }
         } else if (current_mode_ == dsp::SYNTH_MODE_POLYPHONIC) {
             // In POLY mode, voices have already been rendered with their individual envelopes
@@ -913,16 +919,16 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             // Restore the previously stored value for this destination
             // This allows switching between MOD HUB options and remembering each value
             if (v < MOD_NUM_DESTINATIONS) {
-                mod_hub_.SetValue(current_preset_.hub_values[v]);
+                mod_hub_.SetValueForDest(v, current_preset_.hub_values[v]);
             }
             
             current_preset_.params[id] = v;
             return;  // Hub handles its own state
             
-        case PARAM_MOD_AMT:
+        case PARAM_MOD_AMT: {
             // Hub amount: Store in hub and preset's hub_values array
             v = clamp_u8_int32(value, 0, 100);
-            mod_hub_.SetValue(v);  // Hub will clamp to destination's actual range
+            const int32_t actual_value = mod_hub_.SetValueAndGetClamped(v);
             
             // Store the ORIGINAL UI value (0-100), not the clamped value
             // This is critical for proper restoration when switching destinations
@@ -931,9 +937,6 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
                 if (dest < MOD_NUM_DESTINATIONS) {
                     // Store original 0-100 value for restoration later
                     current_preset_.hub_values[dest] = v;  // Store original, not clamped
-                    
-                    // Get the actual clamped value from the hub for DSP use
-                    int32_t actual_value = mod_hub_.GetValue(dest);
                     
                     // Apply specific destinations to DSP components immediately
                     switch (dest) {
@@ -958,6 +961,7 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
                 }
             }
             return;  // Hub handles its own state
+        }
             
         case PARAM_EFFECT:
             v = clamp_u8_int32(value, 0, 3);  // 0=CHORUS, 1=SPACE, 2=DRY, 3=BOTH
@@ -1118,7 +1122,7 @@ int32_t DrupiterSynth::GetParameter(uint8_t id) const {
     // Special handling for MOD HUB amount - return current destination's value
     if (id == PARAM_MOD_AMT) {
         uint8_t dest = current_preset_.params[PARAM_MOD_HUB];
-        return mod_hub_.GetValue(dest);
+        return mod_hub_.GetOriginalValue(dest);
     }
     
     if (id >= PARAM_COUNT) {
@@ -1170,10 +1174,7 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
                 return "";
             }
             
-            // Get the CLAMPED value from hub (destination-specific range)
-            // The raw slider value (0-100) must be converted to the destination's range
-            int32_t clamped_value = mod_hub_.GetValue(dest);
-            return mod_hub_.GetValueStringForDest(dest, clamped_value, modamt_buf, sizeof(modamt_buf));
+            return mod_hub_.GetCurrentValueString(modamt_buf, sizeof(modamt_buf));
         }
             
         case PARAM_EFFECT:
@@ -1221,6 +1222,7 @@ void DrupiterSynth::NoteOn(uint8_t note, uint8_t velocity) {
     allocator_.NoteOn(note, velocity);
     
     // Update main synth DSP state (for all modes - mono uses dco1_/dco2_, unison uses UnisonOscillator)
+    current_note_ = note;
     current_freq_hz_ = common::MidiHelper::NoteToFreq(note);
     current_velocity_ = velocity;
     
@@ -1236,26 +1238,39 @@ void DrupiterSynth::NoteOff(uint8_t note) {
 #endif
     
     // Route through voice allocator (Hoover v2.0)
+    // VoiceAllocator handles retrigger logic internally for voice-level state
     allocator_.NoteOff(note);
     
-    // Only trigger envelope release if no notes are still held
-    // In monophonic/unison modes, check if any keys are still down
-    bool has_held_notes = allocator_.HasHeldNotes();
-    
-    if (!has_held_notes) {
-        // No notes held - safe to release main envelopes
-        env_vca_.NoteOff();
-        env_vcf_.NoteOff();
+    // Update synth-level state for mono/unison modes
+    // In these modes, voice[0] is always the active voice
+    if (current_mode_ != dsp::SYNTH_MODE_POLYPHONIC) {
+        bool has_held_notes = allocator_.HasHeldNotes();
+        
+        if (has_held_notes) {
+            // Get the current note from voice allocator (it handles last-note priority)
+            const auto& voice = allocator_.GetVoice(0);
+            if (voice.active && voice.midi_note != current_note_) {
+                // Voice allocator retriggered to a different note
+                current_note_ = voice.midi_note;
+                current_freq_hz_ = common::MidiHelper::NoteToFreq(voice.midi_note);
+                
 #ifdef DEBUG
-        fprintf(stderr, "[Synth] No held notes, releasing main envelopes\n");
-        fflush(stderr);
+                fprintf(stderr, "[Synth] Synced to retriggered note %d (freq=%.2f Hz)\n",
+                        voice.midi_note, current_freq_hz_);
+                fflush(stderr);
 #endif
-    } else {
+            }
+        } else {
+            // No notes held - release main envelopes
+            env_vca_.NoteOff();
+            env_vcf_.NoteOff();
+            current_note_ = 0;
+            
 #ifdef DEBUG
-        fprintf(stderr, "[Synth] Notes still held (%d), keeping main envelopes open\n", 
-                has_held_notes);
-        fflush(stderr);
+            fprintf(stderr, "[Synth] No held notes, releasing main envelopes\n");
+            fflush(stderr);
 #endif
+        }
     }
 }
 
