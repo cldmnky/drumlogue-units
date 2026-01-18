@@ -690,6 +690,292 @@ Verify all per-voice filter states are flushed.
 
 ---
 
+## Phase 8: Keyboard Tracking & Cross Modulation (Detailed)
+
+**Status: ⏳ PLANNED**
+
+### 8.1 Keyboard Tracking Implementation
+
+**Current Code State:**
+
+From `jupiter_vcf.h` (lines 80-92):
+```cpp
+/**
+ * @brief Set keyboard tracking amount
+ * @param amount Tracking amount 0.0-1.0
+ */
+void SetKeyboardTracking(float amount);
+
+/**
+ * @brief Apply keyboard tracking for a note
+ * @param note MIDI note number
+ */
+void ApplyKeyboardTracking(uint8_t note);
+```
+
+**Lookup Table:**
+From `jupiter_vcf.cc`:
+```cpp
+static constexpr int kKbdTrackingTableSize = 128;  // One entry per MIDI note
+static float s_kbd_tracking_table[kKbdTrackingTableSize];  // Pre-calculated ratios
+```
+
+**Verification Checklist:**
+- [ ] Check `ApplyKeyboardTracking()` implementation in `jupiter_vcf.cc`
+  - Does it properly scale cutoff frequency?
+  - Is the lookup table calculation correct (1V/octave)?
+  - Are values available for full MIDI range (0-127)?
+  
+- [ ] Verify 0-120% range implementation
+  - Current parameter: `kbd_tracking_` (0.0-1.0)
+  - Expected: Minimum 100% (1V/octave), maximum 120%
+  - Implementation: `cutoff *= 1.0f + (kbd_tracking_ * 0.2f)` for 100-120% range
+  
+- [ ] Per-voice application in POLY mode
+  - Location: `drupiter_synth.cc` POLY render loop (~line 550)
+  - Needed: `voice.vcf.ApplyKeyboardTracking(voice.midi_note)` for each voice
+  - Verify: Each voice gets independent tracking
+
+**Code Changes Required:**
+
+File: `drupiter_synth.cc` (POLY render loop, ~line 550):
+```cpp
+// Before: No keyboard tracking per-voice
+float voice_output = voice_mix * voice_env;
+
+// After: Apply keyboard tracking per-voice
+voice.vcf.ApplyKeyboardTracking(voice.midi_note);  // ← Add this
+float filtered = voice.vcf.Process(voice_output);
+```
+
+### 8.2 Envelope Key Follow Implementation
+
+**Specification:**
+- Both ENV-1 and ENV-2 time scaling based on note
+- Typical: -0.5% per semitone (each octave reduces times by ~6%)
+- Purpose: Higher notes trigger faster envelopes (natural acoustic behavior)
+
+**Implementation:**
+
+File: `jupiter_env.h` (add method):
+```cpp
+/**
+ * @brief Apply keyboard follow scaling to envelope times
+ * @param note MIDI note number (0-127)
+ * Higher notes shorten Attack/Decay/Release times
+ */
+void ApplyKeyboardFollow(uint8_t note);
+```
+
+File: `jupiter_env.cc` (implement):
+```cpp
+void JupiterEnvelope::ApplyKeyboardFollow(uint8_t note) {
+    // Reference note: C3 (MIDI 36) = 1.0 (no scaling)
+    // Each octave up: multiply times by ~0.94 (6% reduction per octave)
+    const uint8_t ref_note = 36;  // C3
+    int semitone_offset = note - ref_note;
+    
+    // Scaling factor: 0.995^semitones
+    // At C4 (+12): ~0.941 (5.9% shorter)
+    // At C5 (+24): ~0.887 (11.3% shorter)
+    float scale = powf(0.995f, semitone_offset);
+    
+    // Apply to current times (in milliseconds)
+    attack_time_ms_ *= scale;
+    decay_time_ms_ *= scale;
+    release_time_ms_ *= scale;
+}
+```
+
+**POLY Mode Integration:**
+
+File: `drupiter_synth.cc` (POLY loop, ~line 530):
+```cpp
+// In POLY render loop after NoteOn:
+void TriggerVoice(dsp::Voice& voice, uint8_t note) {
+    // ... existing code ...
+    voice.env_amp.Trigger();
+    voice.env_filter.Trigger();
+    
+    // Apply keyboard follow scaling
+    voice.env_filter.ApplyKeyboardFollow(note);  // ← Add this
+    voice.env_amp.ApplyKeyboardFollow(note);     // ← Add this (optional)
+}
+```
+
+### 8.3 Cross Modulation (X-Mod) Implementation
+
+**Current Code State:**
+
+From `jupiter_dco.h` (lines 82-85):
+```cpp
+/**
+ * @brief Apply FM modulation
+ * @param fm_amount FM modulation amount (-1.0 to 1.0)
+ */
+void ApplyFM(float fm_amount);
+```
+
+**Requirements:**
+1. Parameter control: X-Mod Depth (0-100%)
+2. VCO-2 → VCO-1 routing in each voice
+3. Depth calibration: At slider 5 (50%), VCO-1 Range 2', shift = 3 octaves
+4. DC blocking for stable base pitch
+
+**Implementation Step 1: Add Parameter**
+
+File: `drupiter_synth.h` (parameter section):
+```cpp
+// Add to parameter definitions
+static constexpr uint8_t PARAM_XMOD_DEPTH = XX;  // Pick next available ID
+
+// Add to class member:
+float xmod_depth_;  // 0.0-1.0 representing 0-100% depth
+```
+
+**Implementation Step 2: Calibration Constant**
+
+File: `drupiter_synth.h` or `drupiter_synth.cc`:
+```cpp
+// X-Mod depth calibration
+// At depth=0.5 (nominal), VCO-1 range=2', modulation shifts pitch by 3 octaves
+// Scaling: 3 octaves ≈ 3 * log2(2) = 3 semitones * 12 = 36 semitones
+// Each semitone ≈ 0.05946 (frequency ratio 2^(1/12))
+// Empirical calibration: ~1.5 octaves per 100% depth
+static constexpr float kXModDepthCalibration = 1.5f;  // Octaves per 100%
+```
+
+**Implementation Step 3: POLY Rendering**
+
+File: `drupiter_synth.cc` (POLY loop, ~line 520-560):
+```cpp
+// In POLY render loop:
+for (uint8_t v = 0; v < DRUPITER_MAX_VOICES; v++) {
+    dsp::Voice& voice = allocator_.GetVoiceMutable(v);
+    if (!voice.active && !voice.env_amp.IsActive()) continue;
+
+    // Render VCO-2 first (modulation source)
+    float vco2_output = voice.dco2.Process();
+    
+    // Calculate X-Mod amount (with DC blocking)
+    float xmod_voltage = vco2_output * xmod_depth_ * kXModDepthCalibration;
+    
+    // Apply X-Mod to VCO-1 via FM input
+    // Note: ApplyFM() is called BEFORE Process() to modulate phase
+    voice.dco1.ApplyFM(xmod_voltage);
+    
+    // Process VCO-1 (now with frequency modulation from VCO-2)
+    float vco1_output = voice.dco1.Process();
+    
+    // Mix oscillators
+    float voice_mix = vco1_output * dco1_level + vco2_output * dco2_level;
+    
+    // Continue with envelope/filter/VCA processing...
+}
+```
+
+**Implementation Step 4: DC Blocking (Optional Enhancement)**
+
+File: `jupiter_dco.h` or `drupiter_synth.h`:
+```cpp
+// Simple DC blocker state
+struct XModDCBlocker {
+    float prev_input = 0.0f;
+    float prev_output = 0.0f;
+    
+    float Process(float input) {
+        // 1-pole high-pass: y[n] = input[n] - input[n-1] + alpha * y[n-1]
+        const float alpha = 0.99f;  // ~10Hz cutoff at 48kHz
+        float output = input - prev_input + alpha * prev_output;
+        prev_input = input;
+        prev_output = output;
+        return output;
+    }
+};
+```
+
+**Implementation Step 5: VCO-2 LFO Mode (Optional)**
+
+File: `drupiter_synth.h/cc`:
+```cpp
+enum VCO2Mode {
+    VCO2_NORMAL = 0,      // Full frequency range oscillator
+    VCO2_LFO = 1          // Low-frequency range (0.1 - 50 Hz)
+};
+
+// In POLY loop:
+if (vco2_mode_ == VCO2_LFO) {
+    // Scale frequency to LFO range (0.1 - 50 Hz)
+    float lfo_freq = voice.pitch_hz * (0.01f / 440.0f);  // Scale down
+    voice.dco2.SetFrequency(lfo_freq);
+}
+```
+
+### 8.4 Test Implementation
+
+File: `test/drupiter-synth/main.cc` (add Phase 8 tests):
+
+```cpp
+static bool TestKeyboardTrackingRange() {
+    // Test VCF keyboard tracking across MIDI range
+    dsp::VoiceAllocator allocator;
+    allocator.Init(48000.0f);
+    allocator.SetMode(dsp::SYNTH_MODE_MONOPHONIC);
+    
+    // Set base cutoff at C3 (MIDI 36)
+    allocator.NoteOn(36, 100);
+    dsp::Voice& voice = allocator.GetVoiceMutable(0);
+    voice.vcf.SetCutoff(1000.0f);  // Reference cutoff
+    voice.vcf.SetKeyboardTracking(1.0f);  // Full tracking
+    
+    float cutoff_c3 = 1000.0f;
+    
+    // Test at C7 (MIDI 84 = C3 + 48 semitones = 4 octaves)
+    allocator.NoteOn(84, 100);
+    voice.vcf.ApplyKeyboardTracking(84);
+    
+    // Expected: cutoff_c7 = cutoff_c3 * 2^4 = 16000 Hz (1V/octave tracking)
+    // With 120% tracking: expected ≈ 20000 Hz
+    
+    // Measure frequency response (verify filter cutoff shift)
+    // ... implementation details ...
+    
+    return true;
+}
+
+static bool TestXModDepthCalibration() {
+    // Test X-Mod depth produces correct pitch shift
+    dsp::VoiceAllocator allocator;
+    allocator.Init(48000.0f);
+    allocator.SetMode(dsp::SYNTH_MODE_MONOPHONIC);
+    
+    allocator.NoteOn(60, 100);  // C4 = 260.6 Hz
+    dsp::Voice& voice = allocator.GetVoiceMutable(0);
+    
+    // VCO-1 at 2' (16 ft) range: ~65 Hz base
+    voice.dco1.SetFrequency(65.0f);
+    voice.dco2.SetFrequency(65.0f);  // Modulation source
+    
+    // X-Mod at nominal depth should shift by ~3 octaves
+    // Expected: 65 Hz * 2^3 = 520 Hz modulation range
+    
+    // ... verify pitch shift with spectral analysis ...
+    
+    return true;
+}
+
+static bool TestEnvelopeKeyFollow() {
+    // Test envelope time scaling with note
+    // Higher notes should have shorter attack/decay/release times
+    
+    // ... implementation ...
+    
+    return true;
+}
+```
+
+---
+
 ## Open Questions
 
 1. **HPF Order Independence Test:** Why does note order affect output level by 7.3x? Voice allocation issue or test problem?
@@ -698,10 +984,14 @@ Verify all per-voice filter states are flushed.
 4. **VCF ENV source:** Add ENV-1/ENV-2 selection or always use `env_filter` in POLY?
 5. **VCA LFO:** Keep continuous or quantize to 4 steps for JP-8 authenticity?
 6. **LFO key trigger:** Add as MOD HUB option or dedicated parameter?
+7. **X-Mod Calibration:** What is empirical VCO-2 output amplitude range for accurate 3-octave shift measurement?
+8. **Envelope Key Follow Rate:** Is -0.5% per semitone correct, or should it be different for each envelope?
 
 ### Resolved Questions
 
 ✅ **HPF placement:** Implemented per-voice (authentic JP-8 architecture) with shared bypass in POLY mode
+✅ **Keyboard Tracking:** Lookup table approach implemented in JupiterVCF
+✅ **Cross Modulation:** ApplyFM() method exists in JupiterDCO for VCO-2 → VCO-1 routing
 
 ---
 
