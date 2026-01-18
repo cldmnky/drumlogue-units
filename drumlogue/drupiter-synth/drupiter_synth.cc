@@ -278,6 +278,9 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     cutoff_smooth_.SetTarget(current_preset_.params[PARAM_VCF_CUTOFF] / 100.0f);
     dco1_level_smooth_.SetTarget(dco1_level_target);
     dco2_level_smooth_.SetTarget(dco2_level_target);
+
+    // VCF resonance (0.0 - 1.0)
+    const float resonance = current_preset_.params[PARAM_VCF_RESONANCE] / 100.0f;
     
     // Process MIDI modulation smoothing per-buffer
     // Pitch bend and pressure are smoothed to avoid zipper noise
@@ -450,6 +453,22 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         
         // Apply modulated pulse width, clamped to safe range (10%-90%)
         float modulated_pw = clampf(base_pw + pw_mod, 0.1f, 0.9f);
+
+        // ============================================================
+        // Pre-calculate cutoff base for this frame (shared across voices)
+        // ============================================================
+        const float cutoff_norm = cutoff_smooth_.Process();
+
+        // Jupiter-8 style cutoff mapping:
+        // - At 0%: ~100Hz (closed, but still audible/usable)
+        // - At 50%: ~1kHz (typical starting point)
+        // - At 100%: ~12kHz (fully open)
+        // Use a combination of linear and exponential mapping for musical control
+        const float linear_blend = 0.15f;  // 15% linear, 85% exponential
+        const float exp_portion = fast_pow2(cutoff_norm * 7.0f);  // 2^7 = 128x range
+        const float lin_portion = 1.0f + cutoff_norm * 127.0f;     // 1 to 128 linear
+        const float cutoff_mult = linear_blend * lin_portion + (1.0f - linear_blend) * exp_portion;
+        const float cutoff_base_nominal = 100.0f * cutoff_mult;  // 100Hz * multiplier
         
 #ifdef DEBUG
         static uint32_t debug_frame_counter = 0;
@@ -595,15 +614,63 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
                 }
 #endif
                 
-                // Apply voice envelope
-                float voice_output = voice_mix * voice_env;
-                
+                // ============================================================
+                // PHASE 1: Per-voice VCF processing (polyphonic mode)
+                // ============================================================
+                const float voice_vcf_env = voice_mut.env_filter.Process();
+
+                // Apply per-voice HPF (Phase 2: one-pole high-pass filter)
+                float voice_hpf_out = voice_mix;
+                if (hpf_alpha > 0.0f) {
+                    voice_hpf_out = hpf_alpha * (voice_mut.hpf_prev_output + voice_mix - voice_mut.hpf_prev_input);
+                    voice_mut.hpf_prev_output = voice_hpf_out;
+                    voice_mut.hpf_prev_input = voice_mix;
+                }
+
+                // Apply per-voice keyboard tracking
+                float voice_cutoff_base = cutoff_base_nominal;
+                const float voice_note_offset = (static_cast<int32_t>(voice.midi_note) - 60) / 12.0f;
+                const float voice_tracking_exponent = voice_note_offset * key_track;
+                const float voice_clamped_exponent = (voice_tracking_exponent > 4.0f) ? 4.0f :
+                                                     (voice_tracking_exponent < -4.0f) ? -4.0f : voice_tracking_exponent;
+                voice_cutoff_base *= semitones_to_ratio(voice_clamped_exponent * 12.0f);
+
+                // Per-voice velocity modulation for VCF (0-50% scaled)
+                const float voice_vel_mod = (voice.velocity / 127.0f) * 0.5f;
+
+                // Combine envelope, LFO, velocity, and pressure modulation (shared sources)
+                float voice_total_mod = voice_vcf_env * 2.0f              // Base envelope modulation
+                                      + env_vcf_depth * voice_vcf_env     // Hub envelope.VCF modulation
+                                      + lfo_out_ * lfo_vcf_depth * 1.0f    // LFO modulation
+                                      + voice_vel_mod * 2.0f              // Velocity adds up to +2 octaves
+                                      + smoothed_pressure * 1.0f;         // Channel pressure adds up to +1 octave
+
+                // Clamp modulation depth to avoid extreme cutoff values.
+                if (voice_total_mod > 3.0f) voice_total_mod = 3.0f;
+                else if (voice_total_mod < -3.0f) voice_total_mod = -3.0f;
+
+                // Apply modulation to cutoff base
+                const float voice_cutoff_modulated = voice_cutoff_base * fast_pow2(voice_total_mod);
+
+                // Set per-voice filter parameters and process
+                voice_mut.vcf.SetCutoffModulated(voice_cutoff_modulated);
+                voice_mut.vcf.SetResonance(resonance);
+                voice_mut.vcf.SetMode(vcf_mode);
+
+                float voice_filtered = voice_hpf_out;
+                if (current_preset_.params[PARAM_VCF_CUTOFF] < 100) {
+                    voice_filtered = voice_mut.vcf.Process(voice_hpf_out);
+                }
+
+                // Apply voice envelope (VCA)
+                float voice_output = voice_filtered * voice_env;
+
                 // Apply velocity scaling to VCA amplitude (soft hits quieter, loud hits louder)
                 // Map velocity 0-127 to VCA multiplier 0.2-1.0 (soft hits still audible)
                 const float voice_vca_gain = 0.2f + (voice.velocity / 127.0f) * 0.8f;  // 0.2 to 1.0
                 voice_output *= voice_vca_gain;
-                
-                // Add velocity-scaled voice to mix (VCF will be applied globally after mixing)
+
+                // Add filtered, velocity-scaled voice to mix
                 mixed_ += voice_output;
 
                 // If envelope is fully released, mark voice inactive so it can retrigger
@@ -757,30 +824,16 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         }
         
         // Apply filter with smoothed cutoff, envelope, and LFO modulation
-        const float cutoff_norm = cutoff_smooth_.Process();
+        // NOTE: cutoff_base is pre-calculated earlier in the frame for shared and per-voice use.
         
-        // Jupiter-8 style cutoff mapping:
-        // - At 0%: ~100Hz (closed, but still audible/usable)
-        // - At 50%: ~1kHz (typical starting point)
-        // - At 100%: ~12kHz (fully open)
-        // Use a combination of linear and exponential mapping for musical control
-        // 
-        // Map 0-1 to cover ~7 octaves (100Hz to 12.8kHz)
-        // Linear portion at low end prevents the filter from getting "stuck" closed
-        const float linear_blend = 0.15f;  // 15% linear, 85% exponential
-        const float exp_portion = fast_pow2(cutoff_norm * 7.0f);  // 2^7 = 128x range
-        const float lin_portion = 1.0f + cutoff_norm * 127.0f;     // 1 to 128 linear
-        const float cutoff_mult = linear_blend * lin_portion + (1.0f - linear_blend) * exp_portion;
-        float cutoff_base = 100.0f * cutoff_mult;  // 100Hz * multiplier
-
-        // Keyboard tracking (from MOD HUB)
+        // Apply keyboard tracking for MONO/UNISON modes (shared filter path)
+        float cutoff_base = cutoff_base_nominal;
         const float note_offset = (static_cast<int32_t>(current_note_) - 60) / 12.0f;
-        // Clamp tracking exponent to ±4 octaves to prevent numerical issues
         const float tracking_exponent = note_offset * key_track;
-        const float clamped_exponent = (tracking_exponent > 4.0f) ? 4.0f : 
-                                      (tracking_exponent < -4.0f) ? -4.0f : tracking_exponent;
-        cutoff_base *= semitones_to_ratio(clamped_exponent * 12.0f);  // Fast approx
-        
+        const float clamped_exponent = (tracking_exponent > 4.0f) ? 4.0f :
+                          (tracking_exponent < -4.0f) ? -4.0f : tracking_exponent;
+        cutoff_base *= semitones_to_ratio(clamped_exponent * 12.0f);
+
         // Combine envelope, LFO, velocity, and hub modulation
         // For POLY mode: Use velocity from current_velocity_ (simplified - single shared VCF cutoff)
         // This matches the architecture where all poly voices feed through one shared VCF
@@ -808,8 +861,11 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         
         // Filter mode already set before loop (vcf_mode)
         
-        // Bypass VCF when cutoff is at maximum (100) to avoid filter ringing artifacts
-        if (current_preset_.params[PARAM_VCF_CUTOFF] >= 100) {
+        // In POLY mode: VCF already applied per-voice, skip shared VCF
+        if (current_mode_ == dsp::SYNTH_MODE_POLYPHONIC) {
+            filtered_ = hpf_out;  // Use only HPF output
+        } else if (current_preset_.params[PARAM_VCF_CUTOFF] >= 100) {
+            // Bypass VCF when cutoff is at maximum (100) to avoid filter ringing artifacts
             filtered_ = hpf_out;  // Bypass LPF, but keep HPF processing
         } else {
             #ifdef PERF_MON
@@ -834,7 +890,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         // In POLY mode, voices already rendered with velocity scaling - no additional velocity processing
         // In UNISON mode, use voice 0's envelope and velocity
         // In MONO mode, use main env_vca_ and current_velocity_
-        float vca_gain = vca_env_out_;
+        float vca_gain = (current_mode_ == dsp::SYNTH_MODE_POLYPHONIC) ? 1.0f : vca_env_out_;
         
         // Apply velocity scaling to VCA for MONO/UNISON modes
         // POLY mode already applied per-voice velocity scaling above
@@ -859,7 +915,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         } else if (current_mode_ == dsp::SYNTH_MODE_POLYPHONIC) {
             // In POLY mode, voices have already been rendered with their individual envelopes
             // Each voice applied its own envelope at line 473, so no additional envelope processing here
-            // Just use base VCA gain of 1.0 for global modulation (tremolo, keyboard tracking)
+            // Keep base VCA gain at 1.0f (poly mix already normalized above)
             vca_gain = 1.0f;
         }
         

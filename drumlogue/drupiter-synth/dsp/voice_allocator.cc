@@ -61,6 +61,8 @@ void Voice::Reset() {
 	velocity = 0.0f;
 	pitch_hz = 0.0f;
 	note_on_time = 0;
+	hpf_prev_output = 0.0f;
+	hpf_prev_input = 0.0f;
 	env_amp.Reset();
 	env_filter.Reset();
 	env_pitch.Reset();
@@ -342,6 +344,8 @@ void VoiceAllocator::TriggerVoice(Voice* voice, uint8_t note, uint8_t velocity, 
 		voice->env_amp.Reset();
 		voice->env_filter.Reset();
 		voice->env_pitch.Reset();
+		voice->hpf_prev_output = 0.0f;  // Reset per-voice HPF state
+		voice->hpf_prev_input = 0.0f;
 		voice->env_amp.NoteOn();
 		voice->env_filter.NoteOn();
 		voice->env_pitch.NoteOn();

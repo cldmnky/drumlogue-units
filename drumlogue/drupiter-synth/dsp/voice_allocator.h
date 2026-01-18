@@ -55,12 +55,17 @@ struct Voice {
 	JupiterEnvelope env_filter;
 	JupiterEnvelope env_pitch;
 
+	// Per-voice HPF state (Phase 2)
+	float hpf_prev_output;
+	float hpf_prev_input;
+
 	float glide_target_hz;
 	float glide_increment;
 	bool is_gliding;
 
 	Voice() : active(false), midi_note(0), velocity(0.0f),
 			  pitch_hz(0.0f), note_on_time(0),
+			  hpf_prev_output(0.0f), hpf_prev_input(0.0f),
 			  glide_target_hz(0.0f), glide_increment(0.0f), is_gliding(false) {}
 
 	void Init(float sample_rate);

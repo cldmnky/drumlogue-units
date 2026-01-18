@@ -340,6 +340,15 @@ public:
      */
     const char* GetPresetName(uint8_t preset_id) const;
 
+    /**
+     * @brief Set synthesis mode directly (for testing only)
+     * @param mode Synthesis mode (MONO/POLY/UNISON)
+     */
+    void SetSynthesisMode(dsp::SynthMode mode) {
+        current_mode_ = mode;
+        allocator_.SetMode(mode);
+    }
+
 private:
     // Voice allocator (Hoover v2.0)
     dsp::VoiceAllocator allocator_;

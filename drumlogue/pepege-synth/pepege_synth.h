@@ -292,7 +292,13 @@ public:
         return k_unit_err_none;
     }
 #else
-    // Test-friendly Init method
+    // Test-friendly Init method (supports both SDK descriptor and float sample rate)
+    int8_t Init(const unit_runtime_desc_t* desc) {
+        if (!desc) return -1;
+        Init(desc->samplerate);
+        return 0;
+    }
+    
     void Init(float sample_rate = 48000.0f) {
         sample_rate_ = sample_rate;
         inv_sample_rate_ = 1.0f / sample_rate_;

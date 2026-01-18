@@ -250,10 +250,8 @@ float JupiterDCO::GenerateWaveform(float phase, float phase_inc) {
         
         case WAVEFORM_SQUARE:
         {
-            float value = LookupWavetable(square_table_, phase);
-            value += PolyBlep(phase, dt);                           // rising edge at 0
-            value -= PolyBlep(WrapPhase(phase + 0.5f), dt);         // falling edge at 0.5
-            return value;
+            // Use wavetable for band-limited square wave (no PolyBLEP needed)
+            return LookupWavetable(square_table_, phase);
         }
         
         case WAVEFORM_PULSE: {
@@ -265,6 +263,7 @@ float JupiterDCO::GenerateWaveform(float phase, float phase_inc) {
         }
         
         case WAVEFORM_TRIANGLE:
+            // Use wavetable for clean triangle wave (no PolyBLEP needed)
             return LookupWavetable(triangle_table_, phase);
         
         case WAVEFORM_SAW_PWM:
