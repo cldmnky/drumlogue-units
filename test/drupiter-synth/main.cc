@@ -4,6 +4,10 @@
 #include <iostream>
 #include <vector>
 #include <cmath>
+#include <filesystem>
+#include <cstring>
+
+#include <sndfile.h>
 
 #include "unit.h"
 
@@ -171,6 +175,56 @@ static float ComputeRms(const std::vector<float>& buffer) {
     return static_cast<float>(sqrt(sum / buffer.size()));
 }
 
+static std::vector<float> ComputeWindowRms(const std::vector<float>& buffer,
+                                           uint32_t channels,
+                                           uint32_t window_frames) {
+    std::vector<float> rms_values;
+    if (channels == 0 || window_frames == 0) {
+        return rms_values;
+    }
+
+    const uint32_t total_frames = static_cast<uint32_t>(buffer.size() / channels);
+    for (uint32_t start = 0; start + window_frames <= total_frames; start += window_frames) {
+        double sum = 0.0;
+        for (uint32_t f = 0; f < window_frames; ++f) {
+            for (uint32_t ch = 0; ch < channels; ++ch) {
+                float sample = buffer[(start + f) * channels + ch];
+                sum += sample * sample;
+            }
+        }
+        const double mean = sum / (window_frames * channels);
+        rms_values.push_back(static_cast<float>(sqrt(mean)));
+    }
+    return rms_values;
+}
+
+static bool WriteWavFile(const std::string& path,
+                         const std::vector<float>& buffer,
+                         uint32_t sample_rate,
+                         uint32_t channels) {
+    SF_INFO info = {};
+    info.samplerate = static_cast<int>(sample_rate);
+    info.channels = static_cast<int>(channels);
+    info.format = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
+
+    SNDFILE* snd = sf_open(path.c_str(), SFM_WRITE, &info);
+    if (!snd) {
+        std::cout << "ERROR: Could not open WAV for write: " << path
+                  << " (" << sf_strerror(nullptr) << ")" << std::endl;
+        return false;
+    }
+
+    const sf_count_t frames = static_cast<sf_count_t>(buffer.size() / channels);
+    const sf_count_t written = sf_writef_float(snd, buffer.data(), frames);
+    sf_close(snd);
+
+    if (written != frames) {
+        std::cout << "ERROR: WAV write incomplete (" << written << "/" << frames << ")" << std::endl;
+        return false;
+    }
+    return true;
+}
+
 static void ConfigureSynthForVelocityTest(DrupiterSynth& synth) {
     // Set VCF cutoff to max so filter is bypassed (focus on VCA amplitude)
     synth.SetParameter(DrupiterSynth::PARAM_VCF_CUTOFF, 100);
@@ -233,6 +287,46 @@ static float RenderVelocityRmsForMode(dsp::SynthMode mode, uint8_t velocity) {
     return ComputeRms(buffer);
 }
 
+static std::vector<float> RenderVelocityBufferForMode(dsp::SynthMode mode,
+                                                      uint8_t velocity,
+                                                      float seconds) {
+    DrupiterSynth synth;
+
+    unit_runtime_desc_t desc = {};
+    desc.samplerate = 48000;
+    desc.frames_per_buffer = 64;
+    desc.input_channels = 0;
+    desc.output_channels = 2;
+
+    if (synth.Init(&desc) != 0) {
+        return {};
+    }
+
+    ConfigureSynthForVelocityTest(synth);
+
+    synth.SetHubValue(MOD_SYNTH_MODE, static_cast<uint8_t>(mode));
+    std::vector<float> buffer(desc.frames_per_buffer * 2, 0.0f);
+    synth.Render(buffer.data(), desc.frames_per_buffer);
+
+    synth.NoteOn(60, velocity);
+
+    const uint32_t total_frames = static_cast<uint32_t>(seconds * desc.samplerate);
+    std::vector<float> output(total_frames * desc.output_channels, 0.0f);
+
+    uint32_t written_frames = 0;
+    while (written_frames < total_frames) {
+        const uint32_t frames = std::min(static_cast<uint32_t>(desc.frames_per_buffer),
+                         total_frames - written_frames);
+        synth.Render(buffer.data(), frames);
+        std::memcpy(&output[written_frames * desc.output_channels],
+                    buffer.data(),
+                    frames * desc.output_channels * sizeof(float));
+        written_frames += frames;
+    }
+
+    return output;
+}
+
 static bool TestVelocityAcrossModes() {
     std::cout << "\n=== Testing Velocity Response Across Modes ===" << std::endl;
 
@@ -270,6 +364,94 @@ static bool TestVelocityAcrossModes() {
     }
 
     std::cout << "✓ Velocity response across modes PASSED" << std::endl;
+    return true;
+}
+
+static bool TestVelocityWavAnalysis() {
+    std::cout << "\n=== Velocity WAV Envelope + RMS Analysis ===" << std::endl;
+
+    std::filesystem::create_directories("fixtures");
+
+    struct ModeCase {
+        dsp::SynthMode mode;
+        const char* name;
+    } modes[] = {
+        { dsp::SYNTH_MODE_MONOPHONIC, "mono" },
+        { dsp::SYNTH_MODE_POLYPHONIC, "poly" },
+        { dsp::SYNTH_MODE_UNISON, "unison" }
+    };
+
+    const uint8_t velocity_soft = 20;
+    const uint8_t velocity_loud = 110;
+    const float duration_sec = 1.0f;
+    const uint32_t sample_rate = 48000;
+    const uint32_t channels = 2;
+    const uint32_t window_frames = static_cast<uint32_t>(0.02f * sample_rate);  // 20ms windows
+
+    for (const auto& mode_case : modes) {
+        const std::string soft_path = std::string("fixtures/velocity_") + mode_case.name + "_soft.wav";
+        const std::string loud_path = std::string("fixtures/velocity_") + mode_case.name + "_loud.wav";
+
+        auto soft_buffer = RenderVelocityBufferForMode(mode_case.mode, velocity_soft, duration_sec);
+        auto loud_buffer = RenderVelocityBufferForMode(mode_case.mode, velocity_loud, duration_sec);
+
+        if (soft_buffer.empty() || loud_buffer.empty()) {
+            std::cout << "ERROR: Failed to render velocity buffers for " << mode_case.name << std::endl;
+            return false;
+        }
+
+        if (!WriteWavFile(soft_path, soft_buffer, sample_rate, channels)) {
+            return false;
+        }
+        if (!WriteWavFile(loud_path, loud_buffer, sample_rate, channels)) {
+            return false;
+        }
+
+        const float soft_rms = ComputeRms(soft_buffer);
+        const float loud_rms = ComputeRms(loud_buffer);
+
+        std::cout << "  " << mode_case.name << ": RMS soft=" << soft_rms
+                  << " RMS loud=" << loud_rms << std::endl;
+
+        if (loud_rms <= soft_rms * 1.5f) {
+            std::cout << "ERROR: " << mode_case.name
+                      << " loud RMS not sufficiently higher than soft" << std::endl;
+            return false;
+        }
+
+        auto soft_env = ComputeWindowRms(soft_buffer, channels, window_frames);
+        auto loud_env = ComputeWindowRms(loud_buffer, channels, window_frames);
+
+        if (soft_env.size() < 3 || loud_env.size() < 3) {
+            std::cout << "ERROR: Envelope analysis windows too small" << std::endl;
+            return false;
+        }
+
+        auto AnalyzeEnvelope = [](const std::vector<float>& env, const char* label) {
+            float min_env = env[0];
+            float max_env = env[0];
+            for (size_t i = 2; i < env.size(); ++i) {  // skip first 2 windows (attack transient)
+                min_env = std::min(min_env, env[i]);
+                max_env = std::max(max_env, env[i]);
+            }
+            std::cout << "    " << label << " env min=" << min_env
+                      << " max=" << max_env << std::endl;
+            if (max_env > min_env * 1.5f) {
+                std::cout << "ERROR: Envelope unstable (" << label << ")" << std::endl;
+                return false;
+            }
+            return true;
+        };
+
+        if (!AnalyzeEnvelope(soft_env, "soft")) {
+            return false;
+        }
+        if (!AnalyzeEnvelope(loud_env, "loud")) {
+            return false;
+        }
+    }
+
+    std::cout << "✓ Velocity WAV analysis PASSED (fixtures/*.wav generated)" << std::endl;
     return true;
 }
 
@@ -878,6 +1060,9 @@ int main(int argc, char** argv) {
         ok = false;
     }
     if (!TestVelocityAcrossModes()) {
+        ok = false;
+    }
+    if (!TestVelocityWavAnalysis()) {
         ok = false;
     }
     if (!TestPitchBendRange()) {
