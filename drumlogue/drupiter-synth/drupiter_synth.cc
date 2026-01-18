@@ -173,6 +173,12 @@ int8_t DrupiterSynth::Init(const unit_runtime_desc_t* desc) {
     dco1_level_smooth_.Init(0.0f, 0.01f);    // DCO1 level - faster smoothing
     dco2_level_smooth_.Init(0.0f, 0.01f);    // DCO2 level - faster smoothing
     
+    // Initialize MIDI modulation smoothing (per-buffer processing)
+    pitch_bend_smooth_.Init(0.0f, 0.005f);   // Pitch bend - slow for smooth vibrato
+    pressure_smooth_.Init(0.0f, 0.01f);      // Channel pressure - medium smoothing for swell
+    pitch_bend_semitones_ = 0.0f;
+    channel_pressure_normalized_ = 0.0f;
+    
     // Initialize chorus effect (delay-based stereo spread)
     space_widener_.Init(sample_rate_);
     space_widener_.SetDelayTime(15.0f);      // 15ms base delay
@@ -261,6 +267,11 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     cutoff_smooth_.SetTarget(current_preset_.params[PARAM_VCF_CUTOFF] / 100.0f);
     dco1_level_smooth_.SetTarget(dco1_level_target);
     dco2_level_smooth_.SetTarget(dco2_level_target);
+    
+    // Process MIDI modulation smoothing per-buffer
+    // Pitch bend and pressure are smoothed to avoid zipper noise
+    const float smoothed_pitch_bend = pitch_bend_smooth_.Process();   // -2 to +2 semitones
+    const float smoothed_pressure = pressure_smooth_.Process();        // 0.0 to 1.0
     
     // Pre-calculate DCO constants from direct params
     // DCO1: 0=16', 1=8', 2=4'
@@ -603,6 +614,12 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
                 unison_freq *= lfo_mod;
             }
             
+            // Apply pitch bend modulation (smooth per-buffer from MIDI wheel)
+            if (smoothed_pitch_bend != 0.0f) {
+                const float pitch_bend_ratio = semitones_to_ratio(smoothed_pitch_bend);
+                unison_freq *= pitch_bend_ratio;
+            }
+            
             // Apply pitch envelope modulation (pre-calculated)
             unison_freq *= pitch_mod_ratio;
             
@@ -645,6 +662,13 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
                 const float lfo_mod = 1.0f + lfo_out_ * lfo_vco_depth * 0.05f;  // ±5% vibrato
                 freq1 *= lfo_mod;
                 freq2 *= lfo_mod;
+            }
+            
+            // Apply pitch bend modulation (smooth per-buffer from MIDI wheel)
+            if (smoothed_pitch_bend != 0.0f) {
+                const float pitch_bend_ratio = semitones_to_ratio(smoothed_pitch_bend);
+                freq1 *= pitch_bend_ratio;
+                freq2 *= pitch_bend_ratio;
             }
             
             // Apply pitch envelope modulation (pre-calculated)
@@ -742,7 +766,8 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         float total_mod = vcf_env_out_ * 2.0f              // Base envelope modulation
                         + env_vcf_depth * vcf_env_out_     // Hub envelope.VCF modulation
                         + lfo_out_ * lfo_vcf_depth * 1.0f  // LFO modulation
-                        + vel_mod * 2.0f;                   // Velocity adds up to +2 octaves
+                        + vel_mod * 2.0f                   // Velocity adds up to +2 octaves
+                        + smoothed_pressure * 1.0f;        // Channel pressure adds up to +1 octave
 
         // Clamp modulation depth to avoid extreme cutoff values.
         if (total_mod > 3.0f) total_mod = 3.0f;
@@ -1299,6 +1324,33 @@ void DrupiterSynth::NoteOff(uint8_t note) {
 void DrupiterSynth::AllNoteOff() {
     // Route through voice allocator (Hoover v2.0)
     allocator_.AllNotesOff();
+}
+
+void DrupiterSynth::PitchBend(uint16_t bend) {
+    // Convert MIDI pitch bend (0-16383, center=8192) to semitones (±2 range)
+    using common::MidiHelper;
+    pitch_bend_semitones_ = MidiHelper::PitchBendToSemitones(bend, 2.0f);
+    
+    // Set smoothing target for per-buffer processing
+    // 0.005f coefficient: ~200ms smoothing, musical vibrato response
+    pitch_bend_smooth_.SetTarget(pitch_bend_semitones_);
+}
+
+void DrupiterSynth::ChannelPressure(uint8_t pressure) {
+    // Convert MIDI channel pressure (0-127) to normalized float (0.0-1.0)
+    using common::MidiHelper;
+    channel_pressure_normalized_ = MidiHelper::PressureToFloat(pressure);
+    
+    // Set smoothing target for per-buffer processing
+    // 0.01f coefficient: ~100ms smoothing, smooth swell response
+    pressure_smooth_.SetTarget(channel_pressure_normalized_);
+}
+
+void DrupiterSynth::Aftertouch(uint8_t note, uint8_t aftertouch) {
+    // Simplified monophonic implementation:
+    // Only apply aftertouch for the currently playing note
+    (void)note;  // For polyphonic support, would track per-voice
+    ChannelPressure(aftertouch);
 }
 
 void DrupiterSynth::LoadPreset(uint8_t preset_id) {
