@@ -173,6 +173,17 @@ int8_t DrupiterSynth::Init(const unit_runtime_desc_t* desc) {
     dco1_level_smooth_.Init(0.0f, 0.01f);    // DCO1 level - faster smoothing
     dco2_level_smooth_.Init(0.0f, 0.01f);    // DCO2 level - faster smoothing
     
+    // Initialize knob catch mechanism (start at 0, will be set by preset load)
+    catch_cutoff_.Init(0);
+    catch_mix_.Init(0);
+    catch_reso_.Init(0);
+    catch_keyflw_.Init(0);
+    catch_dco1_pw_.Init(0);
+    catch_dco2_tune_.Init(50);    // Center position for bipolar detune
+    catch_xmod_.Init(0);
+    catch_lfo_rate_.Init(0);
+    catch_mod_amt_.Init(0);
+    
     // Initialize MIDI modulation smoothing (per-buffer processing)
     pitch_bend_smooth_.Init(0.0f, 0.005f);   // Pitch bend - slow for smooth vibrato
     pressure_smooth_.Init(0.0f, 0.01f);      // Channel pressure - medium smoothing for swell
@@ -958,7 +969,8 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
         case PARAM_MOD_AMT: {
             // Hub amount: Store in hub and preset's hub_values array
             v = clamp_u8_int32(value, 0, 100);
-            const int32_t actual_value = mod_hub_.SetValueAndGetClamped(v);
+            int32_t caught_v = catch_mod_amt_.Update(v);
+            const int32_t actual_value = mod_hub_.SetValueAndGetClamped(caught_v);
             
             // Store the ORIGINAL UI value (0-100), not the clamped value
             // This is critical for proper restoration when switching destinations
@@ -1020,10 +1032,16 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             }
             break;
         case PARAM_DCO1_PW:
-            dco1_.SetPulseWidth(v / 100.0f);
+            {
+                int32_t caught_value = catch_dco1_pw_.Update(v);
+                dco1_.SetPulseWidth(caught_value / 100.0f);
+            }
             break;
         case PARAM_XMOD:
-            xmod_depth_ = v / 100.0f;
+            {
+                int32_t caught_value = catch_xmod_.Update(v);
+                xmod_depth_ = caught_value / 100.0f;
+            }
             break;
             
         // ======== Page 2: DCO-2 ========
@@ -1040,7 +1058,10 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             }
             break;
         case PARAM_DCO2_TUNE:
-            // Detune handled in Render()
+            {
+                int32_t caught_value = catch_dco2_tune_.Update(v);
+                current_preset_.params[id] = caught_value;  // Update with caught value
+            }
             break;
         case PARAM_SYNC:
             sync_mode_ = v;
@@ -1048,18 +1069,28 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             
         // ======== Page 3: MIX & VCF ========
         case PARAM_OSC_MIX:
-            // Mix handled in Render() with smoothing
+            {
+                int32_t caught_value = catch_mix_.Update(v);
+                current_preset_.params[id] = caught_value;  // Update with caught value
+            }
             break;
         case PARAM_VCF_CUTOFF:
             {
-                cutoff_smooth_.SetTarget(v / 100.0f);
+                int32_t caught_value = catch_cutoff_.Update(v);
+                cutoff_smooth_.SetTarget(caught_value / 100.0f);
             }
             break;
         case PARAM_VCF_RESONANCE:
-            vcf_.SetResonance(v / 100.0f);
+            {
+                int32_t caught_value = catch_reso_.Update(v);
+                vcf_.SetResonance(caught_value / 100.0f);
+            }
             break;
         case PARAM_VCF_KEYFLW:
-            // Keyboard tracking handled in Render()
+            {
+                int32_t caught_value = catch_keyflw_.Update(v);
+                current_preset_.params[id] = caught_value;  // Update with caught value
+            }
             break;
         
         // ======== Page 4: VCF Envelope ========
@@ -1133,7 +1164,10 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
         
         // ======== Page 6: LFO, MOD HUB & Effects ========
         case PARAM_LFO_RATE:
-            lfo_.SetFrequency(ParameterToExponentialFreq(v, 0.1f, 20.0f));
+            {
+                int32_t caught_value = catch_lfo_rate_.Update(v);
+                lfo_.SetFrequency(ParameterToExponentialFreq(caught_value, 0.1f, 20.0f));
+            }
             break;
         case PARAM_MOD_HUB:
         case PARAM_MOD_AMT:
@@ -1369,6 +1403,24 @@ void DrupiterSynth::LoadPreset(uint8_t preset_id) {
     // Set smoothed parameters immediately (no smoothing during preset load)
     {
         cutoff_smooth_.SetImmediate(current_preset_.params[PARAM_VCF_CUTOFF] / 100.0f);
+    }
+    
+    // Initialize catchable values with preset values (assume knob = preset initially)
+    // This prevents catching until the knob is actually moved away from preset value
+    catch_cutoff_.Init(current_preset_.params[PARAM_VCF_CUTOFF]);
+    catch_mix_.Init(current_preset_.params[PARAM_OSC_MIX]);
+    catch_reso_.Init(current_preset_.params[PARAM_VCF_RESONANCE]);
+    catch_keyflw_.Init(current_preset_.params[PARAM_VCF_KEYFLW]);
+    catch_dco1_pw_.Init(current_preset_.params[PARAM_DCO1_PW]);
+    catch_dco2_tune_.Init(current_preset_.params[PARAM_DCO2_TUNE]);
+    catch_xmod_.Init(current_preset_.params[PARAM_XMOD]);
+    catch_lfo_rate_.Init(current_preset_.params[PARAM_LFO_RATE]);
+    // MOD_AMT: Initialize with the current destination's hub value
+    {
+        uint8_t dest = current_preset_.params[PARAM_MOD_HUB];
+        if (dest < MOD_NUM_DESTINATIONS) {
+            catch_mod_amt_.Init(current_preset_.hub_values[dest]);
+        }
     }
     
     // DCO levels from OSC_MIX parameter

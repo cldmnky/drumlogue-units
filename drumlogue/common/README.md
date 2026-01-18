@@ -11,6 +11,7 @@ This directory contains reusable components for developing drumlogue units. Thes
 - **`arm_intrinsics.h`**: Low-level ARM DSP intrinsics (smmul, smlawb, etc.) for Cortex-A7/M4/M7.
 - **`simd_utils.h`**: NEON SIMD helpers for common audio buffer operations (load/store, MAC, clamp).
 - **`smoothed_value.h`**: One-pole smoothed parameter class for zipper-free parameter changes.
+- **`catchable_value.h`**: Knob catch mechanism to prevent sudden DSP jumps when knob differs from preset value.
 
 ### Oscillators & Effects
 - **`wavetable_osc.h`**: Anti-aliased wavetable oscillator with smooth morphing and integration.
@@ -227,6 +228,62 @@ class MySynth {
   }
 };
 ```
+
+### Knob Catch Mechanism
+
+Prevent sudden audio jumps when hardware knob position differs from preset value:
+
+```cpp
+#include "common/catchable_value.h"
+
+class MySynth {
+ private:
+  dsp::CatchableValue catch_cutoff_;
+  dsp::CatchableValue catch_resonance_;
+  
+ public:
+  void Init() {
+    // Initialize with default values
+    catch_cutoff_.Init(50);    // 50% cutoff
+    catch_resonance_.Init(0);  // 0% resonance
+  }
+  
+  void LoadPreset(uint8_t preset_id) {
+    // Get preset values
+    uint8_t preset_cutoff = preset.params[PARAM_CUTOFF];
+    uint8_t preset_reso = preset.params[PARAM_RESONANCE];
+    
+    // Reset catchable values to new preset targets
+    // Assume current knob position = preset value initially
+    catch_cutoff_.Init(preset_cutoff);
+    catch_resonance_.Init(preset_reso);
+  }
+  
+  void SetParameter(uint8_t id, int32_t knob_value) {
+    if (id == PARAM_CUTOFF) {
+      // Update with catching enabled
+      int32_t effective_value = catch_cutoff_.Update(knob_value);
+      
+      // Apply effective value to DSP (may differ from knob!)
+      vcf_.SetCutoff(effective_value / 100.0f);
+      
+      // Optional: Check if catching
+      if (catch_cutoff_.IsCatching()) {
+        // UI feedback: show catch indicator
+      }
+    }
+  }
+};
+```
+
+**Behavior:**
+- When preset loads with cutoff=80, but knob is at 20:
+  - Knob moves 20→30: DSP stays at 80 (catching)
+  - Knob moves 30→80: DSP stays at 80 (catching)
+  - Knob crosses 80: DSP follows knob normally (catch disabled)
+  - Knob at 85: DSP = 85 (following)
+
+**Threshold:** Fixed ±3 units for consistent feel across all units.
 
 ### Performance Monitoring
 
