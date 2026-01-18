@@ -73,6 +73,7 @@ Thumbs.db
 test/elements-synth/elements_synth_test
 test/drupiter-synth/drupiter_test
 test/drupiter-synth/perf_test
+test/drupiter-synth/fixtures/
 
 # UI test artifacts
 test/ui/ui_player

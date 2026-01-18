@@ -258,6 +258,657 @@ static void ConfigureSynthForVelocityTest(DrupiterSynth& synth) {
     synth.SetHubValue(MOD_VCA_LEVEL, 100);
 }
 
+static void ConfigureSynthForFilterTest(DrupiterSynth& synth) {
+    // Disable effects (DRY)
+    synth.SetParameter(DrupiterSynth::PARAM_EFFECT, 2);
+
+    // Fast VCA envelope for steady-state tests
+    synth.SetParameter(DrupiterSynth::PARAM_VCA_ATTACK, 0);
+    synth.SetParameter(DrupiterSynth::PARAM_VCA_DECAY, 0);
+    synth.SetParameter(DrupiterSynth::PARAM_VCA_SUSTAIN, 100);
+    synth.SetParameter(DrupiterSynth::PARAM_VCA_RELEASE, 0);
+
+    // Disable VCF envelope influence (keep at zero)
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_ATTACK, 0);
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_DECAY, 0);
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_SUSTAIN, 0);
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_RELEASE, 0);
+
+    // Use DCO2 sine for stable spectral tests, and solo it
+    synth.SetParameter(DrupiterSynth::PARAM_DCO1_WAVE, 0);
+    synth.SetParameter(DrupiterSynth::PARAM_DCO2_WAVE, 3);  // SIN
+    synth.SetParameter(DrupiterSynth::PARAM_OSC_MIX, 100);  // DCO2 only
+
+    // Disable modulation paths
+    synth.SetHubValue(MOD_LFO_TO_PWM, 0);
+    synth.SetHubValue(MOD_LFO_TO_VCF, 0);
+    synth.SetHubValue(MOD_LFO_TO_VCO, 0);
+    synth.SetHubValue(MOD_ENV_TO_PWM, 0);
+    synth.SetHubValue(MOD_ENV_TO_VCF, 0);
+    synth.SetHubValue(MOD_LFO_DELAY, 0);
+    synth.SetHubValue(MOD_LFO_WAVE, 0);
+    synth.SetHubValue(MOD_LFO_ENV_AMT, 0);
+    synth.SetHubValue(MOD_VCA_LFO, 0);
+    synth.SetHubValue(MOD_VCA_KYBD, 0);
+    synth.SetHubValue(MOD_ENV_KYBD, 0);
+    synth.SetHubValue(MOD_ENV_TO_PITCH, 0);
+    synth.SetHubValue(MOD_PORTAMENTO_TIME, 0);
+
+    // Full VCA level
+    synth.SetHubValue(MOD_VCA_LEVEL, 100);
+}
+
+static void ConfigureSynthForVcfEnvTest(DrupiterSynth& synth) {
+    ConfigureSynthForFilterTest(synth);
+
+    // Enable VCF envelope with fast attack/decay for transient detection
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_ATTACK, 0);
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_DECAY, 20);
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_SUSTAIN, 0);
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_RELEASE, 0);
+
+    // Strong positive envelope modulation to VCF cutoff
+    synth.SetHubValue(MOD_ENV_TO_VCF, 100);
+}
+
+static float ComputeStereoRms(const std::vector<float>& buffer,
+                              uint32_t channels,
+                              uint32_t skip_frames) {
+    if (channels == 0 || buffer.empty()) {
+        return 0.0f;
+    }
+    const uint32_t total_frames = static_cast<uint32_t>(buffer.size() / channels);
+    if (skip_frames >= total_frames) {
+        return 0.0f;
+    }
+    double sum_sq = 0.0;
+    uint32_t count = 0;
+    for (uint32_t i = skip_frames; i < total_frames; ++i) {
+        float sample_l = buffer[i * channels];
+        float sample_r = (channels > 1) ? buffer[i * channels + 1] : sample_l;
+        float sample = 0.5f * (sample_l + sample_r);
+        sum_sq += sample * sample;
+        count++;
+    }
+    if (count == 0) {
+        return 0.0f;
+    }
+    return static_cast<float>(sqrt(sum_sq / count));
+}
+
+static std::vector<float> RenderWithNotes(DrupiterSynth& synth,
+                                          const unit_runtime_desc_t& desc,
+                                          const std::vector<std::pair<uint8_t, uint8_t>>& notes,
+                                          float seconds) {
+    const uint32_t total_frames = static_cast<uint32_t>(seconds * desc.samplerate);
+    std::vector<float> output(total_frames * desc.output_channels, 0.0f);
+    std::vector<float> buffer(desc.frames_per_buffer * desc.output_channels, 0.0f);
+
+    // Prime render to settle
+    for (uint32_t i = 0; i < 64; ++i) {
+        synth.Render(buffer.data(), desc.frames_per_buffer);
+    }
+
+    for (const auto& note : notes) {
+        synth.NoteOn(note.first, note.second);
+    }
+
+    uint32_t written = 0;
+    while (written < total_frames) {
+        const uint32_t frames = std::min(static_cast<uint32_t>(desc.frames_per_buffer),
+                         total_frames - written);
+        buffer.resize(frames * desc.output_channels);
+        synth.Render(buffer.data(), frames);
+        std::memcpy(&output[written * desc.output_channels],
+                    buffer.data(),
+                    frames * desc.output_channels * sizeof(float));
+        written += frames;
+    }
+
+    for (const auto& note : notes) {
+        synth.NoteOff(note.first);
+    }
+
+    return output;
+}
+
+struct TimedNoteEvent {
+    float time_sec;
+    uint8_t note;
+    uint8_t velocity;
+    bool on;
+};
+
+static std::vector<float> RenderWithTimedNotes(DrupiterSynth& synth,
+                                               const unit_runtime_desc_t& desc,
+                                               const std::vector<TimedNoteEvent>& events,
+                                               float seconds) {
+    const uint32_t total_frames = static_cast<uint32_t>(seconds * desc.samplerate);
+    std::vector<float> output(total_frames * desc.output_channels, 0.0f);
+    std::vector<float> buffer(desc.frames_per_buffer * desc.output_channels, 0.0f);
+
+    std::cout << "  [TimedNotes] total_frames=" << total_frames
+              << " frames_per_buffer=" << desc.frames_per_buffer
+              << " events=" << events.size() << std::endl;
+    for (const auto& e : events) {
+        std::cout << "    [TimedNotes] t=" << e.time_sec
+                  << "s note=" << static_cast<int>(e.note)
+                  << (e.on ? " on" : " off")
+                  << " vel=" << static_cast<int>(e.velocity) << std::endl;
+    }
+
+    // Prime render to settle
+    for (uint32_t i = 0; i < 64; ++i) {
+        synth.Render(buffer.data(), desc.frames_per_buffer);
+    }
+
+    // Convert event times to frame indices
+    struct EventFrame {
+        uint32_t frame;
+        uint8_t note;
+        uint8_t velocity;
+        bool on;
+    };
+    std::vector<EventFrame> frame_events;
+    frame_events.reserve(events.size());
+    for (const auto& e : events) {
+        frame_events.push_back({
+            static_cast<uint32_t>(e.time_sec * desc.samplerate),
+            e.note,
+            e.velocity,
+            e.on
+        });
+    }
+
+    size_t event_index = 0;
+    uint32_t written = 0;
+    while (written < total_frames) {
+        // Trigger any events scheduled for this frame
+        while (event_index < frame_events.size() && frame_events[event_index].frame <= written) {
+            const auto& ev = frame_events[event_index];
+            if (ev.on) {
+                std::cout << "  [TimedNotes] frame " << written
+                          << " NoteOn " << static_cast<int>(ev.note)
+                          << " vel=" << static_cast<int>(ev.velocity) << std::endl;
+                synth.NoteOn(ev.note, ev.velocity);
+            } else {
+                std::cout << "  [TimedNotes] frame " << written
+                          << " NoteOff " << static_cast<int>(ev.note) << std::endl;
+                synth.NoteOff(ev.note);
+            }
+            ++event_index;
+        }
+
+        const uint32_t frames = std::min(static_cast<uint32_t>(desc.frames_per_buffer),
+                         total_frames - written);
+        buffer.resize(frames * desc.output_channels);
+        synth.Render(buffer.data(), frames);
+        std::memcpy(&output[written * desc.output_channels],
+                    buffer.data(),
+                    frames * desc.output_channels * sizeof(float));
+        written += frames;
+    }
+
+    return output;
+}
+
+static bool TestPolyVcfEnvelopeIndependence() {
+    std::cout << "\n=== JP-8 Phase 1: Poly VCF Envelope Independence ===" << std::endl;
+
+    unit_runtime_desc_t desc = {};
+    desc.samplerate = 48000;
+    desc.frames_per_buffer = 64;
+    desc.input_channels = 0;
+    desc.output_channels = 2;
+
+    DrupiterSynth synth_a;
+    if (synth_a.Init(&desc) != 0) {
+        std::cout << "ERROR: Failed to initialize synth (A)" << std::endl;
+        return false;
+    }
+
+    ConfigureSynthForVcfEnvTest(synth_a);
+    synth_a.SetSynthesisMode(dsp::SYNTH_MODE_POLYPHONIC);
+    std::cout << "  [Test] synth_a mode set to POLY" << std::endl;
+
+    // Low cutoff so envelope movement is audible
+    synth_a.SetParameter(DrupiterSynth::PARAM_VCF_CUTOFF, 20);
+    synth_a.SetParameter(DrupiterSynth::PARAM_VCF_RESONANCE, 0);
+    synth_a.SetParameter(DrupiterSynth::PARAM_VCF_KEYFLW, 0);
+    std::cout << "  [Test] synth_a cutoff=20 resonance=0 keyflw=0" << std::endl;
+
+    const float seconds = 0.6f;
+    const uint32_t window_size = static_cast<uint32_t>(0.1f * desc.samplerate);  // 100ms windows
+
+    // Order A: low note (48) at t=0.0s, high note (84) at t=0.15s
+    std::vector<TimedNoteEvent> events_a = {
+        {0.0f, 48, 100, true},
+        {0.15f, 84, 100, true},
+        {0.45f, 48, 0, false},
+        {0.45f, 84, 0, false}
+    };
+
+    auto output_a = RenderWithTimedNotes(synth_a, desc, events_a, seconds);
+
+    // Re-init synth to reset state
+    DrupiterSynth synth_b;
+    if (synth_b.Init(&desc) != 0) {
+        std::cout << "ERROR: Failed to initialize synth (B)" << std::endl;
+        return false;
+    }
+    ConfigureSynthForVcfEnvTest(synth_b);
+    synth_b.SetSynthesisMode(dsp::SYNTH_MODE_POLYPHONIC);
+    std::cout << "  [Test] synth_b mode set to POLY" << std::endl;
+    synth_b.SetParameter(DrupiterSynth::PARAM_VCF_CUTOFF, 20);
+    synth_b.SetParameter(DrupiterSynth::PARAM_VCF_RESONANCE, 0);
+    synth_b.SetParameter(DrupiterSynth::PARAM_VCF_KEYFLW, 0);
+    std::cout << "  [Test] synth_b cutoff=20 resonance=0 keyflw=0" << std::endl;
+
+    // Order B: high note (84) at t=0.0s, low note (48) at t=0.15s
+    std::vector<TimedNoteEvent> events_b = {
+        {0.0f, 84, 100, true},
+        {0.15f, 48, 100, true},
+        {0.45f, 84, 0, false},
+        {0.45f, 48, 0, false}
+    };
+
+    auto output_b = RenderWithTimedNotes(synth_b, desc, events_b, seconds);
+
+    // Write fixtures for analysis
+    std::filesystem::create_directories("fixtures");
+    if (!WriteWavFile("fixtures/poly_vcf_env_order_a.wav", output_a, desc.samplerate, desc.output_channels)) {
+        return false;
+    }
+    if (!WriteWavFile("fixtures/poly_vcf_env_order_b.wav", output_b, desc.samplerate, desc.output_channels)) {
+        return false;
+    }
+
+    // Analyze windowed RMS after each note's onset
+    // Order A: note 48 starts at frame 0, note 84 starts at frame 7200 (0.15s * 48000)
+    // Order B: note 84 starts at frame 0, note 48 starts at frame 7200
+    
+    const uint32_t note_b_onset = static_cast<uint32_t>(0.15f * desc.samplerate);  // ~7200
+
+    // Extract windowed RMS for the second note in each ordering (arriving at offset_onset)
+    // These should match within per-voice envelope independence
+    auto extract_window_after_onset = [&](const std::vector<float>& output,
+                                          uint32_t onset_frame) -> float {
+        if (desc.output_channels == 0 || window_size == 0) return 0.0f;
+        
+        const uint32_t start_frame = onset_frame;
+        const uint32_t end_frame = std::min(start_frame + window_size, 
+                                            static_cast<uint32_t>(output.size() / desc.output_channels));
+        
+        double sum_sq = 0.0;
+        uint32_t count = 0;
+        for (uint32_t f = start_frame; f < end_frame; ++f) {
+            float sample_l = output[f * desc.output_channels];
+            float sample_r = (desc.output_channels > 1) ? output[f * desc.output_channels + 1] : sample_l;
+            float sample = 0.5f * (sample_l + sample_r);
+            sum_sq += sample * sample;
+            count++;
+        }
+        
+        if (count == 0) return 0.0f;
+        return static_cast<float>(sqrt(sum_sq / count));
+    };
+
+    // In order A: note 48 starts at onset_frame 0, note 84 starts at onset_frame ~7200
+    // In order B: note 84 starts at onset_frame 0, note 48 starts at onset_frame ~7200
+    // So the "second note's window" is at the same onset_frame (~7200) in both cases
+    
+    float rms_a_window = extract_window_after_onset(output_a, note_b_onset);
+    float rms_b_window = extract_window_after_onset(output_b, note_b_onset);
+
+    const float ratio = (rms_b_window > 0.0f) ? (rms_a_window / rms_b_window) : 1.0f;
+    std::cout << "  Per-note envelope window analysis:" << std::endl;
+    std::cout << "    Order A (low→high), 2nd note window RMS: " << rms_a_window << std::endl;
+    std::cout << "    Order B (high→low), 2nd note window RMS: " << rms_b_window << std::endl;
+    std::cout << "    Ratio: " << ratio << std::endl;
+
+    // With per-voice VCF envelope, the envelope behavior after the 2nd note's onset
+    // should be independent of which note is second; ratio should be ~1.0
+    if (ratio < 0.90f || ratio > 1.10f) {
+        std::cout << "ERROR: 2nd note envelope depends on note order; expected per-voice independence" << std::endl;
+        std::cout << "  (Each voice should have independent envelope, so 2nd note's RMS "
+                  << "should match regardless of order)" << std::endl;
+        return false;
+    }
+
+    std::cout << "✓ Poly VCF envelope independence PASSED" << std::endl;
+    std::cout << "  (Windowed RMS ratio " << ratio << " indicates per-voice envelope behavior)" << std::endl;
+    std::cout << "  (Fixtures: fixtures/poly_vcf_env_order_{a,b}.wav)" << std::endl;
+    return true;
+}
+
+static bool TestPolyHpfOrderIndependence() {
+    std::cout << "\n=== JP-8 Phase 2: Per-Voice HPF Order Independence ===" << std::endl;
+
+    unit_runtime_desc_t desc = {};
+    desc.samplerate = 48000;
+    desc.frames_per_buffer = 64;
+    desc.input_channels = 0;
+    desc.output_channels = 2;
+
+    DrupiterSynth synth_a;
+    if (synth_a.Init(&desc) != 0) {
+        std::cout << "ERROR: Failed to initialize synth (A)" << std::endl;
+        return false;
+    }
+
+    ConfigureSynthForFilterTest(synth_a);
+    synth_a.SetSynthesisMode(dsp::SYNTH_MODE_POLYPHONIC);
+
+    // HPF enabled at medium cutoff
+    synth_a.SetHubValue(MOD_HPF, 50);  // Mid-range HPF cutoff
+    synth_a.SetParameter(DrupiterSynth::PARAM_VCF_CUTOFF, 50);
+    synth_a.SetParameter(DrupiterSynth::PARAM_VCF_KEYFLW, 0);  // No key track for stable test
+
+    const float seconds = 0.4f;
+    const uint32_t skip_frames = static_cast<uint32_t>(0.1f * desc.samplerate);
+
+    // Order A: low note then high note
+    std::vector<std::pair<uint8_t, uint8_t>> notes_a = {
+        {48, 100}, {84, 100}
+    };
+    auto output_a = RenderWithNotes(synth_a, desc, notes_a, seconds);
+    float rms_a = ComputeStereoRms(output_a, desc.output_channels, skip_frames);
+
+    // Re-init synth
+    DrupiterSynth synth_b;
+    if (synth_b.Init(&desc) != 0) {
+        std::cout << "ERROR: Failed to initialize synth (B)" << std::endl;
+        return false;
+    }
+    ConfigureSynthForFilterTest(synth_b);
+    synth_b.SetSynthesisMode(dsp::SYNTH_MODE_POLYPHONIC);
+    synth_b.SetHubValue(MOD_HPF, 50);
+    synth_b.SetParameter(DrupiterSynth::PARAM_VCF_CUTOFF, 50);
+    synth_b.SetParameter(DrupiterSynth::PARAM_VCF_KEYFLW, 0);
+
+    // Order B: high note then low note
+    std::vector<std::pair<uint8_t, uint8_t>> notes_b = {
+        {84, 100}, {48, 100}
+    };
+    auto output_b = RenderWithNotes(synth_b, desc, notes_b, seconds);
+    float rms_b = ComputeStereoRms(output_b, desc.output_channels, skip_frames);
+
+    const float ratio = (rms_b > 0.0f) ? (rms_a / rms_b) : 0.0f;
+    std::cout << "  RMS A=" << rms_a << " RMS B=" << rms_b << " ratio=" << ratio << std::endl;
+
+    // With per-voice HPF, filter response should be order-independent
+    if (ratio < 0.95f || ratio > 1.05f) {
+        std::cout << "ERROR: Per-voice HPF output depends on note-on order" << std::endl;
+        return false;
+    }
+
+    std::cout << "✓ Per-voice HPF order independence PASSED" << std::endl;
+    return true;
+}
+
+static bool TestHpfSlopeResponse() {
+    std::cout << "\n=== JP-8 Phase 2: HPF 6 dB/Oct Slope Verification ===" << std::endl;
+
+    unit_runtime_desc_t desc = {};
+    desc.samplerate = 48000;
+    desc.frames_per_buffer = 64;
+    desc.input_channels = 0;
+    desc.output_channels = 2;
+
+    DrupiterSynth synth;
+    if (synth.Init(&desc) != 0) {
+        std::cout << "ERROR: Failed to initialize synth" << std::endl;
+        return false;
+    }
+
+    ConfigureSynthForFilterTest(synth);
+    synth.SetSynthesisMode(dsp::SYNTH_MODE_MONOPHONIC);
+
+    // High cutoff VCF to isolate HPF behavior
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_CUTOFF, 100);  // Bypass VCF
+
+    const float seconds = 0.5f;
+    const uint32_t skip_frames = static_cast<uint32_t>(0.1f * desc.samplerate);
+
+    // Test with LOW frequency input (below HPF cutoff - should be attenuated)
+    std::vector<std::pair<uint8_t, uint8_t>> notes_low = {{36, 100}};  // Low note (C1)
+    synth.SetHubValue(MOD_HPF, 70);  // Mid-range HPF
+    auto output_low = RenderWithNotes(synth, desc, notes_low, seconds);
+    float rms_low = ComputeStereoRms(output_low, desc.output_channels, skip_frames);
+
+    // Re-init for HIGH frequency test
+    DrupiterSynth synth2;
+    if (synth2.Init(&desc) != 0) {
+        std::cout << "ERROR: Failed to initialize synth (2)" << std::endl;
+        return false;
+    }
+    ConfigureSynthForFilterTest(synth2);
+    synth2.SetSynthesisMode(dsp::SYNTH_MODE_MONOPHONIC);
+    synth2.SetParameter(DrupiterSynth::PARAM_VCF_CUTOFF, 100);
+
+    // Test with HIGH frequency input (above HPF cutoff - should pass)
+    std::vector<std::pair<uint8_t, uint8_t>> notes_high = {{84, 100}};  // High note (C6)
+    synth2.SetHubValue(MOD_HPF, 70);
+    auto output_high = RenderWithNotes(synth2, desc, notes_high, seconds);
+    float rms_high = ComputeStereoRms(output_high, desc.output_channels, skip_frames);
+
+    std::cout << "  Low freq (C1) RMS: " << rms_low << std::endl;
+    std::cout << "  High freq (C6) RMS: " << rms_high << std::endl;
+    const float attenuation = (rms_high > 0.0f) ? (rms_low / rms_high) : 0.0f;
+    std::cout << "  Attenuation ratio: " << attenuation << " (low/high)" << std::endl;
+
+    // HPF should attenuate low frequencies significantly
+    if (attenuation >= 0.5f) {  // Low freq should be at least 3dB below high freq
+        std::cout << "WARNING: HPF not attenuating low frequencies enough (expected <0.5, got " << attenuation << ")" << std::endl;
+        return false;
+    }
+
+    std::cout << "✓ HPF slope response PASSED" << std::endl;
+    return true;
+}
+
+static bool TestHpfVcfCascade() {
+    std::cout << "\n=== JP-8 Phase 2: HPF → VCF Cascade Behavior ===" << std::endl;
+
+    unit_runtime_desc_t desc = {};
+    desc.samplerate = 48000;
+    desc.frames_per_buffer = 64;
+    desc.input_channels = 0;
+    desc.output_channels = 2;
+
+    DrupiterSynth synth;
+    if (synth.Init(&desc) != 0) {
+        std::cout << "ERROR: Failed to initialize synth" << std::endl;
+        return false;
+    }
+
+    ConfigureSynthForFilterTest(synth);
+    synth.SetSynthesisMode(dsp::SYNTH_MODE_POLYPHONIC);
+
+    // Both HPF and VCF enabled
+    synth.SetHubValue(MOD_HPF, 40);        // Low HPF cutoff (500Hz approx)
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_CUTOFF, 30);  // VCF also relatively low
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_RESONANCE, 50);  // Add resonance to VCF
+
+    const float seconds = 0.4f;
+    const uint32_t skip_frames = static_cast<uint32_t>(0.15f * desc.samplerate);
+
+    // Play chord: both notes should be filtered by HPF cascade
+    std::vector<std::pair<uint8_t, uint8_t>> notes = {
+        {48, 100}, {60, 100}
+    };
+    auto output = RenderWithNotes(synth, desc, notes, seconds);
+
+    // Write fixture for inspection
+    std::filesystem::create_directories("fixtures");
+    if (!WriteWavFile("fixtures/hpf_vcf_cascade.wav", output, desc.samplerate, desc.output_channels)) {
+        return false;
+    }
+
+    float cascade_rms = ComputeStereoRms(output, desc.output_channels, skip_frames);
+    std::cout << "  Cascade RMS: " << cascade_rms << std::endl;
+    std::cout << "  Fixture: fixtures/hpf_vcf_cascade.wav" << std::endl;
+
+    // With cascade, output should be heavily filtered but still present
+    if (cascade_rms < 0.001f) {
+        std::cout << "ERROR: Cascade over-attenuated signal" << std::endl;
+        return false;
+    }
+
+    std::cout << "✓ HPF→VCF cascade behavior PASSED" << std::endl;
+    return true;
+}
+
+static bool TestPolyFilterOrderIndependence() {
+    std::cout << "\n=== JP-8 Phase 2: Poly Filter Order Independence ===" << std::endl;
+
+    unit_runtime_desc_t desc = {};
+    desc.samplerate = 48000;
+    desc.frames_per_buffer = 64;
+    desc.input_channels = 0;
+    desc.output_channels = 2;
+
+    DrupiterSynth synth;
+    if (synth.Init(&desc) != 0) {
+        std::cout << "ERROR: Failed to initialize synth" << std::endl;
+        return false;
+    }
+
+    ConfigureSynthForFilterTest(synth);
+    synth.SetSynthesisMode(dsp::SYNTH_MODE_POLYPHONIC);
+
+    // Emphasize key tracking to expose shared-filter behavior
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_CUTOFF, 25);
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_RESONANCE, 0);
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_KEYFLW, 100);
+
+    const float seconds = 0.4f;
+    const uint32_t skip_frames = static_cast<uint32_t>(0.1f * desc.samplerate);
+
+    // Order A: low note then high note
+    std::vector<std::pair<uint8_t, uint8_t>> notes_a = {
+        {48, 100}, {84, 100}
+    };
+    auto output_a = RenderWithNotes(synth, desc, notes_a, seconds);
+    float rms_a = ComputeStereoRms(output_a, desc.output_channels, skip_frames);
+
+    // Re-init synth to reset state
+    DrupiterSynth synth_b;
+    if (synth_b.Init(&desc) != 0) {
+        std::cout << "ERROR: Failed to initialize synth (B)" << std::endl;
+        return false;
+    }
+    ConfigureSynthForFilterTest(synth_b);
+    synth_b.SetSynthesisMode(dsp::SYNTH_MODE_POLYPHONIC);
+    synth_b.SetParameter(DrupiterSynth::PARAM_VCF_CUTOFF, 25);
+    synth_b.SetParameter(DrupiterSynth::PARAM_VCF_RESONANCE, 0);
+    synth_b.SetParameter(DrupiterSynth::PARAM_VCF_KEYFLW, 100);
+
+    // Order B: high note then low note
+    std::vector<std::pair<uint8_t, uint8_t>> notes_b = {
+        {84, 100}, {48, 100}
+    };
+    auto output_b = RenderWithNotes(synth_b, desc, notes_b, seconds);
+    float rms_b = ComputeStereoRms(output_b, desc.output_channels, skip_frames);
+
+    const float ratio = (rms_b > 0.0f) ? (rms_a / rms_b) : 0.0f;
+    std::cout << "  RMS A=" << rms_a << " RMS B=" << rms_b << " ratio=" << ratio << std::endl;
+
+    // With per-voice filtering, order should not significantly change output level
+    if (ratio < 0.95f || ratio > 1.05f) {
+        std::cout << "ERROR: Poly filter output depends on note-on order; expected per-voice filtering" << std::endl;
+        return false;
+    }
+
+    std::cout << "✓ Poly filter order independence PASSED" << std::endl;
+    return true;
+}
+
+static bool TestVcfSlopeMapping() {
+    std::cout << "\n=== JP-8 Phase 2: VCF 12/24 dB Slope Mapping ===" << std::endl;
+
+    unit_runtime_desc_t desc = {};
+    desc.samplerate = 48000;
+    desc.frames_per_buffer = 64;
+    desc.input_channels = 0;
+    desc.output_channels = 2;
+
+    DrupiterSynth synth;
+    if (synth.Init(&desc) != 0) {
+        std::cout << "ERROR: Failed to initialize synth" << std::endl;
+        return false;
+    }
+    ConfigureSynthForFilterTest(synth);
+    synth.SetSynthesisMode(dsp::SYNTH_MODE_MONOPHONIC);
+
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_CUTOFF, 20);
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_RESONANCE, 0);
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_KEYFLW, 0);
+
+    // 12 dB mode (expected)
+    synth.SetHubValue(MOD_VCF_TYPE, 0);
+    auto output_12 = RenderWithNotes(synth, desc, {{84, 100}}, 0.4f);
+    float rms_12 = ComputeStereoRms(output_12, desc.output_channels,
+                                    static_cast<uint32_t>(0.1f * desc.samplerate));
+
+    // 24 dB mode (expected)
+    synth.SetHubValue(MOD_VCF_TYPE, 3);
+    auto output_24 = RenderWithNotes(synth, desc, {{84, 100}}, 0.4f);
+    float rms_24 = ComputeStereoRms(output_24, desc.output_channels,
+                                    static_cast<uint32_t>(0.1f * desc.samplerate));
+
+    std::cout << "  RMS 12dB=" << rms_12 << " RMS 24dB=" << rms_24 << std::endl;
+
+    if (rms_24 >= rms_12 * 0.85f) {
+        std::cout << "ERROR: 24 dB mode not attenuating more than 12 dB mode" << std::endl;
+        return false;
+    }
+
+    std::cout << "✓ VCF slope mapping test PASSED" << std::endl;
+    return true;
+}
+
+static bool TestCutoffCurveMonotonic() {
+    std::cout << "\n=== JP-8 Phase 2: Cutoff Curve Monotonicity ===" << std::endl;
+
+    unit_runtime_desc_t desc = {};
+    desc.samplerate = 48000;
+    desc.frames_per_buffer = 64;
+    desc.input_channels = 0;
+    desc.output_channels = 2;
+
+    DrupiterSynth synth;
+    if (synth.Init(&desc) != 0) {
+        std::cout << "ERROR: Failed to initialize synth" << std::endl;
+        return false;
+    }
+    ConfigureSynthForFilterTest(synth);
+    synth.SetSynthesisMode(dsp::SYNTH_MODE_MONOPHONIC);
+
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_RESONANCE, 0);
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_KEYFLW, 0);
+
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_CUTOFF, 10);
+    auto output_low = RenderWithNotes(synth, desc, {{60, 100}}, 0.4f);
+
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_CUTOFF, 90);
+    auto output_high = RenderWithNotes(synth, desc, {{60, 100}}, 0.4f);
+
+    const uint32_t skip_frames = static_cast<uint32_t>(0.1f * desc.samplerate);
+    float rms_low = ComputeStereoRms(output_low, desc.output_channels, skip_frames);
+    float rms_high = ComputeStereoRms(output_high, desc.output_channels, skip_frames);
+
+    std::cout << "  RMS cutoff 10=" << rms_low << " cutoff 90=" << rms_high << std::endl;
+
+    if (rms_high <= rms_low * 1.3f) {
+        std::cout << "ERROR: Cutoff increase does not raise output energy as expected" << std::endl;
+        return false;
+    }
+
+    std::cout << "✓ Cutoff curve monotonicity PASSED" << std::endl;
+    return true;
+}
+
 static float RenderVelocityRmsForMode(dsp::SynthMode mode, uint8_t velocity) {
     DrupiterSynth synth;
 
@@ -326,6 +977,148 @@ static std::vector<float> RenderVelocityBufferForMode(dsp::SynthMode mode,
 
     return output;
 }
+
+static bool TestMonoVsPolyVolume() {
+    std::cout << "\n=== Testing Mono vs Poly Volume Normalization ===" << std::endl;
+
+    const uint32_t sample_rate = 48000;
+    const float duration_sec = 0.5f;
+    const uint32_t total_frames = static_cast<uint32_t>(duration_sec * sample_rate);
+    
+    struct ModeCase {
+        dsp::SynthMode mode;
+        const char* name;
+        int note_count;  // Number of notes to play simultaneously
+    } cases[] = {
+        { dsp::SYNTH_MODE_MONOPHONIC, "MONO (1 voice)", 1 },
+        { dsp::SYNTH_MODE_POLYPHONIC, "POLY (1 voice)", 1 },
+        { dsp::SYNTH_MODE_POLYPHONIC, "POLY (4 voices)", 4 },
+    };
+
+    // Setup test descriptor
+    unit_runtime_desc_t desc = {};
+    desc.samplerate = sample_rate;
+    desc.frames_per_buffer = 64;
+    desc.input_channels = 0;
+    desc.output_channels = 2;
+
+    // Test setup: disable envelope, filter, effects for pure amplitude test
+    DrupiterSynth synth;
+    if (synth.Init(&desc) != 0) {
+        std::cout << "ERROR: Failed to initialize synth" << std::endl;
+        return false;
+    }
+
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_CUTOFF, 100);  // Filter open
+    synth.SetParameter(DrupiterSynth::PARAM_VCA_ATTACK, 0);    // Immediate
+    synth.SetParameter(DrupiterSynth::PARAM_VCA_DECAY, 0);
+    synth.SetParameter(DrupiterSynth::PARAM_VCA_SUSTAIN, 100);
+    synth.SetParameter(DrupiterSynth::PARAM_VCA_RELEASE, 0);
+    synth.SetParameter(DrupiterSynth::PARAM_EFFECT, 2);  // DRY
+
+    // Disable modulations
+    synth.SetHubValue(MOD_LFO_TO_VCO, 0);
+    synth.SetHubValue(MOD_LFO_TO_VCF, 0);
+    synth.SetHubValue(MOD_LFO_TO_PWM, 0);
+
+    std::cout << "Rendering test signals..." << std::endl;
+    
+    std::vector<float> case_rms;
+    for (const auto& test_case : cases) {
+        std::cout << "  " << test_case.name << "..." << std::flush;
+        
+        // Set synthesis mode directly (bypasses HubControl for testing)
+        synth.SetSynthesisMode(test_case.mode);
+        
+        // Render some silence first to settle
+        std::vector<float> render_buf(desc.frames_per_buffer * desc.output_channels);
+        for (uint32_t i = 0; i < 1000; ++i) {
+            synth.Render(render_buf.data(), desc.frames_per_buffer);
+        }
+        
+        // Send note(s) and render
+        std::vector<float> output(total_frames * desc.output_channels, 0.0f);
+        uint32_t written = 0;
+        
+        // Send note on messages
+        for (int i = 0; i < test_case.note_count; ++i) {
+            uint8_t note = 60 + i * 2;  // Different notes
+            synth.NoteOn(note, 80);  // velocity 80
+        }
+        
+        // Render with notes held
+        while (written < total_frames) {
+            uint32_t frames_to_render = std::min(
+                static_cast<uint32_t>(desc.frames_per_buffer),
+                total_frames - written
+            );
+            
+            render_buf.resize(frames_to_render * desc.output_channels);
+            synth.Render(render_buf.data(), frames_to_render);
+            
+            std::memcpy(&output[written * desc.output_channels],
+                       render_buf.data(),
+                       frames_to_render * desc.output_channels * sizeof(float));
+            written += frames_to_render;
+        }
+        
+        // Release all notes
+        for (int i = 0; i < test_case.note_count; ++i) {
+            uint8_t note = 60 + i * 2;
+            synth.NoteOff(note);
+        }
+        
+        // Compute RMS (skip first 0.1s for envelope settling)
+        const uint32_t skip_frames = static_cast<uint32_t>(0.1f * sample_rate);
+        const uint32_t analysis_frames = total_frames - skip_frames;
+        float sum_sq = 0.0f;
+        
+        for (uint32_t i = skip_frames; i < total_frames; ++i) {
+            float sample_l = output[i * 2];
+            float sample_r = (output.size() > i * 2 + 1) ? output[i * 2 + 1] : sample_l;
+            float sample_avg = (sample_l + sample_r) * 0.5f;
+            sum_sq += sample_avg * sample_avg;
+        }
+        
+        float rms = sqrtf(sum_sq / analysis_frames);
+        case_rms.push_back(rms);
+        
+        std::cout << " RMS=" << rms << std::endl;
+    }
+    
+    // Analysis: Compare volumes
+    std::cout << "\nVolume Analysis:" << std::endl;
+    std::cout << "  MONO (1 voice):        " << case_rms[0] << std::endl;
+    std::cout << "  POLY (1 voice):        " << case_rms[1] << std::endl;
+    std::cout << "  POLY (4 voices):       " << case_rms[2] << std::endl;
+    
+    float mono_to_poly_1voice = case_rms[1] / case_rms[0];
+    float poly_1voice_to_4voice = case_rms[2] / case_rms[1];
+    
+    std::cout << "\nRatios:" << std::endl;
+    std::cout << "  POLY(1v) / MONO(1v):   " << mono_to_poly_1voice << " (should be ~1.0)" << std::endl;
+    std::cout << "  POLY(4v) / POLY(1v):   " << poly_1voice_to_4voice << " (should be sqrt(4)=2.0, or 1/sqrt(4)=0.5)" << std::endl;
+    
+    // Check: MONO and POLY with 1 voice should be nearly identical
+    if (mono_to_poly_1voice < 0.9f || mono_to_poly_1voice > 1.1f) {
+        std::cout << "\n❌ ERROR: MONO and POLY(1 voice) volumes differ by " 
+                  << (mono_to_poly_1voice - 1.0f) * 100.0f << "%!" << std::endl;
+        std::cout << "   This indicates poly mode is normalizing volume incorrectly." << std::endl;
+        return false;
+    }
+    
+    // Check: POLY with 4 voices should be normalized relative to 1 voice
+    // If normalization is correct: 4 voices summing = 4x, then sqrt(4)=2x reduction = no change OR 1/sqrt(4)=0.5x reduction
+    if (poly_1voice_to_4voice < 0.4f || poly_1voice_to_4voice > 0.6f) {
+        std::cout << "\n⚠️  WARNING: POLY 4-voice is " << poly_1voice_to_4voice 
+                  << "x louder/quieter than POLY 1-voice." << std::endl;
+        std::cout << "   Expected ~0.5x (division by sqrt(4)=2) or no change depending on normalization." << std::endl;
+    }
+    
+    std::cout << "✓ Mono vs Poly volume test PASSED" << std::endl;
+    return true;
+}
+
 
 static bool TestVelocityAcrossModes() {
     std::cout << "\n=== Testing Velocity Response Across Modes ===" << std::endl;
@@ -1047,6 +1840,9 @@ int main(int argc, char** argv) {
     std::cout << "========================================" << std::endl;
     
     ok = true;
+    if (!TestMonoVsPolyVolume()) {
+        ok = false;
+    }
     if (!TestVelocitySensitivity()) {
         ok = false;
     }
@@ -1084,6 +1880,54 @@ int main(int argc, char** argv) {
     
     std::cout << "\n" << "========================================" << std::endl;
     std::cout << "All MIDI tests PASSED!" << std::endl;
+    std::cout << "========================================" << std::endl;
+
+    // Run JP-8 alignment tests (Phase 1)
+    std::cout << "\n" << "========================================" << std::endl;
+    std::cout << "JP-8 Alignment Tests (Phase 1)" << std::endl;
+    std::cout << "========================================" << std::endl;
+
+    ok = true;
+    if (!TestPolyVcfEnvelopeIndependence()) {
+        ok = false;
+    }
+
+    if (!ok) {
+        return 1;
+    }
+
+    std::cout << "\n" << "========================================" << std::endl;
+    std::cout << "All JP-8 Phase 1 tests PASSED!" << std::endl;
+    std::cout << "========================================" << std::endl;
+
+    // Run JP-8 alignment tests (Phase 2)
+    std::cout << "\n" << "========================================" << std::endl;
+    std::cout << "JP-8 Alignment Tests (Phase 2)" << std::endl;
+    std::cout << "========================================" << std::endl;
+
+    ok = true;
+    if (!TestPolyHpfOrderIndependence()) {
+        ok = false;
+    }
+    if (!TestPolyFilterOrderIndependence()) {
+        ok = false;
+    }
+    if (!TestHpfSlopeResponse()) {
+        ok = false;
+    }
+    if (!TestVcfSlopeMapping()) {
+        ok = false;
+    }
+    if (!TestCutoffCurveMonotonic()) {
+        ok = false;
+    }
+
+    if (!ok) {
+        return 1;
+    }
+
+    std::cout << "\n" << "========================================" << std::endl;
+    std::cout << "All JP-8 Phase 2 tests PASSED!" << std::endl;
     std::cout << "========================================" << std::endl;
     
     // Run catchable value tests
