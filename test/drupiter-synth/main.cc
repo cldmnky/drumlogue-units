@@ -21,6 +21,8 @@
 #include "../../drumlogue/common/midi_helper.h"
 // Include smoothed value
 #include "../../drumlogue/common/smoothed_value.h"
+// Include catchable value
+#include "../../drumlogue/common/catchable_value.h"
 
 static int FindVoiceForNote(const dsp::VoiceAllocator& allocator, uint8_t note) {
     for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; ++i) {
@@ -316,6 +318,185 @@ static bool TestSmoothingFilter() {
     return true;
 }
 
+// ============================================================================
+// Catchable Value Tests
+// ============================================================================
+
+static bool TestCatchableValueBasic() {
+    std::cout << "  TestCatchableValueBasic..." << std::endl;
+    
+    dsp::CatchableValue catcher;
+    catcher.Init(50);
+    
+    // Should not be catching initially
+    if (catcher.IsCatching()) {
+        std::cout << "    ERROR: Should not be catching after Init" << std::endl;
+        return false;
+    }
+    
+    // Value should follow knob normally
+    int32_t result = catcher.Update(60);
+    if (result != 60) {
+        std::cout << "    ERROR: Expected 60, got " << result << std::endl;
+        return false;
+    }
+    
+    if (catcher.IsCatching()) {
+        std::cout << "    ERROR: Should not be catching when following knob" << std::endl;
+        return false;
+    }
+    
+    std::cout << "    PASSED: Basic follow behavior works" << std::endl;
+    return true;
+}
+
+static bool TestCatchableValueCatchBehavior() {
+    std::cout << "  TestCatchableValueCatchBehavior..." << std::endl;
+    
+    dsp::CatchableValue catcher;
+    catcher.Init(50);
+    
+    // Simulate preset load: DSP value = 80, but knob is at 20
+    catcher.Reset(80, 20);
+    
+    // Should be catching (knob far from target)
+    if (!catcher.IsCatching()) {
+        std::cout << "    ERROR: Should be catching after Reset with distant knob" << std::endl;
+        return false;
+    }
+    
+    // Move knob from 20 to 30 - should still hold at 80
+    int32_t result = catcher.Update(30);
+    if (result != 80) {
+        std::cout << "    ERROR: Catch failed - expected 80, got " << result << std::endl;
+        return false;
+    }
+    
+    if (!catcher.IsCatching()) {
+        std::cout << "    ERROR: Should still be catching before crossing" << std::endl;
+        return false;
+    }
+    
+    // Move knob from 30 to 50 - still catching
+    result = catcher.Update(50);
+    if (result != 80) {
+        std::cout << "    ERROR: Catch failed at 50 - expected 80, got " << result << std::endl;
+        return false;
+    }
+    
+    // Move knob from 50 to 80 (crossing the catch point)
+    result = catcher.Update(80);
+    if (result != 80) {
+        std::cout << "    ERROR: Catch failed at crossing - expected 80, got " << result << std::endl;
+        return false;
+    }
+    
+    if (catcher.IsCatching()) {
+        std::cout << "    ERROR: Should have stopped catching after crossing" << std::endl;
+        return false;
+    }
+    
+    // Now should follow knob normally
+    result = catcher.Update(85);
+    if (result != 85) {
+        std::cout << "    ERROR: After catch release, expected 85, got " << result << std::endl;
+        return false;
+    }
+    
+    std::cout << "    PASSED: Catch and release behavior works" << std::endl;
+    return true;
+}
+
+static bool TestCatchableValueThreshold() {
+    std::cout << "  TestCatchableValueThreshold..." << std::endl;
+    
+    dsp::CatchableValue catcher;
+    catcher.Init(50);
+    
+    // Simulate preset load: DSP value = 50, knob at 20
+    catcher.Reset(50, 20);
+    
+    // Move knob to within threshold (50 ± 3)
+    int32_t result = catcher.Update(48);  // Within threshold
+    
+    // Should have released catch (within ±3)
+    if (catcher.IsCatching()) {
+        std::cout << "    ERROR: Should release catch within threshold" << std::endl;
+        return false;
+    }
+    
+    if (result != 48) {
+        std::cout << "    ERROR: Expected 48 within threshold, got " << result << std::endl;
+        return false;
+    }
+    
+    std::cout << "    PASSED: Threshold detection works (±3 units)" << std::endl;
+    return true;
+}
+
+static bool TestCatchableValueBipolar() {
+    std::cout << "  TestCatchableValueBipolar..." << std::endl;
+    
+    dsp::CatchableValue catcher;
+    catcher.Init(0);
+    
+    // Test with bipolar parameter (-100 to +100 becomes 0 to 100 in UI)
+    // Preset has detune at +20 (mapped to 70 in UI), knob at 30
+    catcher.Reset(70, 30);
+    
+    if (!catcher.IsCatching()) {
+        std::cout << "    ERROR: Should be catching for bipolar parameter" << std::endl;
+        return false;
+    }
+    
+    // Move knob from 30 to 70
+    int32_t result = catcher.Update(70);
+    
+    if (catcher.IsCatching()) {
+        std::cout << "    ERROR: Should release after crossing bipolar target" << std::endl;
+        return false;
+    }
+    
+    if (result != 70) {
+        std::cout << "    ERROR: Expected 70, got " << result << std::endl;
+        return false;
+    }
+    
+    std::cout << "    PASSED: Bipolar parameter catch works" << std::endl;
+    return true;
+}
+
+static bool TestCatchableValueFloat() {
+    std::cout << "  TestCatchableValueFloat..." << std::endl;
+    
+    dsp::CatchableValueFloat catcher;
+    catcher.Init(0.5f);
+    
+    // Should follow knob (value / 100)
+    float result = catcher.Update(60);
+    if (std::abs(result - 0.6f) > 0.01f) {
+        std::cout << "    ERROR: Expected ~0.6, got " << result << std::endl;
+        return false;
+    }
+    
+    // Test catch behavior
+    catcher.Reset(0.8f, 20);  // DSP=0.8, knob=20
+    
+    if (!catcher.IsCatching()) {
+        std::cout << "    ERROR: Float version should be catching" << std::endl;
+        return false;
+    }
+    
+    result = catcher.Update(30);
+    if (std::abs(result - 0.8f) > 0.01f) {
+        std::cout << "    ERROR: Float catch failed - expected ~0.8, got " << result << std::endl;
+        return false;
+    }
+    
+    std::cout << "    PASSED: Float version works" << std::endl;
+    return true;
+}
+
 int main(int argc, char** argv) {
     (void)argc;
     (void)argv;
@@ -426,5 +607,36 @@ int main(int argc, char** argv) {
     std::cout << "\n" << "========================================" << std::endl;
     std::cout << "All MIDI tests PASSED!" << std::endl;
     std::cout << "========================================" << std::endl;
+    
+    // Run catchable value tests
+    std::cout << "\n" << "========================================" << std::endl;
+    std::cout << "Catchable Value Tests" << std::endl;
+    std::cout << "========================================" << std::endl;
+    
+    ok = true;
+    if (!TestCatchableValueBasic()) {
+        ok = false;
+    }
+    if (!TestCatchableValueCatchBehavior()) {
+        ok = false;
+    }
+    if (!TestCatchableValueThreshold()) {
+        ok = false;
+    }
+    if (!TestCatchableValueBipolar()) {
+        ok = false;
+    }
+    if (!TestCatchableValueFloat()) {
+        ok = false;
+    }
+    
+    if (!ok) {
+        return 1;
+    }
+    
+    std::cout << "\n" << "========================================" << std::endl;
+    std::cout << "All Catchable Value tests PASSED!" << std::endl;
+    std::cout << "========================================" << std::endl;
+    
     return 0;
 }

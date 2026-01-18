@@ -24,6 +24,7 @@
 #include "../common/hub_control.h"
 #include "../common/param_format.h"
 #include "../common/perf_mon.h"
+#include "../common/catchable_value.h"
 
 // Voice allocation and synthesis modes
 #include "dsp/voice_allocator.h"
@@ -409,6 +410,18 @@ private:
     dsp::SmoothedValue cutoff_smooth_;
     dsp::SmoothedValue dco1_level_smooth_;
     dsp::SmoothedValue dco2_level_smooth_;
+    
+    // Knob catch mechanism (prevents sudden jumps when knob differs from preset)
+    dsp::CatchableValue catch_cutoff_;
+    dsp::CatchableValue catch_mix_;
+    dsp::CatchableValue catch_reso_;
+    dsp::CatchableValue catch_keyflw_;
+    dsp::CatchableValue catch_dco1_pw_;
+    dsp::CatchableValue catch_dco2_tune_;
+    dsp::CatchableValue catch_xmod_;
+    dsp::CatchableValue catch_lfo_rate_;
+    // Mod hub destinations (18 destinations use hub's internal catching)
+    dsp::CatchableValue catch_mod_amt_;
     
     // MIDI modulation state
     float pitch_bend_semitones_;           // Current pitch bend value (-2 to +2 semitones)
