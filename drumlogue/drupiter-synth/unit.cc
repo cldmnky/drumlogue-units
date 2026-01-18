@@ -97,16 +97,15 @@ __unit_callback void unit_all_note_off() {
 }
 
 __unit_callback void unit_pitch_bend(uint16_t bend) {
-    (void)bend;  // Pitch bend not implemented in basic version
+    s_synth_instance.PitchBend(bend);
 }
 
 __unit_callback void unit_channel_pressure(uint8_t pressure) {
-    (void)pressure;  // Channel pressure not implemented
+    s_synth_instance.ChannelPressure(pressure);
 }
 
 __unit_callback void unit_aftertouch(uint8_t note, uint8_t aftertouch) {
-    (void)note;
-    (void)aftertouch;  // Aftertouch not implemented
+    s_synth_instance.Aftertouch(note, aftertouch);
 }
 
 __unit_callback void unit_load_preset(uint8_t idx) {

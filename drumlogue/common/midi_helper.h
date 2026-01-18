@@ -96,6 +96,24 @@ class MidiHelper {
   }
   
   /**
+   * @brief Convert MIDI channel pressure (0-127) to normalized float (0.0-1.0)
+   * @param pressure MIDI channel pressure value
+   * @return Normalized pressure (0.0 to 1.0)
+   */
+  static constexpr float PressureToFloat(uint8_t pressure) {
+    return static_cast<float>(pressure) / 127.0f;
+  }
+  
+  /**
+   * @brief Convert MIDI aftertouch (0-127) to normalized float (0.0-1.0)
+   * @param aftertouch MIDI aftertouch value
+   * @return Normalized aftertouch (0.0 to 1.0)
+   */
+  static constexpr float AftertouchToFloat(uint8_t aftertouch) {
+    return static_cast<float>(aftertouch) / 127.0f;
+  }
+  
+  /**
    * @brief Convert MIDI velocity with exponential curve
    * @param velocity MIDI velocity (0-127)
    * @param curve Curve amount (1.0 = linear, <1 = softer, >1 = harder)

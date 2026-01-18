@@ -297,8 +297,25 @@ public:
      */
     void AllNoteOff();
     
+    /**     * @brief Pitch bend event
+     * @param bend MIDI pitch bend value (0-16383, center=8192)
+     */
+    void PitchBend(uint16_t bend);
+    
     /**
-     * @brief Load preset
+     * @brief Channel pressure (aftertouch) event
+     * @param pressure MIDI pressure value (0-127)
+     */
+    void ChannelPressure(uint8_t pressure);
+    
+    /**
+     * @brief Polyphonic aftertouch event (note-specific)
+     * @param note MIDI note number
+     * @param aftertouch MIDI aftertouch value (0-127)
+     */
+    void Aftertouch(uint8_t note, uint8_t aftertouch);
+    
+    /**     * @brief Load preset
      * @param preset_id Preset index (0-11)
      */
     void LoadPreset(uint8_t preset_id);
@@ -392,6 +409,12 @@ private:
     dsp::SmoothedValue cutoff_smooth_;
     dsp::SmoothedValue dco1_level_smooth_;
     dsp::SmoothedValue dco2_level_smooth_;
+    
+    // MIDI modulation state
+    float pitch_bend_semitones_;           // Current pitch bend value (-2 to +2 semitones)
+    float channel_pressure_normalized_;    // Current channel pressure (0.0 to 1.0)
+    dsp::SmoothedValue pitch_bend_smooth_; // Smoothed pitch bend for vibrato (per-buffer)
+    dsp::SmoothedValue pressure_smooth_;   // Smoothed pressure for swell control (per-buffer)
     
     // Cached filter cutoff for coefficient update optimization
     float last_cutoff_hz_;
