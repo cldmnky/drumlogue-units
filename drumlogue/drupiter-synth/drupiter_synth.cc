@@ -811,9 +811,12 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         // Apply HPF (high-pass filter) FIRST - Jupiter-8 signal flow
         // HPF comes before LPF in Jupiter-8 architecture
         // HPF coefficient (hpf_alpha) pre-calculated before loop for efficiency
+        // NOTE: In POLY mode, each voice has already processed through per-voice HPF,
+        // so we skip the shared HPF to avoid double-filtering
         float hpf_out = mixed_;
-        if (hpf_alpha > 0.0f) {
+        if (hpf_alpha > 0.0f && current_mode_ != dsp::SYNTH_MODE_POLYPHONIC) {
             // Simple one-pole HPF: y[n] = alpha * (y[n-1] + x[n] - x[n-1])
+            // (MONO and UNISON modes only - POLY uses per-voice HPF)
             hpf_out = hpf_alpha * (hpf_prev_output_ + mixed_ - hpf_prev_input_);
             hpf_prev_output_ = hpf_out;
             hpf_prev_input_ = mixed_;
