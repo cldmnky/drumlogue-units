@@ -126,6 +126,209 @@ static bool TestMonoLastNotePriority() {
 }
 
 // ============================================================================
+// JP-8 Phase 4: Voice Allocation Tests
+// ============================================================================
+
+static bool TestVoiceStealingPrefersRelease() {
+    std::cout << "\n=== JP-8 Phase 4: Voice Stealing Prefers Release Phase ===" << std::endl;
+    
+    dsp::VoiceAllocator allocator;
+    allocator.Init(48000.0f);
+    allocator.SetMode(dsp::SYNTH_MODE_POLYPHONIC);
+    allocator.SetAllocationStrategy(dsp::ALLOC_OLDEST_NOTE);
+    
+    // Set very fast envelope times so we can quickly test state changes
+    for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; ++i) {
+        dsp::Voice& v = allocator.GetVoiceMutable(i);
+        v.env_amp.SetAttack(0.001f);   // 1ms attack
+        v.env_amp.SetDecay(0.001f);    // 1ms decay
+        v.env_amp.SetSustain(0.8f);
+        v.env_amp.SetRelease(0.01f);   // 10ms release (long enough to detect)
+    }
+    
+    // Fill all 4 voices
+    allocator.NoteOn(60, 100);  // Voice 0 - oldest
+    allocator.NoteOn(64, 100);  // Voice 1
+    allocator.NoteOn(67, 100);  // Voice 2
+    allocator.NoteOn(71, 100);  // Voice 3 - newest
+    
+    // Process enough samples to let voices reach sustain
+    for (int s = 0; s < 256; ++s) {
+        for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; ++i) {
+            allocator.GetVoiceMutable(i).env_amp.Process();
+        }
+    }
+    
+    // Release voice 1 (not the oldest, but in release phase)
+    allocator.NoteOff(64);
+    
+    // Advance voice 1's envelope into release phase
+    dsp::Voice& voice1 = allocator.GetVoiceMutable(1);
+    for (int s = 0; s < 128; ++s) {
+        voice1.env_amp.Process();
+    }
+    
+    // Verify voice 1 is in release state
+    if (voice1.env_amp.GetState() != dsp::JupiterEnvelope::STATE_RELEASE) {
+        std::cout << "ERROR: Voice 1 not in RELEASE state (state=" 
+                  << voice1.env_amp.GetState() << ")" << std::endl;
+        return false;
+    }
+    
+    // Trigger 5th note - should steal voice 1 (releasing) not voice 0 (oldest but sustaining)
+    allocator.NoteOn(75, 100);  // New note
+    
+    const int new_voice_idx = FindVoiceForNote(allocator, 75);
+    if (new_voice_idx != 1) {
+        std::cout << "ERROR: Expected voice 1 to be stolen (releasing), but voice " 
+                  << new_voice_idx << " was stolen" << std::endl;
+        return false;
+    }
+    
+    // Verify voice 0 is still playing note 60
+    const dsp::Voice& voice0 = allocator.GetVoice(0);
+    if (voice0.midi_note != 60 || !voice0.active) {
+        std::cout << "ERROR: Voice 0 (oldest but sustaining) was stolen instead of releasing voice" << std::endl;
+        return false;
+    }
+    
+    std::cout << "✓ Voice stealing prefers release phase PASSED" << std::endl;
+    return true;
+}
+
+static bool TestRoundRobinDistribution() {
+    std::cout << "\n=== JP-8 Phase 4: Round-Robin Voice Distribution ===" << std::endl;
+    
+    dsp::VoiceAllocator allocator;
+    allocator.Init(48000.0f);
+    allocator.SetMode(dsp::SYNTH_MODE_POLYPHONIC);
+    allocator.SetAllocationStrategy(dsp::ALLOC_ROUND_ROBIN);
+    
+    // Play and release a sequence to exercise round-robin
+    const uint8_t test_notes[] = {60, 64, 67, 71, 72, 76, 79, 83};
+    const size_t num_notes = sizeof(test_notes) / sizeof(test_notes[0]);
+    
+    uint8_t voice_usage_count[DRUPITER_MAX_VOICES] = {0};
+    
+    for (size_t i = 0; i < num_notes; ++i) {
+        // Play note
+        allocator.NoteOn(test_notes[i], 100);
+        
+        // Find which voice got it
+        int voice_idx = -1;
+        for (uint8_t v = 0; v < DRUPITER_MAX_VOICES; ++v) {
+            const dsp::Voice& voice = allocator.GetVoice(v);
+            if (voice.active && voice.midi_note == test_notes[i]) {
+                voice_idx = v;
+                voice_usage_count[v]++;
+                break;
+            }
+        }
+        
+        if (voice_idx < 0) {
+            std::cout << "ERROR: Failed to find voice for note " 
+                      << static_cast<int>(test_notes[i]) << std::endl;
+            return false;
+        }
+        
+        // Release it
+        allocator.NoteOff(test_notes[i]);
+    }
+    
+    // Check that all voices were used at least once (reasonably even distribution)
+    std::cout << "Voice usage: ";
+    for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; ++i) {
+        std::cout << static_cast<int>(voice_usage_count[i]) << " ";
+    }
+    std::cout << std::endl;
+    
+    bool all_used = true;
+    for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; ++i) {
+        if (voice_usage_count[i] == 0) {
+            std::cout << "ERROR: Voice " << static_cast<int>(i) 
+                      << " never used (not round-robin)" << std::endl;
+            all_used = false;
+        }
+    }
+    
+    if (!all_used) {
+        return false;
+    }
+    
+    std::cout << "✓ Round-robin distribution PASSED" << std::endl;
+    return true;
+}
+
+static bool TestReleaseTailsPreserved() {
+    std::cout << "\n=== JP-8 Phase 4: Release Tails Preserved Until Needed ===" << std::endl;
+    
+    dsp::VoiceAllocator allocator;
+    allocator.Init(48000.0f);
+    allocator.SetMode(dsp::SYNTH_MODE_POLYPHONIC);
+    allocator.SetAllocationStrategy(dsp::ALLOC_OLDEST_NOTE);
+    
+    // Set envelope times: fast attack/decay, long release
+    for (uint8_t i = 0; i < DRUPITER_MAX_VOICES; ++i) {
+        dsp::Voice& v = allocator.GetVoiceMutable(i);
+        v.env_amp.SetAttack(0.001f);   // 1ms
+        v.env_amp.SetDecay(0.001f);    // 1ms
+        v.env_amp.SetSustain(0.8f);
+        v.env_amp.SetRelease(0.1f);    // 100ms release (long enough to detect)
+    }
+    
+    // Play 2 notes (not filling all voices)
+    allocator.NoteOn(60, 100);  // Voice 0
+    allocator.NoteOn(64, 100);  // Voice 1
+    
+    // Process to let them reach sustain
+    for (int s = 0; s < 256; ++s) {
+        for (uint8_t i = 0; i < 2; ++i) {
+            allocator.GetVoiceMutable(i).env_amp.Process();
+        }
+    }
+    
+    // Release both
+    allocator.NoteOff(60);
+    allocator.NoteOff(64);
+    
+    // Advance envelopes into release (but not complete)
+    for (int s = 0; s < 128; ++s) {
+        for (uint8_t i = 0; i < 2; ++i) {
+            allocator.GetVoiceMutable(i).env_amp.Process();
+        }
+    }
+    
+    // Both should still have active envelopes (release tails)
+    for (uint8_t i = 0; i < 2; ++i) {
+        const dsp::Voice& v = allocator.GetVoice(i);
+        if (!v.env_amp.IsActive()) {
+            std::cout << "ERROR: Voice " << static_cast<int>(i) 
+                      << " envelope stopped too early (should have release tail)" << std::endl;
+            std::cout << "  State: " << v.env_amp.GetState() << std::endl;
+            return false;
+        }
+        if (v.env_amp.GetState() != dsp::JupiterEnvelope::STATE_RELEASE) {
+            std::cout << "ERROR: Voice " << static_cast<int>(i) 
+                      << " not in RELEASE state (state=" 
+                      << v.env_amp.GetState() << ")" << std::endl;
+            return false;
+        }
+    }
+    
+    // Play new note - should use free voice 2 instead of stealing 0 or 1
+    allocator.NoteOn(67, 100);
+    const int new_voice_idx = FindVoiceForNote(allocator, 67);
+    if (new_voice_idx < 2) {
+        std::cout << "ERROR: New note stole releasing voice instead of using free voice" << std::endl;
+        std::cout << "  Got voice: " << new_voice_idx << std::endl;
+        return false;
+    }
+    
+    std::cout << "✓ Release tails preserved until needed PASSED" << std::endl;
+    return true;
+}
+
+// ============================================================================
 // MIDI Control Tests (Velocity, Pitch Bend, Pressure, Aftertouch)
 // ============================================================================
 
@@ -2077,6 +2280,17 @@ int main(int argc, char** argv) {
         ok = false;
     }
     if (!TestMonoLastNotePriority()) {
+        ok = false;
+    }
+    
+    // JP-8 Phase 4: Voice Allocation Behavior Tests
+    if (!TestVoiceStealingPrefersRelease()) {
+        ok = false;
+    }
+    if (!TestRoundRobinDistribution()) {
+        ok = false;
+    }
+    if (!TestReleaseTailsPreserved()) {
         ok = false;
     }
 

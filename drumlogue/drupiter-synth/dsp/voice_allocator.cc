@@ -145,30 +145,66 @@ void VoiceAllocator::SetAllocationStrategy(VoiceAllocationStrategy strategy) {
 
 void VoiceAllocator::NoteOn(uint8_t note, uint8_t velocity) {
 	timestamp_++;
-	const common::NoteOnResult result = core_.NoteOn(note, velocity);
-	if (result.voice_index < 0 || result.voice_index >= max_voices_) {
+	
+	// JP-8 Phase 4: Custom voice stealing for ALLOC_OLDEST_NOTE strategy
+	// to prefer voices in release phase
+	int8_t voice_idx = -1;
+	bool manual_allocation = false;
+	
+	if (mode_ == SYNTH_MODE_POLYPHONIC && allocation_strategy_ == ALLOC_OLDEST_NOTE) {
+		// Check if we need to steal
+		bool all_active = true;
+		for (uint8_t i = 0; i < max_voices_; ++i) {
+			if (!voices_[i].active) {
+				all_active = false;
+				break;
+			}
+		}
+		
+		if (all_active) {
+			// Use custom stealing logic that considers envelope state
+			Voice* stolen_voice = StealOldestVoice();
+			// Convert pointer to index
+			voice_idx = static_cast<int8_t>(stolen_voice - voices_);
+			manual_allocation = true;
+		}
+	}
+	
+	// Fall back to core allocation if not manually handled
+	common::NoteOnResult result;
+	if (!manual_allocation) {
+		result = core_.NoteOn(note, velocity);
+		voice_idx = result.voice_index;
+	} else {
+		// Manually update core state for stolen voice
+		core_.NoteOn(note, velocity);  // Still call to update held notes etc.
+		result.voice_index = voice_idx;
+		result.allow_legato = false;  // Don't allow legato on steal
+	}
+	
+	if (voice_idx < 0 || voice_idx >= max_voices_) {
 		return;
 	}
 
 	Voice* voice = nullptr;
-	uint8_t voice_idx = static_cast<uint8_t>(result.voice_index);
+	uint8_t voice_idx_u8 = static_cast<uint8_t>(voice_idx);
 
 	if (mode_ == SYNTH_MODE_UNISON) {
 		float frequency = common::MidiHelper::NoteToFreq(note);
 		unison_osc_.SetFrequency(frequency);
 		voice = &voices_[0];
-		voice_idx = 0;
+		voice_idx_u8 = 0;
 	} else if (mode_ == SYNTH_MODE_MONOPHONIC) {
 		voice = &voices_[0];
-		voice_idx = 0;
+		voice_idx_u8 = 0;
 	} else {
-		voice = &voices_[voice_idx];
+		voice = &voices_[voice_idx_u8];
 	}
 
 	if (voice) {
 		TriggerVoice(voice, note, velocity, result.allow_legato);
-		AddActiveVoice(voice_idx);
-		core_.SetVoiceActive(voice_idx, true);
+		AddActiveVoice(voice_idx_u8);
+		core_.SetVoiceActive(voice_idx_u8, true);
 	}
 }
 
@@ -300,15 +336,45 @@ Voice* VoiceAllocator::StealVoice() {
 }
 
 Voice* VoiceAllocator::StealOldestVoice() {
-	uint8_t oldest_idx = 0;
-	uint32_t oldest_time = voices_[0].note_on_time;
-	for (uint8_t i = 1; i < max_voices_; i++) {
-		if (voices_[i].note_on_time < oldest_time) {
-			oldest_time = voices_[i].note_on_time;
-			oldest_idx = i;
+	// Phase 4: JP-8-style voice stealing
+	// Priority 1: Steal voice in release phase (oldest first)
+	// Priority 2: Steal oldest sustaining voice
+	// This preserves attack/decay phases and feels more musical
+	
+	Voice* oldest_releasing = nullptr;
+	Voice* oldest_active = nullptr;
+	uint32_t oldest_releasing_time = UINT32_MAX;
+	uint32_t oldest_active_time = UINT32_MAX;
+	
+	for (uint8_t i = 0; i < max_voices_; i++) {
+		const Voice& v = voices_[i];
+		
+		// Check if voice is in release phase
+		if (v.env_amp.GetState() == JupiterEnvelope::STATE_RELEASE) {
+			if (v.note_on_time < oldest_releasing_time) {
+				oldest_releasing_time = v.note_on_time;
+				oldest_releasing = &voices_[i];
+			}
+		}
+		// Track oldest active/sustaining voice as fallback
+		else if (v.active && v.note_on_time < oldest_active_time) {
+			oldest_active_time = v.note_on_time;
+			oldest_active = &voices_[i];
 		}
 	}
-	return &voices_[oldest_idx];
+	
+	// Prefer releasing voice over sustaining voice
+	if (oldest_releasing) {
+		return oldest_releasing;
+	}
+	
+	// Fallback to oldest active voice
+	if (oldest_active) {
+		return oldest_active;
+	}
+	
+	// Last resort: voice 0
+	return &voices_[0];
 }
 
 Voice* VoiceAllocator::StealRoundRobinVoice() {
