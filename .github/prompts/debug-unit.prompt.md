@@ -1,6 +1,6 @@
 ---
 agent: 'agent'
-model: Claude Sonnet 4
+model: Auto
 tools: ['codebase', 'edit', 'runCommands', 'search', 'problems']
 description: 'Debug drumlogue unit build or runtime issues'
 ---
