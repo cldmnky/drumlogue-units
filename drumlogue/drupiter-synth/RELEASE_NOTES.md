@@ -1,5 +1,77 @@
 # Release Notes - Drupiter Synth
 
+## v1.2.0 - 2026-01-18
+
+### 🎛️ MIDI Expression & Bug Fixes
+
+Third release with enhanced MIDI expressiveness and comprehensive stability improvements.
+
+### New Features
+
+**MIDI Expressiveness:**
+- **Velocity Sensitivity**: Notes respond to MIDI velocity for dynamic control of filter cutoff (50% modulation depth)
+- **Pitch Bend**: ±2 semitone pitch bend with smooth per-buffer smoothing (~200ms response)
+- **Channel Pressure**: Real-time pressure modulation of VCF cutoff frequency (+1 octave depth)
+- **Aftertouch**: Per-note aftertouch support for expressive, dynamic control
+- **Per-Buffer Smoothing**: All MIDI modulations use exponential smoothing to prevent clicks and zipper noise
+
+**Enhanced Common Library:**
+- Extended `midi_helper.h` with reusable pressure/aftertouch conversion utilities
+- Standardized MIDI parameter scaling (0-127 → 0.0-1.0 normalized range)
+- New `catchable_value.h` utility: Generic knob catch mechanism (±3 unit threshold)
+- Reusable by all drumlogue units
+
+### Technical Improvements
+
+**DSP Stability:**
+- Eliminated dynamic memory allocation in voice allocator (fixes undefined symbols)
+- Fixed Q31 fixed-point interpolation with proper PolyBLEP anti-aliasing
+- Improved voice allocation in mono/unison modes (last-note priority)
+- Fixed mod hub UI page flickering on drumlogue display
+
+**Build System:**
+- Automatic symbol verification in `build.sh`
+- Preserved build artifacts from container for debugging
+- Comprehensive build artifact analysis (object files, memory maps, symbol tables)
+
+**Testing & Debugging:**
+- 5 new MIDI tests in desktop test harness (velocity, pitch bend, pressure, aftertouch, smoothing)
+- 5 new catchable value tests (basic follow, catch/release, threshold, bipolar, float variant)
+- All 13 tests passing (3 voice allocation + 5 MIDI expression + 5 catchable value)
+- Complete debug verification checklist per SDK guidelines
+
+### Bug Fixes
+
+- Fixed compilation warnings across all source files
+- Fixed VoiceAllocator symbol resolution issues
+- Resolved voice allocation edge cases in polyphonic/unison modes
+- Eliminated undefined reference errors from static constexpr members
+
+### Knob Catch Mechanism
+
+**New Feature**: Generic knob catch to prevent audio jumps on preset changes
+- Applied to 9 continuous parameters (cutoff, mix, resonance, etc.)
+- Fixed ±3 unit threshold for intuitive, consistent behavior
+- Transparent support for both unipolar and bipolar parameters
+- Reusable across all drumlogue units via new `catchable_value.h` utility
+- **Behavior**: When knob position differs from preset, DSP holds preset value until knob crosses catch threshold
+
+### Performance
+
+- Velocity modulation: 50% depth on VCF cutoff
+- Pitch bend: ±2 semitones with smooth vibrato response
+- Pressure modulation: +1 octave VCF swell with expressive feel
+- All MIDI modulations: Per-buffer smoothing (exponential convergence)
+- CPU usage: Maintained <50% on 48kHz buffer processing
+
+### Compatibility
+
+- **Backward Compatible**: All v1.1.0 presets and functionality preserved
+- **MIDI Enhancement**: Optional - MIDI controllers enhance but don't require modification
+- **Hardware Requirements**: Standard drumlogue with MIDI input support
+
+---
+
 ## v1.1.0 - 2025-12-29
 
 ### 🚀 Major Feature Update
