@@ -5,6 +5,8 @@
 #include <vector>
 #include <cmath>
 
+#include "unit.h"
+
 // Define TEST to enable desktop testing
 #ifndef TEST
 #define TEST
@@ -17,6 +19,8 @@
 #include "../../drumlogue/drupiter-synth/dsp/jupiter_dco.h"
 // Include drupiter voice allocator wrapper
 #include "../../drumlogue/drupiter-synth/dsp/voice_allocator.h"
+// Include full synth for mode tests
+#include "../../drumlogue/drupiter-synth/drupiter_synth.h"
 // Include MIDI helpers
 #include "../../drumlogue/common/midi_helper.h"
 // Include smoothed value
@@ -153,6 +157,119 @@ static bool TestVelocitySensitivity() {
     }
     
     std::cout << "✓ Velocity sensitivity test PASSED" << std::endl;
+    return true;
+}
+
+static float ComputeRms(const std::vector<float>& buffer) {
+    double sum = 0.0;
+    for (float sample : buffer) {
+        sum += sample * sample;
+    }
+    if (buffer.empty()) {
+        return 0.0f;
+    }
+    return static_cast<float>(sqrt(sum / buffer.size()));
+}
+
+static void ConfigureSynthForVelocityTest(DrupiterSynth& synth) {
+    // Set VCF cutoff to max so filter is bypassed (focus on VCA amplitude)
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_CUTOFF, 100);
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_RESONANCE, 0);
+
+    // Set VCA envelope to immediate response (attack/decay/release = 0, sustain = 100)
+    synth.SetParameter(DrupiterSynth::PARAM_VCA_ATTACK, 0);
+    synth.SetParameter(DrupiterSynth::PARAM_VCA_DECAY, 0);
+    synth.SetParameter(DrupiterSynth::PARAM_VCA_SUSTAIN, 100);
+    synth.SetParameter(DrupiterSynth::PARAM_VCA_RELEASE, 0);
+
+    // Disable effects (DRY)
+    synth.SetParameter(DrupiterSynth::PARAM_EFFECT, 2);
+
+    // Disable modulation paths for deterministic amplitude tests
+    synth.SetHubValue(MOD_LFO_TO_PWM, 0);
+    synth.SetHubValue(MOD_LFO_TO_VCF, 0);
+    synth.SetHubValue(MOD_LFO_TO_VCO, 0);
+    synth.SetHubValue(MOD_ENV_TO_PWM, 0);
+    synth.SetHubValue(MOD_ENV_TO_VCF, 0);
+    synth.SetHubValue(MOD_LFO_DELAY, 0);
+    synth.SetHubValue(MOD_LFO_WAVE, 0);
+    synth.SetHubValue(MOD_LFO_ENV_AMT, 0);
+    synth.SetHubValue(MOD_VCA_LFO, 0);
+    synth.SetHubValue(MOD_VCA_KYBD, 0);
+    synth.SetHubValue(MOD_ENV_KYBD, 0);
+    synth.SetHubValue(MOD_ENV_TO_PITCH, 0);
+    synth.SetHubValue(MOD_PORTAMENTO_TIME, 0);
+
+    // Set VCA level to full scale
+    synth.SetHubValue(MOD_VCA_LEVEL, 100);
+}
+
+static float RenderVelocityRmsForMode(dsp::SynthMode mode, uint8_t velocity) {
+    DrupiterSynth synth;
+
+    unit_runtime_desc_t desc = {};
+    desc.samplerate = 48000;
+    desc.frames_per_buffer = 64;
+    desc.input_channels = 0;
+    desc.output_channels = 2;
+
+    if (synth.Init(&desc) != 0) {
+        return 0.0f;
+    }
+
+    ConfigureSynthForVelocityTest(synth);
+
+    // Set mode via MOD HUB and process once to apply
+    synth.SetHubValue(MOD_SYNTH_MODE, static_cast<uint8_t>(mode));
+    std::vector<float> buffer(desc.frames_per_buffer * 2, 0.0f);
+    synth.Render(buffer.data(), desc.frames_per_buffer);
+
+    // Trigger note and render a few buffers
+    synth.NoteOn(60, velocity);
+    for (int i = 0; i < 3; ++i) {
+        synth.Render(buffer.data(), desc.frames_per_buffer);
+    }
+
+    return ComputeRms(buffer);
+}
+
+static bool TestVelocityAcrossModes() {
+    std::cout << "\n=== Testing Velocity Response Across Modes ===" << std::endl;
+
+    struct ModeCase {
+        dsp::SynthMode mode;
+        const char* name;
+    } modes[] = {
+        { dsp::SYNTH_MODE_MONOPHONIC, "MONO" },
+        { dsp::SYNTH_MODE_POLYPHONIC, "POLY" },
+        { dsp::SYNTH_MODE_UNISON, "UNISON" }
+    };
+
+    const uint8_t velocity_soft = 20;
+    const uint8_t velocity_loud = 110;
+
+    for (const auto& mode_case : modes) {
+        float rms_soft = RenderVelocityRmsForMode(mode_case.mode, velocity_soft);
+        float rms_loud = RenderVelocityRmsForMode(mode_case.mode, velocity_loud);
+
+        std::cout << "  " << mode_case.name << ": soft=" << rms_soft
+                  << " loud=" << rms_loud << std::endl;
+
+        if (rms_soft <= 0.0f || rms_loud <= 0.0f) {
+            std::cout << "ERROR: " << mode_case.name << " produced silence" << std::endl;
+            return false;
+        }
+
+        // Expect loud > soft by at least 50% given 0.2-1.0 velocity scaling
+        if (rms_loud <= rms_soft * 1.5f) {
+            std::cout << "ERROR: " << mode_case.name
+                      << " velocity scaling too weak (ratio="
+                      << (rms_loud / rms_soft) << ")" << std::endl;
+            return false;
+        }
+    }
+
+    std::cout << "✓ Velocity response across modes PASSED" << std::endl;
     return true;
 }
 
@@ -758,6 +875,9 @@ int main(int argc, char** argv) {
         ok = false;
     }
     if (!TestVelocityCutoffBidirectional()) {
+        ok = false;
+    }
+    if (!TestVelocityAcrossModes()) {
         ok = false;
     }
     if (!TestPitchBendRange()) {
