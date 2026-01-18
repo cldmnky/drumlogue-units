@@ -197,13 +197,23 @@ void JupiterVCF::SetCutoff(float freq_hz) {
 }
 
 void JupiterVCF::SetCutoffModulated(float freq_hz) {
-    cutoff_hz_ = ClampCutoff(freq_hz);
-    coefficients_dirty_ = true;
+    float new_cutoff = ClampCutoff(freq_hz);
+    // Phase 6: Parameter change detection - only mark dirty if cutoff actually changed
+    if (fabsf(new_cutoff - prev_cutoff_hz_) > 1e-6f) {
+        cutoff_hz_ = new_cutoff;
+        prev_cutoff_hz_ = new_cutoff;
+        coefficients_dirty_ = true;
+    }
 }
 
 void JupiterVCF::SetResonance(float resonance) {
-    resonance_ = clampf(resonance, 0.0f, 1.0f);
-    coefficients_dirty_ = true;
+    float new_resonance = clampf(resonance, 0.0f, 1.0f);
+    // Phase 6: Parameter change detection - only mark dirty if resonance actually changed
+    if (fabsf(new_resonance - prev_resonance_) > 1e-6f) {
+        resonance_ = new_resonance;
+        prev_resonance_ = new_resonance;
+        coefficients_dirty_ = true;
+    }
 }
 
 void JupiterVCF::SetMode(Mode mode) {
@@ -294,7 +304,8 @@ float JupiterVCF::Process(float input) {
 
         // Select 12dB or 24dB output with gain compensation
         float result = (mode_ == MODE_LP12) ? ota_y2_ : output;
-        return result * ota_output_gain_;
+        // Phase 6: Explicit denormal flushing at output
+        return FlushDenormal(result * ota_output_gain_);
     }
 
     // HP mode: non-resonant 6dB high-pass (simple DC blocker style)
@@ -305,7 +316,8 @@ float JupiterVCF::Process(float input) {
             hp_lp_state_ = FlushDenormal(lp + v);
             hp_ = input - lp;
         }
-        return hp_;
+        // Phase 6: Explicit denormal flushing at output
+        return FlushDenormal(hp_);
     }
 
     // BP mode: Chamberlin SVF bandpass
@@ -321,7 +333,8 @@ float JupiterVCF::Process(float input) {
         else if (lp_ < -10.0f) lp_ = -10.0f;
     }
 
-    return bp_ * (1.0f + resonance_ * 0.5f);
+    // Phase 6: Explicit denormal flushing at output
+    return FlushDenormal(bp_ * (1.0f + resonance_ * 0.5f));
 }
 
 void JupiterVCF::Reset() {
@@ -340,6 +353,10 @@ void JupiterVCF::Reset() {
     lp_ = 0.0f;
     bp_ = 0.0f;
     hp_ = 0.0f;
+    
+    // Phase 6: Initialize coefficient caching fields
+    prev_cutoff_hz_ = cutoff_hz_;
+    prev_resonance_ = resonance_;
 }
 
 void JupiterVCF::UpdateCoefficients() {

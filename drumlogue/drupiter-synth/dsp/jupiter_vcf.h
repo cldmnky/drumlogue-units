@@ -116,6 +116,10 @@ private:
     Mode mode_;
     float kbd_tracking_;        // Keyboard tracking amount
     bool coefficients_dirty_;   // Flag to batch coefficient updates
+    
+    // Phase 6: Coefficient caching for performance optimization
+    float prev_cutoff_hz_;      // Previous cutoff for change detection
+    float prev_resonance_;      // Previous resonance for change detection
 
     // Krajeski-style improved ladder filter states
     // 4 cascaded one-pole filters with delay elements for "compromise" poles
