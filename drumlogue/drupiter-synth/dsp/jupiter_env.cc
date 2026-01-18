@@ -41,20 +41,22 @@ void JupiterEnvelope::Init(float sample_rate) {
 }
 
 void JupiterEnvelope::SetAttack(float time_sec) {
-    attack_time_ = std::max(kMinTime, std::min(time_sec, kMaxTime));
+    // JP-8 parity: Attack range 1ms - 5s
+    attack_time_ = std::max(kMinAttackTime, std::min(time_sec, kMaxAttackTime));
 #ifdef DEBUG
-    fprintf(stderr, "[Envelope SetAttack] input=%.6fs -> clamped=%.6fs (kMinTime=%.6fs)\n",
-            time_sec, attack_time_, kMinTime);
+    fprintf(stderr, "[Envelope Phase 5] SetAttack: input=%.6fs -> clamped=%.6fs (1ms-5s)\n",
+            time_sec, attack_time_);
     fflush(stderr);
 #endif
     UpdateRates();
 }
 
 void JupiterEnvelope::SetDecay(float time_sec) {
-    decay_time_ = std::max(kMinTime, std::min(time_sec, kMaxTime));
+    // JP-8 parity: Decay range 1ms - 10s
+    decay_time_ = std::max(kMinDecayTime, std::min(time_sec, kMaxDecayTime));
 #ifdef DEBUG
-    fprintf(stderr, "[Envelope SetDecay] input=%.6fs -> clamped=%.6fs (kMinTime=%.6fs)\n",
-            time_sec, decay_time_, kMinTime);
+    fprintf(stderr, "[Envelope Phase 5] SetDecay: input=%.6fs -> clamped=%.6fs (1ms-10s)\n",
+            time_sec, decay_time_);
     fflush(stderr);
 #endif
     UpdateRates();
@@ -65,10 +67,11 @@ void JupiterEnvelope::SetSustain(float level) {
 }
 
 void JupiterEnvelope::SetRelease(float time_sec) {
-    release_time_ = std::max(kMinTime, std::min(time_sec, kMaxTime));
+    // JP-8 parity: Release range 1ms - 10s
+    release_time_ = std::max(kMinReleaseTime, std::min(time_sec, kMaxReleaseTime));
 #ifdef DEBUG
-    fprintf(stderr, "[Envelope SetRelease] input=%.6fs -> clamped=%.6fs (kMinTime=%.6fs)\n",
-            time_sec, release_time_, kMinTime);
+    fprintf(stderr, "[Envelope Phase 5] SetRelease: input=%.6fs -> clamped=%.6fs (1ms-10s)\n",
+            time_sec, release_time_);
     fflush(stderr);
 #endif
     UpdateRates();
@@ -179,14 +182,14 @@ void JupiterEnvelope::UpdateRates() {
 
 float JupiterEnvelope::TimeToRate(float time_sec) const {
     // Rate = increment per sample to go from 0 to 1 in time_sec
-    if (time_sec < kMinTime) {
-        time_sec = kMinTime;
+    if (time_sec < 0.001f) {
+        time_sec = 0.001f;  // 1ms minimum
     }
     return 1.0f / (time_sec * sample_rate_);
 }
 
 float JupiterEnvelope::TimeToCoef(float time_sec) const {
-    if (time_sec < kMinTime) {
+    if (time_sec < 0.001f) {
         return 0.0f; // Instant decay
     }
     // Exponential decay to ~1% (-40dB) in time_sec

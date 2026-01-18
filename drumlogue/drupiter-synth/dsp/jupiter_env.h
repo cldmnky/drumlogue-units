@@ -124,9 +124,15 @@ private:
     float decay_coef_;          // Exponential multiplier per sample
     float release_coef_;        // Exponential multiplier per sample
     
-    // Minimum/maximum times
-    static constexpr float kMinTime = 0.0001f;   // 0.1ms (~5 samples at 48kHz, effectively instant)
-    static constexpr float kMaxTime = 10.0f;     // 10 seconds
+    // JP-8 parity: Stage-specific time ranges (minutes in seconds)
+    // Attack: 1ms to 5s (JP-8 fastest to slowest)
+    // Decay/Release: 1ms to 10s (JP-8 fastest to slowest)
+    static constexpr float kMinAttackTime = 0.001f;      // 1ms (JP-8 minimum)
+    static constexpr float kMaxAttackTime = 5.0f;        // 5s (JP-8 maximum)
+    static constexpr float kMinDecayTime = 0.001f;       // 1ms (JP-8 minimum)
+    static constexpr float kMaxDecayTime = 10.0f;        // 10s (JP-8 maximum)
+    static constexpr float kMinReleaseTime = 0.001f;     // 1ms (JP-8 minimum)
+    static constexpr float kMaxReleaseTime = 10.0f;      // 10s (JP-8 maximum)
     
     /**
      * @brief Update rate calculations from time parameters
