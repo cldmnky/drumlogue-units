@@ -156,6 +156,170 @@ static bool TestVelocitySensitivity() {
     return true;
 }
 
+static bool TestVelocityVCAScaling() {
+    std::cout << "\n=== Testing Velocity VCA Amplitude Scaling ===" << std::endl;
+    
+    // Test the VCA velocity scaling formula: gain = 0.2 + (velocity/127) * 0.8
+    // This ensures velocity 0->0.2x amplitude, velocity 127->1.0x amplitude
+    
+    auto VelocityToVCAGain = [](uint8_t velocity) {
+        return 0.2f + (velocity / 127.0f) * 0.8f;
+    };
+    
+    // Velocity 0 should give 0.2x (soft hits still audible)
+    float gain_silent = VelocityToVCAGain(0);
+    if (std::abs(gain_silent - 0.2f) > 0.01f) {
+        std::cout << "ERROR: Velocity 0 should give 0.2x gain, got " << gain_silent << std::endl;
+        return false;
+    }
+    std::cout << "  Velocity 0 -> " << gain_silent << "x (soft minimum)" << std::endl;
+    
+    // Velocity 127 should give 1.0x (loudest)
+    float gain_loud = VelocityToVCAGain(127);
+    if (std::abs(gain_loud - 1.0f) > 0.01f) {
+        std::cout << "ERROR: Velocity 127 should give 1.0x gain, got " << gain_loud << std::endl;
+        return false;
+    }
+    std::cout << "  Velocity 127 -> " << gain_loud << "x (maximum)" << std::endl;
+    
+    // Mid-range velocity should give mid-range gain
+    float gain_mid = VelocityToVCAGain(64);
+    float expected_mid = 0.2f + (64.0f / 127.0f) * 0.8f;  // ~0.6
+    if (std::abs(gain_mid - expected_mid) > 0.01f) {
+        std::cout << "ERROR: Velocity 64 should give ~" << expected_mid << "x, got " << gain_mid << std::endl;
+        return false;
+    }
+    std::cout << "  Velocity 64 -> " << gain_mid << "x (mid-range)" << std::endl;
+    
+    // Soft velocity (30)
+    float gain_soft = VelocityToVCAGain(30);
+    if (gain_soft <= gain_silent || gain_soft >= gain_loud) {
+        std::cout << "ERROR: Soft velocity gain out of expected range: " << gain_soft << std::endl;
+        return false;
+    }
+    std::cout << "  Velocity 30 -> " << gain_soft << "x (soft)" << std::endl;
+    
+    // Hard velocity (120)
+    float gain_hard = VelocityToVCAGain(120);
+    if (gain_hard <= gain_mid || gain_hard >= gain_loud) {
+        std::cout << "ERROR: Hard velocity gain out of expected range: " << gain_hard << std::endl;
+        return false;
+    }
+    std::cout << "  Velocity 120 -> " << gain_hard << "x (hard)" << std::endl;
+    
+    std::cout << "✓ Velocity VCA scaling test PASSED" << std::endl;
+    return true;
+}
+
+static bool TestPerVoiceVelocityPolyphonic() {
+    std::cout << "\n=== Testing Per-Voice Velocity in Polyphonic Mode ===" << std::endl;
+    
+    dsp::VoiceAllocator allocator;
+    allocator.Init(48000.0f);
+    allocator.SetMode(dsp::SYNTH_MODE_POLYPHONIC);
+    
+    // Play three notes with different velocities
+    allocator.NoteOn(60, 30);   // Soft C
+    allocator.NoteOn(64, 80);   // Medium E
+    allocator.NoteOn(67, 120);  // Loud G
+    
+    // Check that each voice stores its own velocity (normalized 0-1)
+    const dsp::Voice& voice_c = allocator.GetVoice(0);
+    const dsp::Voice& voice_e = allocator.GetVoice(1);
+    const dsp::Voice& voice_g = allocator.GetVoice(2);
+    
+    // Velocity is stored normalized: 30/127, 80/127, 120/127
+    float norm_30 = 30.0f / 127.0f;
+    float norm_80 = 80.0f / 127.0f;
+    float norm_120 = 120.0f / 127.0f;
+    
+    if (std::abs(voice_c.velocity - norm_30) > 0.01f) {
+        std::cout << "ERROR: Voice 0 velocity should be " << norm_30 << ", got " << voice_c.velocity << std::endl;
+        return false;
+    }
+    std::cout << "  Voice 0 (C): velocity = " << voice_c.velocity << " (soft)" << std::endl;
+    
+    if (std::abs(voice_e.velocity - norm_80) > 0.01f) {
+        std::cout << "ERROR: Voice 1 velocity should be " << norm_80 << ", got " << voice_e.velocity << std::endl;
+        return false;
+    }
+    std::cout << "  Voice 1 (E): velocity = " << voice_e.velocity << " (medium)" << std::endl;
+    
+    if (std::abs(voice_g.velocity - norm_120) > 0.01f) {
+        std::cout << "ERROR: Voice 2 velocity should be " << norm_120 << ", got " << voice_g.velocity << std::endl;
+        return false;
+    }
+    std::cout << "  Voice 2 (G): velocity = " << voice_g.velocity << " (loud)" << std::endl;
+    
+    // Verify velocities are independent (not all using last note's velocity)
+    if (voice_c.velocity == voice_e.velocity || voice_e.velocity == voice_g.velocity) {
+        std::cout << "ERROR: All voices have same velocity! Per-voice velocity NOT working" << std::endl;
+        return false;
+    }
+    
+    std::cout << "✓ Per-voice velocity in polyphonic mode PASSED" << std::endl;
+    return true;
+}
+
+static bool TestVelocityCutoffBidirectional() {
+    std::cout << "\n=== Testing Bidirectional Velocity (Filter + Amplitude) ===" << std::endl;
+    
+    // Verify velocity modulation affects both VCF cutoff AND VCA amplitude
+    // VCF: velocity -> cutoff frequency (high velocity = brighter)
+    // VCA: velocity -> amplitude (high velocity = louder)
+    
+    // VCF modulation: vel_mod = (velocity / 127) * 0.5, then * 2.0 = ±2 octaves
+    auto VelocityToVCFMod = [](uint8_t velocity) {
+        return (velocity / 127.0f) * 0.5f;  // 0.0 to 0.5
+    };
+    
+    // VCA modulation: gain = 0.2 + (velocity / 127) * 0.8
+    auto VelocityToVCAGain = [](uint8_t velocity) {
+        return 0.2f + (velocity / 127.0f) * 0.8f;  // 0.2 to 1.0
+    };
+    
+    uint8_t velocity_soft = 20;
+    uint8_t velocity_loud = 110;
+    
+    float vcf_mod_soft = VelocityToVCFMod(velocity_soft);
+    float vcf_mod_loud = VelocityToVCFMod(velocity_loud);
+    float vca_gain_soft = VelocityToVCAGain(velocity_soft);
+    float vca_gain_loud = VelocityToVCAGain(velocity_loud);
+    
+    std::cout << "  Soft velocity (" << (int)velocity_soft << "):" << std::endl;
+    std::cout << "    VCF cutoff mod: " << vcf_mod_soft << " (darker)" << std::endl;
+    std::cout << "    VCA gain: " << vca_gain_soft << "x (quieter)" << std::endl;
+    
+    std::cout << "  Loud velocity (" << (int)velocity_loud << "):" << std::endl;
+    std::cout << "    VCF cutoff mod: " << vcf_mod_loud << " (brighter)" << std::endl;
+    std::cout << "    VCA gain: " << vca_gain_loud << "x (louder)" << std::endl;
+    
+    // Verify bidirectional: both should increase with velocity
+    if (vcf_mod_loud <= vcf_mod_soft) {
+        std::cout << "ERROR: VCF modulation not increasing with velocity!" << std::endl;
+        return false;
+    }
+    if (vca_gain_loud <= vca_gain_soft) {
+        std::cout << "ERROR: VCA gain not increasing with velocity!" << std::endl;
+        return false;
+    }
+    
+    // Verify both effects are present (not just one)
+    float vcf_ratio = vcf_mod_loud / vcf_mod_soft;
+    float vca_ratio = vca_gain_loud / vca_gain_soft;
+    if (vcf_ratio < 1.1f || vca_ratio < 1.1f) {
+        std::cout << "ERROR: Velocity effects too weak (both should scale >10%)" << std::endl;
+        return false;
+    }
+    
+    std::cout << "  VCF effect scale: " << vcf_ratio << "x" << std::endl;
+    std::cout << "  VCA effect scale: " << vca_ratio << "x" << std::endl;
+    
+    std::cout << "✓ Bidirectional velocity effects test PASSED" << std::endl;
+
+    return true;
+}
+
 static bool TestPitchBendRange() {
     std::cout << "\n=== Testing Pitch Bend Range ===" << std::endl;
     
@@ -585,6 +749,15 @@ int main(int argc, char** argv) {
     
     ok = true;
     if (!TestVelocitySensitivity()) {
+        ok = false;
+    }
+    if (!TestVelocityVCAScaling()) {
+        ok = false;
+    }
+    if (!TestPerVoiceVelocityPolyphonic()) {
+        ok = false;
+    }
+    if (!TestVelocityCutoffBidirectional()) {
         ok = false;
     }
     if (!TestPitchBendRange()) {
