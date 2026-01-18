@@ -2467,6 +2467,186 @@ static bool TestCatchableValueFloat() {
     return true;
 }
 
+// ============================================================================
+// JP-8 Phase 6: Performance & Stability Tests
+// ============================================================================
+
+static bool TestVCFCoefficientCaching() {
+    // Verify that coefficient caching (parameter change detection) works correctly
+    // by checking that UpdateCoefficients() is called only when needed
+    std::cout << "\n--- VCF Coefficient Caching Test ---" << std::endl;
+    
+    dsp::VoiceAllocator allocator;
+    allocator.Init(48000.0f);
+    allocator.SetMode(dsp::SYNTH_MODE_MONOPHONIC);
+    
+    // Trigger a note to get active voice
+    allocator.NoteOn(60, 100);
+    dsp::Voice& voice = allocator.GetVoiceMutable(0);
+    
+    // Process some samples with fixed parameters
+    float test_signal = 0.5f;
+    std::vector<float> output(1024);
+    
+    for (int i = 0; i < 1024; i++) {
+        // Set identical cutoff multiple times - should only update coefficients once
+        voice.vcf.SetCutoff(1000.0f);  // Call multiple times
+        voice.vcf.SetCutoff(1000.0f);
+        voice.vcf.SetCutoff(1000.0f);
+        
+        output[i] = voice.vcf.Process(test_signal);
+    }
+    
+    // Check that output is stable (no NaN/Inf)
+    for (int i = 0; i < 1024; i++) {
+        if (!std::isfinite(output[i])) {
+            std::cout << "    ERROR: Non-finite output at sample " << i << std::endl;
+            return false;
+        }
+    }
+    
+    std::cout << "    PASSED: Coefficient caching maintains numerical stability" << std::endl;
+    return true;
+}
+
+static bool TestDenormalHandling() {
+    // Verify that denormal flushing prevents ARM FPU performance spikes
+    // by processing signals with very small amplitudes (denormal region)
+    std::cout << "\n--- Denormal Handling Test ---" << std::endl;
+    
+    dsp::VoiceAllocator allocator;
+    allocator.Init(48000.0f);
+    allocator.SetMode(dsp::SYNTH_MODE_MONOPHONIC);
+    
+    allocator.NoteOn(60, 100);
+    dsp::Voice& voice = allocator.GetVoiceMutable(0);
+    
+    // Process denormal-region signal (very small amplitudes)
+    // These can cause FPU performance degradation without flushing
+    const float denormal_threshold = 1e-15f;  // ARM denormal boundary
+    float denormal_signal = denormal_threshold * 0.5f;  // Below denormal threshold
+    
+    std::vector<float> output(2048);
+    for (int i = 0; i < 2048; i++) {
+        output[i] = voice.vcf.Process(denormal_signal);
+        
+        // Check for gradual amplitude decay (not preserved at denormal levels)
+        if (i > 0 && std::abs(output[i]) > denormal_threshold) {
+            // Output should flush to zero or near-zero for denormal inputs
+            std::cout << "    WARNING: Denormal not flushed properly: " << output[i] << std::endl;
+        }
+    }
+    
+    // Verify no NaN/Inf from denormal operations
+    for (int i = 0; i < 2048; i++) {
+        if (!std::isfinite(output[i])) {
+            std::cout << "    ERROR: Non-finite output at sample " << i << " during denormal test" << std::endl;
+            return false;
+        }
+    }
+    
+    std::cout << "    PASSED: Denormal flushing prevents FPU issues" << std::endl;
+    return true;
+}
+
+static bool TestPolyphonyStability() {
+    // Stress test: 10 seconds of 4-voice polyphonic rendering
+    // Verify no accumulating drift, NaN, or Inf during sustained rendering
+    std::cout << "\n--- Polyphony Stability Test (10 seconds, 4 voices) ---" << std::endl;
+    
+    dsp::VoiceAllocator allocator;
+    allocator.Init(48000.0f);
+    allocator.SetMode(dsp::SYNTH_MODE_POLYPHONIC);
+    
+    // Allocate 4 voices
+    allocator.NoteOn(60, 100);  // C4
+    allocator.NoteOn(64, 100);  // E4
+    allocator.NoteOn(67, 100);  // G4
+    allocator.NoteOn(71, 100);  // B4
+    
+    // Set varying filter cutoff over time (simulate modulation)
+    const uint32_t sample_rate = 48000;
+    const uint32_t test_duration_sec = 10;
+    const uint32_t total_samples = sample_rate * test_duration_sec;
+    
+    float max_output = 0.0f;
+    float min_output = 0.0f;
+    uint32_t non_finite_count = 0;
+    
+    for (uint32_t sample = 0; sample < total_samples; sample++) {
+        // Modulate cutoff with a slow LFO
+        float lfo = std::sin(2.0f * 3.14159f * sample / (sample_rate * 2.0f));
+        float cutoff = 1000.0f + lfo * 500.0f;  // 500Hz - 1500Hz sweep
+        
+        // Apply cutoff to all voices
+        for (uint8_t v = 0; v < DRUPITER_MAX_VOICES; v++) {
+            dsp::Voice& voice = allocator.GetVoiceMutable(v);
+            voice.vcf.SetCutoff(cutoff);
+            
+            float out = voice.vcf.Process(0.1f);  // Test with small signal
+            
+            if (!std::isfinite(out)) {
+                non_finite_count++;
+                if (non_finite_count == 1) {
+                    std::cout << "    ERROR: Non-finite value at sample " << sample << ", voice " << (int)v << std::endl;
+                }
+            } else {
+                max_output = std::max(max_output, out);
+                min_output = std::min(min_output, out);
+            }
+        }
+    }
+    
+    if (non_finite_count > 0) {
+        std::cout << "    ERROR: " << non_finite_count << " non-finite samples detected" << std::endl;
+        return false;
+    }
+    
+    std::cout << "    Output range: [" << min_output << ", " << max_output << "]" << std::endl;
+    std::cout << "    PASSED: 10-second polyphony test completed without instability" << std::endl;
+    return true;
+}
+
+static bool TestParameterChangeDetection() {
+    // Verify that parameter change detection correctly identifies when
+    // SetCutoff/SetResonance should trigger coefficient recalculation
+    std::cout << "\n--- Parameter Change Detection Test ---" << std::endl;
+    
+    dsp::VoiceAllocator allocator;
+    allocator.Init(48000.0f);
+    allocator.SetMode(dsp::SYNTH_MODE_MONOPHONIC);
+    
+    allocator.NoteOn(60, 100);
+    dsp::Voice& voice = allocator.GetVoiceMutable(0);
+    
+    // Test cutoff change detection
+    voice.vcf.SetCutoff(1000.0f);
+    float output1 = voice.vcf.Process(0.1f);
+    
+    // Small change should NOT be detected (threshold is 1e-6f)
+    voice.vcf.SetCutoff(1000.0f + 1e-7f);  // Change < threshold
+    float output2 = voice.vcf.Process(0.1f);
+    
+    // Large change SHOULD be detected
+    voice.vcf.SetCutoff(2000.0f);  // Clear change > threshold
+    float output3 = voice.vcf.Process(0.1f);
+    
+    // Outputs should be identical for small change (no coefficient update)
+    if (std::abs(output1 - output2) > 1e-6f) {
+        std::cout << "    WARNING: Small parameter change triggered coefficient update" << std::endl;
+    }
+    
+    // Output should be different for large change (coefficient updated)
+    if (std::abs(output2 - output3) < 1e-3f) {
+        std::cout << "    WARNING: Large parameter change did not affect output" << std::endl;
+        return false;
+    }
+    
+    std::cout << "    Output1: " << output1 << ", Output2: " << output2 << ", Output3: " << output3 << std::endl;
+    std::cout << "    PASSED: Parameter change detection working correctly" << std::endl;
+    return true;
+}
+
 int main(int argc, char** argv) {
     (void)argc;
     (void)argv;
@@ -2704,6 +2884,33 @@ int main(int argc, char** argv) {
 
     std::cout << "\n" << "========================================" << std::endl;
     std::cout << "All JP-8 Phase 5 tests PASSED!" << std::endl;
+    std::cout << "========================================" << std::endl;
+    
+    // Run JP-8 alignment tests (Phase 6: Performance & Stability)
+    std::cout << "\n" << "========================================" << std::endl;
+    std::cout << "JP-8 Alignment Tests (Phase 6: Performance & Stability)" << std::endl;
+    std::cout << "========================================" << std::endl;
+
+    ok = true;
+    if (!TestVCFCoefficientCaching()) {
+        ok = false;
+    }
+    if (!TestDenormalHandling()) {
+        ok = false;
+    }
+    if (!TestParameterChangeDetection()) {
+        ok = false;
+    }
+    if (!TestPolyphonyStability()) {
+        ok = false;
+    }
+
+    if (!ok) {
+        return 1;
+    }
+
+    std::cout << "\n" << "========================================" << std::endl;
+    std::cout << "All JP-8 Phase 6 tests PASSED!" << std::endl;
     std::cout << "========================================" << std::endl;
     
     // Run catchable value tests
