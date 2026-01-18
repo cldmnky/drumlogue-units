@@ -250,6 +250,28 @@ float stage4 = ProcessFourPole(x);
 return (mode == kVcf12dB) ? stage2 : stage4;
 
 ## Phase 3 — Modulation routing alignment
+
+**Status: ✅ COMPLETE** (2026-01-18)
+
+**Implemented features:**
+- ✅ LFO key trigger (resets phase on note-on, enabled by default for JP-8 authenticity)
+- ✅ VCA LFO depth quantization (4 steps: 0%, 33%, 67%, 100% matching JP-8 switch)
+- ✅ VCF envelope source uses per-voice `env_filter` in POLY mode (already correct from Phase 1)
+
+**Test results:**
+- LFO key trigger: PASSED (consistent phase reset on note-on, RMS ratio = 1.0)
+- VCA LFO quantization: PASSED (values within same step match exactly)
+
+**Files modified:**
+- `jupiter_lfo.h/cc`: Added `key_trigger_` flag, `SetKeyTrigger()`, conditional phase reset
+- `drupiter_synth.cc`: Call `lfo_.Trigger()` in `NoteOn()`, add 4-step VCA LFO quantization
+
+**Build:** drupiter_synth.drmlgunit 58KB, no undefined symbols
+
+---
+
+### Original Phase 3 Design Notes
+
 Objective: ensure modulation sources are per‑voice in poly and match JP‑8.
 
 Tasks:

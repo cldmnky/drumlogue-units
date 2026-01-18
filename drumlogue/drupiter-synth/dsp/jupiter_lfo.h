@@ -69,7 +69,19 @@ public:
     void SetDelay(float delay_sec);
     
     /**
-     * @brief Trigger LFO (reset delay envelope)
+     * @brief Set key trigger enable/disable
+     * @param enable If true, LFO phase resets on note-on
+     */
+    void SetKeyTrigger(bool enable);
+    
+    /**
+     * @brief Get key trigger state
+     * @return true if key trigger is enabled
+     */
+    bool GetKeyTrigger() const { return key_trigger_; }
+    
+    /**
+     * @brief Trigger LFO (reset delay envelope and optionally phase)
      */
     void Trigger();
     
@@ -89,6 +101,7 @@ private:
     float phase_;               // Current phase (0.0-1.0)
     float phase_inc_;           // Phase increment per sample
     Waveform waveform_;
+    bool key_trigger_;          // If true, reset phase on Trigger()
     
     // Delay envelope
     float delay_phase_;         // Delay envelope phase (0.0-1.0)

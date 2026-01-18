@@ -923,9 +923,14 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         }
         
         // VCA LFO (tremolo): 0% = no tremolo, 100% = full amplitude modulation
+        // Phase 3: Quantize to 4 steps (JP-8 feature: 0/1/2/3 switch)
         if (vca_lfo_depth > kMinModulation) {
-            // Bipolar LFO (-1 to +1) . unipolar tremolo (0.5 to 1.5)
-            const float tremolo = 1.0f + (lfo_out_ * vca_lfo_depth * 0.5f);
+            // Map continuous 0-1 to discrete steps: 0%, 33%, 67%, 100%
+            const int vca_lfo_switch = static_cast<int>(vca_lfo_depth * 3.999f);  // 0-3
+            static constexpr float kVcaLfoDepths[4] = {0.0f, 0.33f, 0.67f, 1.0f};
+            const float quantized_depth = kVcaLfoDepths[vca_lfo_switch];
+            // Bipolar LFO (-1 to +1) -> unipolar tremolo (0.5 to 1.5)
+            const float tremolo = 1.0f + (lfo_out_ * quantized_depth * 0.5f);
             vca_gain *= tremolo;
         }
         
@@ -1389,6 +1394,10 @@ void DrupiterSynth::NoteOn(uint8_t note, uint8_t velocity) {
     // Trigger envelopes
     env_vca_.NoteOn();
     env_vcf_.NoteOn();
+    
+    // Phase 3: LFO key trigger (JP-8 feature)
+    // Reset LFO phase on each note-on for synchronized modulation
+    lfo_.Trigger();
 }
 
 void DrupiterSynth::NoteOff(uint8_t note) {
