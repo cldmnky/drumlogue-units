@@ -17,6 +17,7 @@ JupiterLFO::JupiterLFO()
     , phase_(0.0f)
     , phase_inc_(0.0f)
     , waveform_(WAVEFORM_TRIANGLE)
+    , key_trigger_(true)  // JP-8 authenticity: key trigger enabled by default
     , delay_phase_(1.0f)  // Start with no delay (fully on)
     , delay_inc_(0.0f)
     , delay_time_(0.0f)
@@ -52,10 +53,18 @@ void JupiterLFO::SetDelay(float delay_sec) {
     }
 }
 
+void JupiterLFO::SetKeyTrigger(bool enable) {
+    key_trigger_ = enable;
+}
+
 void JupiterLFO::Trigger() {
-    phase_ = 0.0f;
+    // Reset phase only if key trigger is enabled (JP-8 feature)
+    if (key_trigger_) {
+        phase_ = 0.0f;
+    }
+    // Always reset delay envelope on trigger
     if (delay_time_ > 0.0f) {
-        delay_phase_ = 0.0f;  // Reset delay envelope
+        delay_phase_ = 0.0f;
     }
 }
 

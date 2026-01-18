@@ -314,6 +314,35 @@ if (hpf_alpha > 0.0f && current_mode_ != dsp::SYNTH_MODE_POLYPHONIC) {
 
 ## Phase 3: Modulation Routing Alignment
 
+**Status:** ✅ **COMPLETE** (2026-01-18)
+
+**Implementation Summary:**
+- ✅ LFO key trigger feature added (resets phase on note-on, enabled by default)
+- ✅ VCA LFO depth quantization (4 steps: 0%, 33%, 67%, 100% matching JP-8)
+- ✅ VCF envelope source uses per-voice `env_filter` in POLY mode (Option B)
+
+**Build:** drupiter_synth.drmlgunit 58KB, no undefined symbols  
+**Tests:** Phase 3 tests PASSED
+
+**Test Results:**
+```
+=== JP-8 Phase 3: LFO Key Trigger ===
+  RMS test1=0.119113 test2=0.119113 ratio=1
+  ✓ LFO key trigger test PASSED
+
+=== JP-8 Phase 3: VCA LFO Depth Quantization ===
+  Values in same step match exactly (quantization working)
+  ✓ VCA LFO quantization test PASSED
+```
+
+**Files Modified:**
+- [jupiter_lfo.h](../../drumlogue/drupiter-synth/dsp/jupiter_lfo.h) - Added `key_trigger_` flag, `SetKeyTrigger()`, `GetKeyTrigger()`
+- [jupiter_lfo.cc](../../drumlogue/drupiter-synth/dsp/jupiter_lfo.cc) - Implement conditional phase reset in `Trigger()`
+- [drupiter_synth.cc](../../drumlogue/drupiter-synth/drupiter_synth.cc) - Call `lfo_.Trigger()` in `NoteOn()`, add VCA LFO quantization
+- [test/drupiter-synth/main.cc](../../test/drupiter-synth/main.cc) - Added `TestLfoKeyTrigger()`, `TestVcaLfoQuantization()`
+
+---
+
 ### 3.1 Current LFO Implementation
 
 From [drupiter_synth.h#L369](drumlogue/drupiter-synth/drupiter_synth.h#L369):
