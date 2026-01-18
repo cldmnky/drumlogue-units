@@ -374,7 +374,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     // Map 0-100 parameter to 0-1.2 multiplier (100 = 1.2 = 120%)
     const float key_track = (current_preset_.params[PARAM_VCF_KEYFLW] / 100.0f) * 1.2f;
     
-    // Velocity modulation (fixed value for now, TODO: make parameter)
+// Velocity modulation for MONO/UNISON modes (polyphonic uses per-voice velocity)
     const float vel_mod = (current_velocity_ / 127.0f) * 0.5f;  // Fixed 50% velocity.VCF
     
     // Task 2.2.4: Process portamento/glide for MONO/UNISON modes
@@ -595,8 +595,16 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
                 }
 #endif
                 
-                // Apply envelope and add to mix
-                mixed_ += voice_mix * voice_env;
+                // Apply voice envelope
+                float voice_output = voice_mix * voice_env;
+                
+                // Apply velocity scaling to VCA amplitude (soft hits quieter, loud hits louder)
+                // Map velocity 0-127 to VCA multiplier 0.2-1.0 (soft hits still audible)
+                const float voice_vca_gain = 0.2f + (voice.velocity / 127.0f) * 0.8f;  // 0.2 to 1.0
+                voice_output *= voice_vca_gain;
+                
+                // Add velocity-scaled voice to mix (VCF will be applied globally after mixing)
+                mixed_ += voice_output;
 
                 // If envelope is fully released, mark voice inactive so it can retrigger
                 if (!voice_mut.env_amp.IsActive()) {
@@ -774,6 +782,9 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         cutoff_base *= semitones_to_ratio(clamped_exponent * 12.0f);  // Fast approx
         
         // Combine envelope, LFO, velocity, and hub modulation
+        // For POLY mode: Use velocity from current_velocity_ (simplified - single shared VCF cutoff)
+        // This matches the architecture where all poly voices feed through one shared VCF
+        // Individual velocity scaling already applied in per-voice VCA gain
         float total_mod = vcf_env_out_ * 2.0f              // Base envelope modulation
                         + env_vcf_depth * vcf_env_out_     // Hub envelope.VCF modulation
                         + lfo_out_ * lfo_vcf_depth * 1.0f  // LFO modulation
@@ -818,12 +829,21 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
             else if (filtered_ < -1.8f) filtered_ = -1.8f + 0.2f * (filtered_ + 1.8f);
         }
         
-        // Apply VCA with envelope, LFO tremolo, keyboard tracking, and level control
+        // Apply VCA with envelope, LFO tremolo, keyboard tracking, velocity scaling, and level control
         // Base VCA envelope
-        // In POLY mode, voices already rendered with their individual envelopes - no additional processing needed
-        // In UNISON mode, use voice 0's envelope and let it complete its release
-        // In MONO mode, use main env_vca_
+        // In POLY mode, voices already rendered with velocity scaling - no additional velocity processing
+        // In UNISON mode, use voice 0's envelope and velocity
+        // In MONO mode, use main env_vca_ and current_velocity_
         float vca_gain = vca_env_out_;
+        
+        // Apply velocity scaling to VCA for MONO/UNISON modes
+        // POLY mode already applied per-voice velocity scaling above
+        if (current_mode_ != dsp::SYNTH_MODE_POLYPHONIC) {
+            // Map velocity 0-127 to VCA multiplier 0.2-1.0 (soft hits still audible)
+            const float velocity_vca = 0.2f + (current_velocity_ / 127.0f) * 0.8f;  // 0.2 to 1.0
+            vca_gain *= velocity_vca;
+        }
+        
         if (current_mode_ == dsp::SYNTH_MODE_UNISON) {
             // In UNISON mode: All unison voices share the same envelope state
             // CRITICAL: Always process envelope (even during release) to allow proper note-off
