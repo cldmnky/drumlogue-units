@@ -533,6 +533,9 @@ text    data     bss     dec     hex
 Phase 7: Hardware verification and final integration testing
 
 ## Phase 7 — Hardware verification
+
+**Status: ⏳ PLANNED**
+
 Objective: verify behavior on drumlogue hardware.
 
 Tasks:
@@ -550,18 +553,199 @@ Code changes to align:
 - Add debug counters for voice steals and clipping detection (desktop only).
 
 Example (perf counter hook):
+```cpp
 // drupiter_synth.cc
 #if defined(PERF_MON)
 perf_mon_.Begin();
 // render...
 perf_mon_.End();
 #endif
+```
+
+## Phase 8 — Keyboard Tracking & Cross Modulation (X-Mod)
+
+**Status: ⏳ PLANNED**
+
+Objective: Implement authentic JP-8 keyboard tracking behavior and cross-modulation (VCO-2 → VCO-1 FM) based on Roland service manual specifications.
+
+### Specifications from JP-8 Service Manual
+
+#### 8.1 Keyboard Tracking (Key Follow)
+
+**VCF Key Follow (Keyboard Tracking):**
+- Range: 0–120% (can exceed standard 1V/octave to track more aggressively)
+- Application: Applied to both VCF cutoff frequency
+- Scaling: Internal Key Control Voltage (KCV) at 1V/octave
+- Resolution: 0.6mV per step (14-bit DAC) = 0.7 cents per step
+- Behavior: Higher notes trigger higher VCF cutoff (when tracking enabled)
+
+**Envelope Key Follow:**
+- Both ENV-1 and ENV-2 feature keyboard tracking
+- Effect: Shortens envelope times (Attack, Decay, Release) as you play higher on keyboard
+- Purpose: Mimics natural acoustic behavior where higher notes decay faster
+- Implementation: Envelope time scaling based on note number
+
+**Lookup Table Approach (Current Implementation):**
+- `kKbdTrackingTableSize = 128` (one entry per MIDI note, 0-127)
+- Pre-calculated ratios avoiding runtime computation
+- Linear interpolation if finer resolution needed
+
+#### 8.2 Cross Modulation (X-Mod)
+
+**VCO-2 → VCO-1 Modulation:**
+- X-Mod applies VCO-2 output as frequency modulation (FM) to VCO-1
+- Routing: VCO-2 output → VCO-1 frequency input
+- Creates complex, bell-like FM timbres characteristic of Jupiter-8
+
+**X-Mod Depth Calibration:**
+- At slider position **5** (nominal) with **VCO-1 Range at 2'** (16 ft):
+  - Modulating voltage shifts VCO-1 frequency by **3 octaves**
+- Scaling formula: Modulation voltage = depth × VCO-2 amplitude
+- Resolution: Continuous control with smooth response
+
+**X-Mod Balance (VR10 Calibration):**
+- Service manual specifies trimmer pot VR10 for balance
+- Purpose: Ensures base pitch remains stable when modulation is applied
+- Effect: Removes pitch shift from DC offset in VCO-2 output
+- Implementation: DC blocking or high-pass filtering of modulation signal
+
+**VCO-2 Modes:**
+- X-Mod works in both **Normal** (oscillator) and **Low Frequency** (LFO) ranges
+- LFO range mode creates tremolo/amplitude modulation effects
+- Normal mode creates bell/FM synthesis timbres
+
+### Current Implementation Status
+
+**Keyboard Tracking (Partial Implementation):**
+- ✅ VCF keyboard tracking structure exists:
+  - `ApplyKeyboardTracking(note)` method in `jupiter_vcf.h/cc`
+  - Lookup table `s_kbd_tracking_table[]` with 128 entries
+  - Methods: `SetKeyboardTracking(amount)` for parameter control
+- ⚠️ Implementation gaps:
+  - No envelope time scaling for KEY FOLLOW effect
+  - VCF tracking may not properly implement 0-120% range
+  - No per-voice note tracking in POLY mode (needed for independent tracking)
+
+**Cross Modulation (Not Implemented):**
+- ❌ No X-Mod between VCO-1 and VCO-2
+- ❌ No VCO-2 LFO mode implementation
+- ❌ No X-Mod depth parameter control
+- ❌ No X-Mod balance calibration
+
+### Implementation Plan for Phase 8
+
+**8.1 VCF Keyboard Tracking Verification & Enhancement**
+1. Verify `ApplyKeyboardTracking()` implementation:
+   - Check lookup table values match 1V/octave calibration
+   - Ensure 0-120% range properly scales tracking amount
+   - Test with actual MIDI notes to confirm frequency shift
+   
+2. Implement envelope time scaling for KEY FOLLOW:
+   - Scale `JupiterEnvelope` times based on note number
+   - Higher notes → shorter attack/decay/release times
+   - Typical scaling: -0.5% per semitone or similar
+   - Files: `jupiter_env.h/cc`, parameter control in `drupiter_synth.cc`
+
+3. Ensure per-voice keyboard tracking in POLY mode:
+   - Call `voice.vcf.ApplyKeyboardTracking(voice.midi_note)` for each voice
+   - Envelopes should also receive note information for key follow
+   - Location: POLY render loop in `drupiter_synth.cc` (~line 500-600)
+
+**8.2 Cross Modulation (X-Mod) Implementation**
+1. Add X-Mod depth parameter control:
+   - Parameter range: 0-100 (representing 0-3 octave shift at nominal calibration)
+   - Location: Add to `drupiter_synth.h/cc` parameter system
+   - HUB control type: percentage or integer scale
+
+2. Implement VCO-2 → VCO-1 modulation routing:
+   - In POLY render loop:
+     ```cpp
+     // For each voice in polyphonic mode:
+     float vco2_output = voice.dco2.Process();
+     float xmod_amount = xmod_depth * kXModDepthCalibration;
+     voice.dco1.ApplyFM(vco2_output * xmod_amount);
+     float voice_mix = voice.dco1.Process() + vco2_level * vco2_output;
+     ```
+   - DCO structure already has `ApplyFM()` method
+
+3. X-Mod balance calibration:
+   - Implement DC blocking (high-pass filter) on modulation signal:
+     - Simple 1-pole high-pass: `modulation = modulation - prev_modulation * 0.95f`
+     - Or use `JupiterDCO::ApplyFM()` with proper DC removal
+   - Verify balance with continuous modulation source (LFO)
+
+4. Support VCO-2 LFO mode:
+   - Extend `JupiterDCO` to support LFO range (sub-audio frequencies)
+   - Frequency range: ~0.1Hz to ~50Hz (typical LFO range)
+   - Location: `jupiter_dco.h/cc`
+
+### Test Plan for Phase 8
+
+**Desktop Test Coverage:**
+1. TestKeyboardTrackingRange()
+   - Play notes C2 to C7
+   - Measure VCF cutoff frequency for each note
+   - Verify tracking ratio ≈ 1V/octave (or up to 1.2V with tracking enabled)
+   - Check lookup table accuracy
+
+2. TestEnvelopeKeyFollow()
+   - Measure envelope times at different notes (C3, C4, C5, C6)
+   - Verify times shorten by ~0.5% per semitone
+   - Compare with JP-8 reference behavior
+
+3. TestXModDepthCalibration()
+   - Set VCO-1 range to 2' (16 ft)
+   - Set X-Mod depth to nominal
+   - Measure VCO-1 frequency shift with modulation
+   - Verify shift = 3 octaves ± 0.5 octaves
+
+4. TestXModBalance()
+   - Apply DC offset to VCO-2 output
+   - Verify VCO-1 base frequency remains stable
+   - Check DC blocking effectiveness
+
+5. TestPolyKeyboardTracking()
+   - 4-voice polyphonic render
+   - Each voice at different note
+   - Verify each voice's VCF cutoff tracks independently
+   - Verify envelope times differ per voice
+
+**Hardware Validation:**
+- Load unit on drumlogue
+- Test VCF cutoff tracking across keyboard
+- Test envelope speed changes with note height
+- Test X-Mod timbral variation across keyboard
+
+### Files to Modify
+
+| File | Changes |
+|------|---------|
+| `jupiter_vcf.h/cc` | Verify/enhance keyboard tracking implementation, ensure 0-120% range |
+| `jupiter_env.h/cc` | Add key follow time scaling, add `ApplyKeyFollow(note)` method |
+| `jupiter_dco.h/cc` | Extend `ApplyFM()` with DC blocking, add LFO mode support |
+| `drupiter_synth.h/cc` | Add X-Mod depth parameter, implement VCO-2 → VCO-1 routing in POLY loop |
+| `test/drupiter-synth/main.cc` | Add 5 test functions for keyboard tracking and X-Mod verification |
+
+### Performance Considerations
+- Keyboard tracking: Simple lookup table, no additional CPU cost
+- Envelope key follow: Per-voice scaling, minimal overhead
+- X-Mod: Single FM input per voice, already supported by DCO
+- Expected CPU impact: <2% additional overhead
+
+### Success Criteria
+- ✅ Keyboard tracking verified to 1.2V/octave accuracy
+- ✅ Envelope times scale correctly with note height
+- ✅ X-Mod depth produces ±3 octave shift at nominal setting
+- ✅ X-Mod balance maintains stable base pitch
+- ✅ All test cases pass on desktop and hardware
+- ✅ Code size remains reasonable (<1KB additional)
 
 ## References (code)
 - Main render loop: drumlogue/drupiter-synth/drupiter_synth.cc
 - Voice allocation: drumlogue/drupiter-synth/dsp/voice_allocator.*
 - DCO: drumlogue/drupiter-synth/dsp/jupiter_dco.*
 - VCF: drumlogue/drupiter-synth/dsp/jupiter_vcf.*
+- ENV: drumlogue/drupiter-synth/dsp/jupiter_env.*
 - ENV: drumlogue/drupiter-synth/dsp/jupiter_env.*
 
 ## Optional research (if needed)
