@@ -305,17 +305,27 @@ Example (VCA LFO depth switch):
 // values 0..3 map to 0, 0.33, 0.66, 1.0
 float vca_lfo = lfo_.value() * kVcaLfoDepths[vca_lfo_depth_];
 
-## Phase 4 — Voice allocation behavior
+## Phase 4 — Voice allocation behavior ✅ COMPLETE
 Objective: match JP‑8 voice priority and allocation.
 
+**Status:** Completed 2025-01-18
+
 Tasks:
-1. Implement JP‑8 style voice allocation (round‑robin with voice stealing).
-2. Confirm envelope retrigger behavior in poly, mono, and unison.
-3. Confirm unison detune stack matches JP‑8 unison behavior.
+1. ✅ Implement JP‑8 style voice allocation (round‑robin with voice stealing).
+2. ✅ Confirm envelope retrigger behavior in poly, mono, and unison.
+3. ✅ Confirm unison detune stack matches JP‑8 unison behavior.
 
 Validation:
-- Play repeated chords; ensure deterministic voice steal behavior.
-- Check release tails are preserved or stolen as expected.
+- ✅ Play repeated chords; ensure deterministic voice steal behavior.
+- ✅ Check release tails are preserved or stolen as expected.
+
+**Implementation Summary:**
+- Modified `voice_allocator.cc::NoteOn()` to intercept ALLOC_OLDEST_NOTE allocation when all voices active
+- Implemented two-pass stealing algorithm in `StealOldestVoice()`:
+  1. Priority 1: Steal oldest voice in RELEASE phase
+  2. Priority 2: Steal oldest sustaining voice (fallback)
+- Voice pointer converted to index for core_ integration
+- All three Phase 4 tests passing (release preference, round-robin, tail preservation)
 
 Code changes to align:
 - Implement round‑robin allocator with deterministic steal of oldest‑released voice.

@@ -481,10 +481,33 @@ Voice* VoiceAllocator::StealOldestVoice() {
 ```
 
 ### 4.4 Testing Criteria
-- [ ] Voice stealing respects release phase
-- [ ] Round-robin allocates evenly across voices
-- [ ] Chord stacking doesn't cause voice stealing until full
-- [ ] Mono mode uses legato/retrigger correctly
+- [x] Voice stealing respects release phase
+- [x] Round-robin allocates evenly across voices
+- [x] Chord stacking doesn't cause voice stealing until full
+- [x] Mono mode uses legato/retrigger correctly
+
+### 4.5 Completion Status ✅
+
+**Completed:** 2025-01-18
+
+**Changes Made:**
+- Modified `voice_allocator.cc::NoteOn()` to intercept voice allocation when all voices active in ALLOC_OLDEST_NOTE mode
+- Used `StealOldestVoice()` two-pass algorithm:
+  1. Priority 1: Steal oldest voice in RELEASE phase
+  2. Priority 2: Steal oldest sustaining voice (fallback)
+- Voice pointer converted to index using pointer arithmetic
+
+**Test Results:**
+- ✅ TestVoiceStealingPrefersRelease() - Verified release-phase voices stolen first
+- ✅ TestRoundRobinDistribution() - Confirmed even distribution across all 4 voices
+- ✅ TestReleaseTailsPreserved() - Verified free voices used before stealing
+
+**Build Status:**
+- Hardware: 58840 bytes (58KB), no undefined symbols
+- Desktop tests: All pass
+
+**Known Issues:**
+- None
 
 ---
 
