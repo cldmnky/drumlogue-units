@@ -110,6 +110,33 @@ inline uint8_t scale_127_centered_to_100(uint8_t v, uint8_t center_127, uint8_t 
     return clamp_u8_int32(mapped, 0, 100);
 }
 
+// Map DCO1 UI parameter value (0-4) to waveform enum
+// DCO1 waveforms: SAW(0), SQR(1), PUL(2), TRI(3), SAW_PWM(4)
+inline dsp::JupiterDCO::Waveform map_dco1_waveform(uint8_t value) {
+    switch (value) {
+        case 0: return dsp::JupiterDCO::WAVEFORM_SAW;
+        case 1: return dsp::JupiterDCO::WAVEFORM_SQUARE;
+        case 2: return dsp::JupiterDCO::WAVEFORM_PULSE;
+        case 3: return dsp::JupiterDCO::WAVEFORM_TRIANGLE;
+        case 4: return dsp::JupiterDCO::WAVEFORM_SAW_PWM;
+        default: return dsp::JupiterDCO::WAVEFORM_SAW;
+    }
+}
+
+// Map DCO2 UI parameter value (0-4) to waveform enum
+// DCO2 waveforms: SAW(0), NSE(1), PUL(2), SIN(3), SAW_PWM(4)
+// Note: DCO2 has different mapping than DCO1 - NOISE at index 1, SINE at index 3
+inline dsp::JupiterDCO::Waveform map_dco2_waveform(uint8_t value) {
+    switch (value) {
+        case 0: return dsp::JupiterDCO::WAVEFORM_SAW;
+        case 1: return dsp::JupiterDCO::WAVEFORM_NOISE;  // DCO2 has NOISE instead of SQUARE
+        case 2: return dsp::JupiterDCO::WAVEFORM_PULSE;
+        case 3: return dsp::JupiterDCO::WAVEFORM_SINE;   // DCO2 has SINE instead of TRIANGLE
+        case 4: return dsp::JupiterDCO::WAVEFORM_SAW_PWM;
+        default: return dsp::JupiterDCO::WAVEFORM_SAW;
+    }
+}
+
 }  // namespace
 
 DrupiterSynth::DrupiterSynth()
@@ -536,10 +563,11 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
                     }
                 }
                 
-                // Set voice-specific parameters
-                voice_mut.dco1.SetWaveform(static_cast<dsp::JupiterDCO::Waveform>(
+                // Set voice-specific parameters using proper waveform mapping
+                // DCO1 and DCO2 have different waveform sets at the same UI indices
+                voice_mut.dco1.SetWaveform(map_dco1_waveform(
                     current_preset_.params[PARAM_DCO1_WAVE]));
-                voice_mut.dco2.SetWaveform(static_cast<dsp::JupiterDCO::Waveform>(
+                voice_mut.dco2.SetWaveform(map_dco2_waveform(
                     current_preset_.params[PARAM_DCO2_WAVE]));
                 voice_mut.dco1.SetPulseWidth(modulated_pw);
                 voice_mut.dco2.SetPulseWidth(modulated_pw);
@@ -688,8 +716,8 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
             // UNISON MODE: Use UnisonOscillator for multi-voice detuned stack + DCO2
             dsp::UnisonOscillator& unison_osc = allocator_.GetUnisonOscillator();
             
-            // Set waveform and pulse width (same as DCO1)
-            unison_osc.SetWaveform(static_cast<dsp::JupiterDCO::Waveform>(
+            // Set waveform and pulse width (same as DCO1 with proper mapping)
+            unison_osc.SetWaveform(map_dco1_waveform(
                 current_preset_.params[PARAM_DCO1_WAVE]));
             unison_osc.SetPulseWidth(modulated_pw);
             
