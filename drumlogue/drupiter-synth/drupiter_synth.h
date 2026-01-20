@@ -298,7 +298,8 @@ public:
      */
     void AllNoteOff();
     
-    /**     * @brief Pitch bend event
+    /**
+     * @brief Pitch bend event
      * @param bend MIDI pitch bend value (0-16383, center=8192)
      */
     void PitchBend(uint16_t bend);
