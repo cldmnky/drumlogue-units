@@ -86,3 +86,5 @@ test/qemu-arm/unit_host_native
 test/qemu-arm/*.o
 test/qemu-arm/build/
 test/qemu-arm/fixtures/*.wav
+
+test/presets-editor/bin/
