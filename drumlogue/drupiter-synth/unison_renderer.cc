@@ -82,6 +82,9 @@ float UnisonRenderer::RenderUnison(
 
     // Apply pitch envelope modulation to DCO2 (pre-calculated)
     freq2 *= pitch_mod_ratio;
+    
+    // Apply pitch bend to DCO2 (matches unison_freq behavior)
+    freq2 *= smoothed_pitch_bend;
 
     synth.GetDCO2().SetFrequency(freq2);
     float dco2_out = synth.GetDCO2().Process();
