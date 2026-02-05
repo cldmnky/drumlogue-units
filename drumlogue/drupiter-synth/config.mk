@@ -86,6 +86,10 @@ UNISON_MAX_DETUNE ?= 50
 ifeq ($(PERF_MON),1)
   UDEFS = -DPERF_MON
   CXXSRC += ../common/perf_mon.cc
+  # For QEMU ARM testing, also define __QEMU_ARM__ to use chrono instead of hardware registers
+  ifeq ($(__QEMU_ARM__),1)
+    UDEFS += -D__QEMU_ARM__
+  endif
 else
   UDEFS =
 endif

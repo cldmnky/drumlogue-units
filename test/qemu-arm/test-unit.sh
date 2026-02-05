@@ -19,7 +19,7 @@ for arg in "$@"; do
             ;;
         --perf-mon)
             PERF_MON_FLAG="--perf-mon"
-            BUILD_FLAGS="PERF_MON=1"
+            BUILD_FLAGS="PERF_MON=1 __QEMU_ARM__=1"
             ;;
     esac
 done
