@@ -211,6 +211,15 @@ Required implementations:
 - Test all parameters, presets, and edge cases
 - Verify UI feedback and performance on device
 
+**QEMU ARM Testing:**
+- Use `test/qemu-arm/test-unit.sh` for ARM emulation validation
+- **macOS:** Uses Podman containers with qemu-user-static
+- **Linux:** Native ARM cross-compilation with qemu-user
+- **PERF_MON in QEMU:** Requires `__QEMU_ARM__` define for std::chrono fallback
+- Hardware DWT registers (0xE0001004) don't work in QEMU user-mode
+- Performance baseline: 3-5% CPU for typical synth, 95%+ headroom target
+- Build with PERF_MON: `./build.sh <unit> build PERF_MON=1 __QEMU_ARM__=1`
+
 **Debugging:**
 - Desktop: Compile with `-g`, use gdb/lldb, valgrind for memory issues
 - Hardware: Check `objdump -T` for undefined symbols (*UND*)
@@ -218,6 +227,47 @@ Required implementations:
 - Compare symbol tables with working units
 
 ## Common Tasks
+
+### Critical DSP Bugs to Watch For
+**Missing Return Statements:**
+- Renderer functions without explicit returns cause silent audio failures
+- Compiler won't catch missing returns in void functions
+- **Fix:** Always add explicit `return;` statements, use `[[nodiscard]]` for non-void returns
+
+**Renderer Function Signature Mismatches:**
+- MonoRenderer::Render() must match exact signature: `(float*, float*, uint32_t, const Voice&)`
+- Wrong parameter order or missing const causes undefined behavior
+- **Fix:** Check against expected signature in caller
+
+**Glide Calculations:**
+- Fixed-point pitch glide: `glide_accum_ += glide_delta_;` then right-shift by 16 bits
+- Must use 32-bit arithmetic, not 16-bit
+- **Fix:** `int32_t pitch = base_pitch + (glide_accum_ >> 16);`
+
+**MIDI Velocity Normalization:**
+- MIDI velocity range is 0-127, not 0-128
+- **Wrong:** `velocity / 128.0f`
+- **Correct:** `velocity / 127.0f`
+
+**Pitch Bend Calculations:**
+- Unison detune must use float arithmetic to avoid integer overflow
+- **Wrong:** `int32_t detune = base * cents / 100;` (overflow at cents=50)
+- **Correct:** `int32_t detune = static_cast<int32_t>(base * cents_float / 100.0f);`
+
+**ARM Math Functions:**
+- Always use single-precision variants: `powf()`, `sqrtf()`, `sinf()`, not `pow()`, `sqrt()`, `sin()`
+- ARM has hardware support for single-precision, double is emulated
+- **Fix:** Use `-Wdouble-promotion` to catch these
+
+**NEON Memory Safety:**
+- Classes with NEON state must delete copy constructors
+- **Wrong:** Default copy constructor copies NEON registers inefficiently
+- **Correct:** `ClassName(const ClassName&) = delete;`
+
+**std::nothrow for Init Allocations:**
+- Rare init-time allocations should use `new (std::nothrow)`
+- **Wrong:** `buffer_ = new float[size];` (throws exception)
+- **Correct:** `buffer_ = new (std::nothrow) float[size]; if (!buffer_) { /*handle*/ }`
 
 ### Creating a New Unit
 1. Copy appropriate template directory (e.g., `dummy-synth`)
