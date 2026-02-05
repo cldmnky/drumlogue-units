@@ -18,6 +18,9 @@
 #include "dsp/jupiter_env.h"
 #include "dsp/jupiter_lfo.h"
 #include "../common/smoothed_value.h"
+#include "polyphonic_renderer.h"
+#include "mono_renderer.h"
+#include "unison_renderer.h"
 #include <cmath>
 #include <cstring>
 #include <cstdio>
@@ -277,759 +280,81 @@ void DrupiterSynth::Suspend() {
 }
 
 void DrupiterSynth::Render(float* out, uint32_t frames) {
-    
     // Safety: ensure output buffer and internal buffers can handle the request
     if (!out || frames == 0) return;
     
     // CRITICAL: Limit frames to our buffer size to prevent overflow
     if (frames > kMaxFrames) {
-        // Buffer overflow protection - this should NEVER happen
-        // If it does, log the violation and clamp
         frames = kMaxFrames;
     }
     
     // Check buffer guard on entry (detect any previous overflow)
     if (buffer_guard_ != 0xDEADBEEFDEADBEEF) {
-        // Buffer was corrupted - reset guard and space_widener_
         buffer_guard_ = 0xDEADBEEFDEADBEEF;
-        // space_widener_ is likely corrupted, but we can't safely fix it mid-render
     }
     
-    // === Read direct DCO parameters (Pages 1 & 2) ===
-    // OSC MIX: 0=DCO1 only, 50=equal, 100=DCO2 only
-    const float osc_mix = current_preset_.params[PARAM_OSC_MIX] / 100.0f;
-    const float dco1_level_target = 1.0f - osc_mix;  // Inverted: 0=full, 100=none
-    const float dco2_level_target = osc_mix;         // Direct: 0=none, 100=full
-    
-    // Update smoothed parameter targets (once per buffer for efficiency)
-    cutoff_smooth_.SetTarget(current_preset_.params[PARAM_VCF_CUTOFF] / 100.0f);
-    dco1_level_smooth_.SetTarget(dco1_level_target);
-    dco2_level_smooth_.SetTarget(dco2_level_target);
-
-    // VCF resonance (0.0 - 1.0)
-    const float resonance = current_preset_.params[PARAM_VCF_RESONANCE] / 100.0f;
-    
-    // Process MIDI modulation smoothing per-buffer
-    // Pitch bend and pressure are smoothed to avoid zipper noise
-    const float smoothed_pitch_bend = pitch_bend_smooth_.Process();   // -2 to +2 semitones
-    const float smoothed_pressure = pressure_smooth_.Process();        // 0.0 to 1.0
-    
-    // Pre-calculate DCO constants from direct params
-    // DCO1: 0=16', 1=8', 2=4'
-    // DCO2: 0=32', 1=16', 2=8', 3=4' (extended range)
-    const float dco1_oct_mult = Dco1OctaveToMultiplier(current_preset_.params[PARAM_DCO1_OCT]);
-    const float dco2_oct_mult = Dco2OctaveToMultiplier(current_preset_.params[PARAM_DCO2_OCT]);
-    
-    // Detune: convert 0-100 parameter to ±50 cents (50=center/no detune)
-    // Jupiter-8 has +50 cents unipolar, but we implement ±50 for more flexibility
-    const int32_t detune_param = current_preset_.params[PARAM_DCO2_TUNE];
-    const float detune_cents = (static_cast<float>(detune_param) - 50.0f);  // Maps 0-100 to -50 to +50
-    const float detune_ratio = cents_to_ratio(detune_cents);  // Fast approximation
-    
-    // Cross-modulation depth from direct XMOD param
-    const float xmod_depth = xmod_depth_;  // Set via PARAM_XMOD in SetParameter
-    
-    // === Read MOD HUB values ===
-    // Unipolar destinations (0 to 1.0)
-    const float lfo_pwm_depth = mod_hub_.GetValueNormalizedUnipolar(MOD_LFO_TO_PWM);
-    const float lfo_vcf_depth = mod_hub_.GetValueNormalizedUnipolar(MOD_LFO_TO_VCF);
-    const float lfo_vco_depth = mod_hub_.GetValueNormalizedUnipolar(MOD_LFO_TO_VCO);
-    const float env_pwm_depth = mod_hub_.GetValueNormalizedUnipolar(MOD_ENV_TO_PWM);
-    
-    // Bipolar destinations (-1.0 to +1.0)
-    const float env_vcf_depth = mod_hub_.GetValueNormalizedBipolar(MOD_ENV_TO_VCF);
-    const uint8_t hpf_cutoff = mod_hub_.GetValue(MOD_HPF);
-    const uint8_t vcf_type = mod_hub_.GetValue(MOD_VCF_TYPE);
-    const uint8_t lfo_delay = mod_hub_.GetValue(MOD_LFO_DELAY);
-    const uint8_t lfo_wave = mod_hub_.GetValue(MOD_LFO_WAVE);
-    
-    // New modulation features
-    const float lfo_env_amt = mod_hub_.GetValueNormalizedUnipolar(MOD_LFO_ENV_AMT);
-    const float vca_level = mod_hub_.GetValueNormalizedUnipolar(MOD_VCA_LEVEL);
-    const float vca_lfo_depth = mod_hub_.GetValueNormalizedUnipolar(MOD_VCA_LFO);
-    const float vca_kybd = mod_hub_.GetValueNormalizedUnipolar(MOD_VCA_KYBD);
-    
-    // Phase 2: Pitch envelope modulation (ENV→PIT), bipolar scaled by 12 semitones
-    const float env_pitch_depth = mod_hub_.GetValueScaledBipolar(MOD_ENV_TO_PITCH, 12.0f);
-    
-    // Synthesis mode selection (Hoover v2.0) - read from MOD HUB
-    const uint8_t synth_mode_value = mod_hub_.GetValue(MOD_SYNTH_MODE);
-    const dsp::SynthMode synth_mode = static_cast<dsp::SynthMode>(synth_mode_value < 3 ? synth_mode_value : 0);
-    if (synth_mode != current_mode_) {
-        current_mode_ = synth_mode;
-        allocator_.SetMode(current_mode_);
-    }
-    
-    // Unison detune control (Hoover v2.0) - 0-50 cents from MOD HUB
-    const float unison_detune_cents = static_cast<float>(mod_hub_.GetValue(MOD_UNISON_DETUNE));
-    allocator_.SetUnisonDetune(unison_detune_cents);
-    
-    // Portamento time control (Phase 2.2.4) - 0-100 maps to 0-500ms exponentially
-    // Special case: 0 = portamento disabled (0ms), 1-100 = 10-500ms exponential
-    const uint8_t porta_param = mod_hub_.GetValue(MOD_PORTAMENTO_TIME);
-    float porta_time_ms = 0.0f;
-    if (porta_param > 0) {
-        const float porta_normalized = porta_param / 100.0f;
-        porta_time_ms = 10.0f * powf(50.0f, porta_normalized);  // 10ms to 500ms exponential
-    }
-    allocator_.SetPortamentoTime(porta_time_ms);
-    
-    // NOTE: LFO delay and waveform are now set in UpdateLfoSettings()
-    // when MOD_HUB or MOD_AMT parameters change (not every buffer)
-    // This is a critical performance optimization.
-    (void)lfo_delay;  // Used in UpdateLfoSettings()
-    (void)lfo_wave;   // Used in UpdateLfoSettings()
-    
-    // Apply VCF filter type (12dB or 24dB slope) - Jupiter-8 switchable
-    // 0-49 = 12dB/oct (2-pole), 50-100 = 24dB/oct (4-pole)
-    // NOTE: Set mode ONCE per buffer, not per-sample (critical optimization)
-    const dsp::JupiterVCF::Mode vcf_mode = (vcf_type < 50) 
-        ? dsp::JupiterVCF::MODE_LP12 
-        : dsp::JupiterVCF::MODE_LP24;
-    vcf_.SetMode(vcf_mode);
-    
-    // Pre-calculate HPF coefficient ONCE per buffer (not per-sample)
-    // HPF cutoff (non-resonant high-pass before low-pass)
-    // Jupiter-8 has fixed HPF, we make it adjustable
-    float hpf_alpha = 0.0f;  // 0 = bypass HPF
-    if (hpf_cutoff > 0) {
-        const float hpf_freq = 20.0f + (hpf_cutoff / 100.0f) * 1980.0f;  // 20Hz-2kHz
-        const float rc = 1.0f / (2.0f * M_PI * hpf_freq);
-        const float dt = 1.0f / sample_rate_;
-        hpf_alpha = rc / (rc + dt);
-    }
-    
-    // Keyboard tracking from KEYFLW parameter
-    // Jupiter-8 spec: 0-120% range, with slider downward = reduced tracking
-    // Map 0-100 parameter to 0-1.2 multiplier (100 = 1.2 = 120%)
-    const float key_track = (current_preset_.params[PARAM_VCF_KEYFLW] / 100.0f) * 1.2f;
-    
-// Velocity modulation for MONO/UNISON modes (polyphonic uses per-voice velocity)
-    const float vel_mod = (current_velocity_ / 127.0f) * 0.5f;  // Fixed 50% velocity.VCF
-    
-    // Task 2.2.4: Process portamento/glide for MONO/UNISON modes
-    // For polyphonic mode, glide is processed per-voice in the render loop
-    // Use the correct glide increment calculated in voice allocator
-    // CRITICAL: Apply glide increment for EACH FRAME in the buffer, not just once
-    if (current_mode_ == dsp::SYNTH_MODE_MONOPHONIC || 
-        current_mode_ == dsp::SYNTH_MODE_UNISON) {
-        dsp::Voice& voice0 = allocator_.GetVoiceMutable(0);
-        if (voice0.is_gliding) {
-            // Apply glide increment per-frame for correct timing
-            float log_pitch = logf(voice0.pitch_hz);
-            log_pitch += voice0.glide_increment * frames;  // Multiply by frame count
-            
-            // Check if we've reached target
-            float log_target = logf(voice0.glide_target_hz);
-            if ((voice0.glide_increment > 0.0f && log_pitch >= log_target) ||
-                (voice0.glide_increment < 0.0f && log_pitch <= log_target)) {
-                voice0.pitch_hz = voice0.glide_target_hz;
-                voice0.is_gliding = false;
-            } else {
-                voice0.pitch_hz = expf(log_pitch);
-            }
-            
-            // Update current_freq_hz_ for MONO/UNISON rendering
-            current_freq_hz_ = voice0.pitch_hz;
-        }
-    }
-    
-    // ============ Main DSP loop - render to mix_buffer_ ============
+    // ============ Per-Buffer Setup ============
     #ifdef PERF_MON
     PERF_MON_START(perf_render_total_);
     #endif
     
+    // Prepare rendering context (extracts ~150 lines of setup)
+    RenderSetup setup = PrepareRenderSetup(frames);
+    
+    // ============ Main DSP loop - render to mix_buffer_ ============
+    const float base_pw = current_preset_.params[PARAM_DCO1_PW] / 100.0f;
+    
     for (uint32_t i = 0; i < frames; ++i) {
-        
-        // Process envelopes FIRST (needed for LFO rate modulation)
-        vcf_env_out_ = env_vcf_.Process();
-        vca_env_out_ = env_vca_.Process();
-        
-        // Process LFO with optional envelope rate modulation
-        // ENV→LFO modulates LFO frequency: 0% = no change, 100% = double rate at peak
-        if (lfo_env_amt > kMinModulation) {
-            // Temporarily boost LFO rate based on envelope
-            // Store current rate, modulate, process, restore
-            // This avoids permanently changing the LFO rate parameter
-            const float rate_mult = 1.0f + (vcf_env_out_ * lfo_env_amt);  // 1.0-2.0x range
-            // Note: LFO doesn't have SetRateMultiplier, so apply via temporary frequency scaling
-            // For now, LFO output will be modulated in amplitude instead
-            lfo_out_ = lfo_.Process() * rate_mult;  // Amplitude modulation approximation
-        } else {
-            lfo_out_ = lfo_.Process();
-        }
-        
-        // Get smoothed oscillator levels
-        const float dco1_level = dco1_level_smooth_.Process();
-        const float dco2_level = dco2_level_smooth_.Process();
-        
-        // Apply PWM modulation (LFO and ENV to pulse width)
-        // Base pulse width from parameter
-        float base_pw = current_preset_.params[PARAM_DCO1_PW] / 100.0f;
-        
-        // Add LFO→PWM modulation
-        float pw_mod = 0.0f;
-        if (lfo_pwm_depth > kMinModulation) {
-            pw_mod += lfo_out_ * lfo_pwm_depth * 0.4f;  // ±40% PWM range
-        }
-        
-        // Add ENV→PWM modulation
-        if (env_pwm_depth > kMinModulation) {
-            pw_mod += vcf_env_out_ * env_pwm_depth * 0.4f;  // ±40% PWM range
-        }
-        
-        // Apply modulated pulse width, clamped to safe range (10%-90%)
-        float modulated_pw = clampf(base_pw + pw_mod, 0.1f, 0.9f);
-
-        // ============================================================
-        // Pre-calculate cutoff base for this frame (shared across voices)
-        // ============================================================
-        const float cutoff_norm = cutoff_smooth_.Process();
-
-        // Jupiter-8 style cutoff mapping:
-        // - At 0%: ~100Hz (closed, but still audible/usable)
-        // - At 50%: ~1kHz (typical starting point)
-        // - At 100%: ~12kHz (fully open)
-        // Use a combination of linear and exponential mapping for musical control
-        const float linear_blend = 0.15f;  // 15% linear, 85% exponential
-        const float exp_portion = fast_pow2(cutoff_norm * 7.0f);  // 2^7 = 128x range
-        const float lin_portion = 1.0f + cutoff_norm * 127.0f;     // 1 to 128 linear
-        const float cutoff_mult = linear_blend * lin_portion + (1.0f - linear_blend) * exp_portion;
-        const float cutoff_base_nominal = 100.0f * cutoff_mult;  // 100Hz * multiplier
-        
-#ifdef DEBUG
-        static uint32_t debug_frame_counter = 0;
-        bool should_debug = (debug_frame_counter++ % 4800 == 0); // Every 100ms at 48kHz
-#endif
+        // Process per-frame modulation (extracts ~70 lines)
+        FrameModulation mod = ProcessFrameModulation(setup, base_pw);
         
         // === MODE-SPECIFIC OSCILLATOR PROCESSING ===
         #ifdef PERF_MON
-        PERF_MON_START(perf_voice_alloc_);
-        #endif
-        
-        #ifdef PERF_MON
-        PERF_MON_END(perf_voice_alloc_);
         PERF_MON_START(perf_dco_);
         #endif
         
-        // Pre-calculate pitch envelope modulation ratio (used in all modes)
-        float pitch_mod_ratio = 1.0f;
-        if (fabsf(env_pitch_depth) > kMinModulation) {
-            pitch_mod_ratio = powf(2.0f, vcf_env_out_ * env_pitch_depth / 12.0f);
-        }
-        
+        // Delegate mode-specific rendering to specialized renderers
         if (current_mode_ == dsp::SYNTH_MODE_POLYPHONIC) {
-            // POLYPHONIC MODE: Render and mix multiple independent voices
-            mixed_ = 0.0f;
-            uint8_t active_voice_count = 0;
-            
-            // Render each active voice
-            for (uint8_t v = 0; v < DRUPITER_MAX_VOICES; v++) {
-                const dsp::Voice& voice = allocator_.GetVoice(v);
-                
-                // Skip inactive voices (no note or envelope finished)
-                if (!voice.active && !voice.env_amp.IsActive()) {
-                    continue;
-                }
-                
-                active_voice_count++;
-                
-#ifdef DEBUG
-                if (should_debug) {
-                    fprintf(stderr, "[POLY] Voice %d: active=%d note=%d freq=%.2f Hz env_active=%d\n",
-                            v, voice.active, voice.midi_note, voice.pitch_hz, voice.env_amp.IsActive());
-                    fflush(stderr);
-                }
-#endif
-                
-                // Get non-const access to voice for processing
-                dsp::Voice& voice_mut = const_cast<dsp::Voice&>(voice);
-                
-                // Task 2.2.4: Process portamento/glide
-                // CRITICAL: Apply glide increment for EACH FRAME in the buffer, not just once
-                if (voice_mut.is_gliding) {
-                    // Apply glide increment per-frame for correct timing
-                    float log_pitch = logf(voice_mut.pitch_hz);
-                    log_pitch += voice_mut.glide_increment * frames;  // Multiply by frame count
-                    
-                    // Check if we've reached target
-                    float log_target = logf(voice_mut.glide_target_hz);
-                    if ((voice_mut.glide_increment > 0.0f && log_pitch >= log_target) ||
-                        (voice_mut.glide_increment < 0.0f && log_pitch <= log_target)) {
-                        voice_mut.pitch_hz = voice_mut.glide_target_hz;
-                        voice_mut.is_gliding = false;
-                    } else {
-                        voice_mut.pitch_hz = expf(log_pitch);
-                    }
-                }
-                
-                // Set voice-specific parameters using proper waveform mapping
-                // DCO1 and DCO2 have different waveform sets at the same UI indices
-                voice_mut.dco1.SetWaveform(map_dco1_waveform(
-                    current_preset_.params[PARAM_DCO1_WAVE]));
-                voice_mut.dco2.SetWaveform(map_dco2_waveform(
-                    current_preset_.params[PARAM_DCO2_WAVE]));
-                voice_mut.dco1.SetPulseWidth(modulated_pw);
-                voice_mut.dco2.SetPulseWidth(modulated_pw);
-                
-                // Calculate frequencies for this voice
-                float voice_freq1 = voice.pitch_hz * dco1_oct_mult;
-                float voice_freq2 = voice.pitch_hz * dco2_oct_mult * detune_ratio;
-                
-                // Apply LFO vibrato
-                if (lfo_vco_depth > kMinModulation) {
-                    const float lfo_mod = 1.0f + lfo_out_ * lfo_vco_depth * 0.05f;
-                    voice_freq1 *= lfo_mod;
-                    voice_freq2 *= lfo_mod;
-                }
-                
-                // Apply pitch envelope modulation (Task 2.2.1: Per-voice pitch envelope)
-                if (pitch_mod_ratio != 1.0f) {
-                    // Use per-voice pitch envelope for independent pitch modulation
-                    const float voice_env_pitch = voice_mut.env_pitch.Process();
-                    // Use faster pow2 approximation instead of expensive powf
-                    const float voice_pitch_ratio = fasterpow2f(voice_env_pitch * env_pitch_depth / 12.0f);
-
-                    // NEON-optimized: multiply both frequencies by ratio simultaneously
-#ifdef USE_NEON
-                    float32x2_t freq_pair = vld1_f32(&voice_freq1);  // Load freq1, freq2
-                    float32x2_t ratio_vec = vdup_n_f32(voice_pitch_ratio);  // Duplicate ratio
-                    freq_pair = vmul_f32(freq_pair, ratio_vec);  // Multiply both
-                    vst1_f32(&voice_freq1, freq_pair);  // Store back
-#else
-                    voice_freq1 *= voice_pitch_ratio;
-                    voice_freq2 *= voice_pitch_ratio;
-#endif
-                }
-                
-                voice_mut.dco1.SetFrequency(voice_freq1);
-                voice_mut.dco2.SetFrequency(voice_freq2);
-                
-#ifdef DEBUG
-                if (should_debug) {
-                    fprintf(stderr, "[POLY] Voice %d: freq1=%.2f freq2=%.2f waveform=%d\n",
-                            v, voice_freq1, voice_freq2, current_preset_.params[PARAM_DCO1_WAVE]);
-                    fflush(stderr);
-                }
-#endif
-                
-                // Process voice oscillators
-                float voice_dco1 = voice_mut.dco1.Process();
-                float voice_dco2 = 0.0f;
-                
-                if (dco2_level > kMinModulation) {
-                    voice_dco2 = voice_mut.dco2.Process();
-                }
-                
-                // Mix this voice's oscillators
-                float voice_mix = voice_dco1 * dco1_level + voice_dco2 * dco2_level;
-                
-#ifdef DEBUG
-                if (should_debug) {
-                    fprintf(stderr, "[POLY] Voice %d: dco1=%.3f dco2=%.3f mix=%.3f levels=(%.3f,%.3f)\n",
-                            v, voice_dco1, voice_dco2, voice_mix, dco1_level, dco2_level);
-                    fflush(stderr);
-                }
-#endif
-                
-                // Process voice envelope (each voice has its own envelope)
-                float voice_env = voice_mut.env_amp.Process();
-                
-#ifdef DEBUG
-                if (should_debug) {
-                    fprintf(stderr, "[POLY] Voice %d: voice_env=%.3f\n", v, voice_env);
-                    fflush(stderr);
-                }
-#endif
-                
-                // ============================================================
-                // PHASE 1: Per-voice VCF processing (polyphonic mode)
-                // ============================================================
-                const float voice_vcf_env = voice_mut.env_filter.Process();
-
-                // Apply per-voice HPF (Phase 2: one-pole high-pass filter)
-                float voice_hpf_out = voice_mix;
-                if (hpf_alpha > 0.0f) {
-                    voice_hpf_out = hpf_alpha * (voice_mut.hpf_prev_output + voice_mix - voice_mut.hpf_prev_input);
-                    voice_mut.hpf_prev_output = voice_hpf_out;
-                    voice_mut.hpf_prev_input = voice_mix;
-                }
-
-                // Apply per-voice keyboard tracking
-                float voice_cutoff_base = cutoff_base_nominal;
-                const float voice_note_offset = (static_cast<int32_t>(voice.midi_note) - 60) / 12.0f;
-                const float voice_tracking_exponent = voice_note_offset * key_track;
-                const float voice_clamped_exponent = (voice_tracking_exponent > 4.0f) ? 4.0f :
-                                                     (voice_tracking_exponent < -4.0f) ? -4.0f : voice_tracking_exponent;
-                voice_cutoff_base *= semitones_to_ratio(voice_clamped_exponent * 12.0f);
-
-                // Per-voice velocity modulation for VCF (0-50% scaled)
-                const float voice_vel_mod = (voice.velocity / 127.0f) * 0.5f;
-
-                // Combine envelope, LFO, velocity, and pressure modulation (shared sources)
-                float voice_total_mod = voice_vcf_env * 2.0f              // Base envelope modulation
-                                      + env_vcf_depth * voice_vcf_env     // Hub envelope.VCF modulation
-                                      + lfo_out_ * lfo_vcf_depth * 1.0f    // LFO modulation
-                                      + voice_vel_mod * 2.0f              // Velocity adds up to +2 octaves
-                                      + smoothed_pressure * 1.0f;         // Channel pressure adds up to +1 octave
-
-                // Clamp modulation depth to avoid extreme cutoff values.
-                if (voice_total_mod > 3.0f) voice_total_mod = 3.0f;
-                else if (voice_total_mod < -3.0f) voice_total_mod = -3.0f;
-
-                // Apply modulation to cutoff base
-                const float voice_cutoff_modulated = voice_cutoff_base * fast_pow2(voice_total_mod);
-
-                // Set per-voice filter parameters and process
-                voice_mut.vcf.SetCutoffModulated(voice_cutoff_modulated);
-                voice_mut.vcf.SetResonance(resonance);
-                voice_mut.vcf.SetMode(vcf_mode);
-
-                float voice_filtered = voice_hpf_out;
-                if (current_preset_.params[PARAM_VCF_CUTOFF] < 100) {
-                    voice_filtered = voice_mut.vcf.Process(voice_hpf_out);
-                }
-
-                // Apply voice envelope (VCA)
-                float voice_output = voice_filtered * voice_env;
-
-                // Apply velocity scaling to VCA amplitude (soft hits quieter, loud hits louder)
-                // Map velocity 0-127 to VCA multiplier 0.2-1.0 (soft hits still audible)
-                const float voice_vca_gain = 0.2f + (voice.velocity / 127.0f) * 0.8f;  // 0.2 to 1.0
-                voice_output *= voice_vca_gain;
-
-                // Add filtered, velocity-scaled voice to mix
-                mixed_ += voice_output;
-
-                // If envelope is fully released, mark voice inactive so it can retrigger
-                if (!voice_mut.env_amp.IsActive()) {
-                    allocator_.MarkVoiceInactive(v);
-                }
-            }
-            
-            // Scale by voice count to prevent clipping
-            if (active_voice_count > 0) {
-                mixed_ /= sqrtf(static_cast<float>(active_voice_count));
-            }
-            
+            dsp::PolyphonicRenderer::RenderVoices(*this, frames, mod.modulated_pw, setup.dco1_oct_mult, setup.dco2_oct_mult,
+                                           setup.detune_ratio, setup.xmod_depth, setup.lfo_vco_depth, lfo_out_, mod.pitch_mod_ratio,
+                                           setup.env_pitch_depth, mod.dco1_level, mod.dco2_level, mod.cutoff_base_nominal,
+                                           setup.resonance, setup.vcf_mode, setup.hpf_alpha, setup.key_track, setup.smoothed_pressure,
+                                           setup.env_vcf_depth, setup.lfo_vcf_depth, current_preset_.params[PARAM_DCO1_WAVE],
+                                           current_preset_.params[PARAM_DCO2_WAVE], current_preset_.params[PARAM_VCF_CUTOFF],
+                                           fast_pow2, semitones_to_ratio);
         } else if (current_mode_ == dsp::SYNTH_MODE_UNISON) {
-            // UNISON MODE: Use UnisonOscillator for multi-voice detuned stack + DCO2
-            dsp::UnisonOscillator& unison_osc = allocator_.GetUnisonOscillator();
-            
-            // Set waveform and pulse width (same as DCO1 with proper mapping)
-            unison_osc.SetWaveform(map_dco1_waveform(
-                current_preset_.params[PARAM_DCO1_WAVE]));
-            unison_osc.SetPulseWidth(modulated_pw);
-            
-            // Calculate frequency with LFO modulation
-            float unison_freq = current_freq_hz_ * dco1_oct_mult;
-            if (lfo_vco_depth > kMinModulation) {
-                const float lfo_mod = 1.0f + lfo_out_ * lfo_vco_depth * 0.05f;
-                unison_freq *= lfo_mod;
-            }
-            
-            // Apply pitch bend modulation (smooth per-buffer from MIDI wheel)
-            if (smoothed_pitch_bend != 0.0f) {
-                const float pitch_bend_ratio = semitones_to_ratio(smoothed_pitch_bend);
-                unison_freq *= pitch_bend_ratio;
-            }
-            
-            // Apply pitch envelope modulation (pre-calculated)
-            unison_freq *= pitch_mod_ratio;
-            
-            unison_osc.SetFrequency(unison_freq);
-            
-            // Process stereo unison output
-            float unison_left, unison_right;
-            unison_osc.Process(&unison_left, &unison_right);
-            
-            // Average L+R for unison mono signal
-            float unison_mono = (unison_left + unison_right) * 0.5f;
-            
-            // Also process DCO2 (like in MONO mode)
-            dco2_.SetPulseWidth(modulated_pw);
-            float freq2 = current_freq_hz_ * dco2_oct_mult * detune_ratio;
-            if (lfo_vco_depth > kMinModulation) {
-                const float lfo_mod = 1.0f + lfo_out_ * lfo_vco_depth * 0.05f;
-                freq2 *= lfo_mod;
-            }
-            
-            // Apply pitch envelope modulation to DCO2 (pre-calculated)
-            freq2 *= pitch_mod_ratio;
-            
-            dco2_.SetFrequency(freq2);
-            dco2_out_ = dco2_.Process();
-            
-            // Mix unison stack with DCO2
-            mixed_ = unison_mono * dco1_level + dco2_out_ * dco2_level;
+            dsp::UnisonRenderer::RenderUnison(*this, mod.modulated_pw, setup.dco1_oct_mult, setup.dco2_oct_mult,
+                                       setup.detune_ratio, setup.lfo_vco_depth, lfo_out_, mod.pitch_mod_ratio,
+                                       setup.smoothed_pitch_bend, mod.dco1_level, mod.dco2_level,
+                                       current_preset_.params[PARAM_DCO1_WAVE], semitones_to_ratio);
         } else {
-            // MONO MODE: Use main synth DCOs (monophonic, single voice)
-            dco1_.SetPulseWidth(modulated_pw);
-            dco2_.SetPulseWidth(modulated_pw);  // Both DCOs share PWM
-            
-            // Calculate DCO frequencies with LFO modulation
-            float freq1 = current_freq_hz_ * dco1_oct_mult;
-            float freq2 = current_freq_hz_ * dco2_oct_mult * detune_ratio;
-        
-            // Apply LFO modulation to frequencies (vibrato)
-            if (lfo_vco_depth > kMinModulation) {
-                const float lfo_mod = 1.0f + lfo_out_ * lfo_vco_depth * 0.05f;  // ±5% vibrato
-                freq1 *= lfo_mod;
-                freq2 *= lfo_mod;
-            }
-            
-            // Apply pitch bend modulation (smooth per-buffer from MIDI wheel)
-            if (smoothed_pitch_bend != 0.0f) {
-                const float pitch_bend_ratio = semitones_to_ratio(smoothed_pitch_bend);
-                freq1 *= pitch_bend_ratio;
-                freq2 *= pitch_bend_ratio;
-            }
-            
-            // Apply pitch envelope modulation (pre-calculated)
-            freq1 *= pitch_mod_ratio;
-            freq2 *= pitch_mod_ratio;
-            
-            dco1_.SetFrequency(freq1);
-            dco2_.SetFrequency(freq2);
-            
-            // Only process DCO2 if it's audible (level > 0) or needed for XMOD
-            const bool dco2_needed = (dco2_level > kMinModulation) || (xmod_depth > kMinModulation);
-            
-            if (dco2_needed) {
-                // Process DCO2 first to get fresh output for FM
-                dco2_out_ = dco2_.Process();
-                
-                // Cross-modulation (DCO2 . DCO1 FM) - Jupiter-8 style
-                // Only apply FM if XMOD depth is significant
-                if (xmod_depth > kMinModulation) {
-                    // Scale: 100% XMOD = ±1 semitone = ±1/12 octave
-                    dco1_.ApplyFM(dco2_out_ * xmod_depth * 0.083f);
-                } else {
-                    dco1_.ApplyFM(0.0f);
-                }
-            } else {
-                // DCO2 not needed - silence it and ensure no FM
-                dco2_out_ = 0.0f;
-                dco1_.ApplyFM(0.0f);
-            }
-            
-            // Process DCO1 (optionally modulated by DCO2)
-            dco1_out_ = dco1_.Process();
-            
-            // Note: Sync disabled when XMOD is active
-            // Jupiter-8 doesn't support sync+xmod simultaneously due to processing order
-            // (DCO2 must be processed first for FM, breaking sync master/slave relationship)
-            
-            // Mix oscillators with smoothed levels
-            mixed_ = dco1_out_ * dco1_level + dco2_out_ * dco2_level;
-        }
-        // === END MODE-SPECIFIC PROCESSING ===
-        
-#ifdef DEBUG
-        if (should_debug && current_mode_ == dsp::SYNTH_MODE_POLYPHONIC) {
-            fprintf(stderr, "[POLY] After mixing: mixed_=%.3f\n", mixed_);
-            fflush(stderr);
-        }
-#endif
-        
-        // Soft clamp mixed oscillators to prevent clipping (both at 100% = potential ±2.0)
-        if (mixed_ > 1.2f) mixed_ = 1.2f + 0.5f * (mixed_ - 1.2f);
-        else if (mixed_ < -1.2f) mixed_ = -1.2f + 0.5f * (mixed_ + 1.2f);
-        
-        // Apply HPF (high-pass filter) FIRST - Jupiter-8 signal flow
-        // HPF comes before LPF in Jupiter-8 architecture
-        // HPF coefficient (hpf_alpha) pre-calculated before loop for efficiency
-        // NOTE: In POLY mode, each voice has already processed through per-voice HPF,
-        // so we skip the shared HPF to avoid double-filtering
-        float hpf_out = mixed_;
-        if (hpf_alpha > 0.0f && current_mode_ != dsp::SYNTH_MODE_POLYPHONIC) {
-            // Simple one-pole HPF: y[n] = alpha * (y[n-1] + x[n] - x[n-1])
-            // (MONO and UNISON modes only - POLY uses per-voice HPF)
-            hpf_out = hpf_alpha * (hpf_prev_output_ + mixed_ - hpf_prev_input_);
-            hpf_prev_output_ = hpf_out;
-            hpf_prev_input_ = mixed_;
-            
-            // Soft clamp HPF output to prevent filter overload
-            if (hpf_out > 1.5f) hpf_out = 1.5f + 0.3f * (hpf_out - 1.5f);
-            else if (hpf_out < -1.5f) hpf_out = -1.5f + 0.3f * (hpf_out + 1.5f);
+            // MONO mode
+            dsp::MonoRenderer::RenderMono(*this, mod.modulated_pw, setup.dco1_oct_mult, setup.dco2_oct_mult,
+                                   setup.detune_ratio, setup.lfo_vco_depth, lfo_out_, mod.pitch_mod_ratio,
+                                   setup.smoothed_pitch_bend, mod.dco1_level, mod.dco2_level,
+                                   current_preset_.params[PARAM_DCO1_WAVE], semitones_to_ratio);
         }
         
-        // Apply filter with smoothed cutoff, envelope, and LFO modulation
-        // NOTE: cutoff_base is pre-calculated earlier in the frame for shared and per-voice use.
+        #ifdef PERF_MON
+        PERF_MON_END(perf_dco_);
+        PERF_MON_START(perf_vcf_);
+        #endif
         
-        // Apply keyboard tracking for MONO/UNISON modes (shared filter path)
-        float cutoff_base = cutoff_base_nominal;
-        const float note_offset = (static_cast<int32_t>(current_note_) - 60) / 12.0f;
-        const float tracking_exponent = note_offset * key_track;
-        const float clamped_exponent = (tracking_exponent > 4.0f) ? 4.0f :
-                          (tracking_exponent < -4.0f) ? -4.0f : tracking_exponent;
-        cutoff_base *= semitones_to_ratio(clamped_exponent * 12.0f);
-
-        // Combine envelope, LFO, velocity, and hub modulation
-        // For POLY mode: Use velocity from current_velocity_ (simplified - single shared VCF cutoff)
-        // This matches the architecture where all poly voices feed through one shared VCF
-        // Individual velocity scaling already applied in per-voice VCA gain
-        float total_mod = vcf_env_out_ * 2.0f              // Base envelope modulation
-                        + env_vcf_depth * vcf_env_out_     // Hub envelope.VCF modulation
-                        + lfo_out_ * lfo_vcf_depth * 1.0f  // LFO modulation
-                        + vel_mod * 2.0f                   // Velocity adds up to +2 octaves
-                        + smoothed_pressure * 1.0f;        // Channel pressure adds up to +1 octave
-
-        // Clamp modulation depth to avoid extreme cutoff values.
-        if (total_mod > 3.0f) total_mod = 3.0f;
-        else if (total_mod < -3.0f) total_mod = -3.0f;
+        // Process filter and VCA (extracts ~90 lines)
+        mix_buffer_[i] = ProcessFilterVcaFrame(setup, mixed_, mod.cutoff_base_nominal, lfo_out_);
         
-        // Use fast 2^x approximation for all modulation values
-        // fast_pow2 is accurate enough for audio-rate modulation
-        float cutoff_modulated = cutoff_base * fast_pow2(total_mod);
-        
-        // Only update filter coefficients if cutoff changed significantly (optimization)
-        const float cutoff_diff = cutoff_modulated - last_cutoff_hz_;
-        if (cutoff_diff > 1.0f || cutoff_diff < -1.0f) {
-            vcf_.SetCutoffModulated(cutoff_modulated);
-            last_cutoff_hz_ = cutoff_modulated;
-        }
-        
-        // Filter mode already set before loop (vcf_mode)
-        
-        // In POLY mode: VCF already applied per-voice, skip shared VCF
-        if (current_mode_ == dsp::SYNTH_MODE_POLYPHONIC) {
-            filtered_ = hpf_out;  // Use only HPF output
-        } else if (current_preset_.params[PARAM_VCF_CUTOFF] >= 100) {
-            // Bypass VCF when cutoff is at maximum (100) to avoid filter ringing artifacts
-            filtered_ = hpf_out;  // Bypass LPF, but keep HPF processing
-        } else {
-            #ifdef PERF_MON
-            PERF_MON_END(perf_dco_);
-            PERF_MON_START(perf_vcf_);
-            #endif
-            
-            filtered_ = vcf_.Process(hpf_out);  // Process HPF output through LPF
-            
-            #ifdef PERF_MON
-            PERF_MON_END(perf_vcf_);
-            PERF_MON_START(perf_effects_);
-            #endif
-            
-            // Soft clip filter output to prevent resonance spikes
-            if (filtered_ > 1.8f) filtered_ = 1.8f + 0.2f * (filtered_ - 1.8f);
-            else if (filtered_ < -1.8f) filtered_ = -1.8f + 0.2f * (filtered_ + 1.8f);
-        }
-        
-        // Apply VCA with envelope, LFO tremolo, keyboard tracking, velocity scaling, and level control
-        // Base VCA envelope
-        // In POLY mode, voices already rendered with velocity scaling - no additional velocity processing
-        // In UNISON mode, use voice 0's envelope and velocity
-        // In MONO mode, use main env_vca_ and current_velocity_
-        float vca_gain = (current_mode_ == dsp::SYNTH_MODE_POLYPHONIC) ? 1.0f : vca_env_out_;
-        
-        // Apply velocity scaling to VCA for MONO/UNISON modes
-        // POLY mode already applied per-voice velocity scaling above
-        if (current_mode_ != dsp::SYNTH_MODE_POLYPHONIC) {
-            // Map velocity 0-127 to VCA multiplier 0.2-1.0 (soft hits still audible)
-            const float velocity_vca = 0.2f + (current_velocity_ / 127.0f) * 0.8f;  // 0.2 to 1.0
-            vca_gain *= velocity_vca;
-        }
-        
-        if (current_mode_ == dsp::SYNTH_MODE_UNISON) {
-            // In UNISON mode: All unison voices share the same envelope state
-            // CRITICAL: Always process envelope (even during release) to allow proper note-off
-            // Don't check IsAnyVoiceActive() - let envelope complete its full ADSR cycle
-            dsp::Voice& lead_voice = allocator_.GetVoiceMutable(0);
-            vca_gain = lead_voice.env_amp.Process();
-            
-            // Only check envelope state (not voice active flag) to detect true silence
-            if (!lead_voice.env_amp.IsActive()) {
-                vca_gain = 0.0f;  // Envelope fully released = silence
-                allocator_.MarkVoiceInactive(0);
-            }
-        } else if (current_mode_ == dsp::SYNTH_MODE_POLYPHONIC) {
-            // In POLY mode, voices have already been rendered with their individual envelopes
-            // Each voice applied its own envelope at line 473, so no additional envelope processing here
-            // Keep base VCA gain at 1.0f (poly mix already normalized above)
-            vca_gain = 1.0f;
-        }
-        
-        // VCA LFO (tremolo): 0% = no tremolo, 100% = full amplitude modulation
-        // Phase 3: Quantize to 4 steps (JP-8 feature: 0/1/2/3 switch)
-        if (vca_lfo_depth > kMinModulation) {
-            // Map continuous 0-1 to discrete steps: 0%, 33%, 67%, 100%
-            const int vca_lfo_switch = static_cast<int>(vca_lfo_depth * 3.999f);  // 0-3
-            static constexpr float kVcaLfoDepths[4] = {0.0f, 0.33f, 0.67f, 1.0f};
-            const float quantized_depth = kVcaLfoDepths[vca_lfo_switch];
-            // Bipolar LFO (-1 to +1) -> unipolar tremolo (0.5 to 1.5)
-            const float tremolo = 1.0f + (lfo_out_ * quantized_depth * 0.5f);
-            vca_gain *= tremolo;
-        }
-        
-        // VCA Keyboard tracking: higher notes louder
-        // 0% = no tracking, 100% = +6dB per octave above C4
-        if (vca_kybd > kMinModulation) {
-            const float note_offset = (static_cast<int32_t>(current_note_) - 60) / 12.0f;  // Octaves from C4
-            const float kb_gain = 1.0f + (note_offset * vca_kybd * 0.5f);  // +50% per octave at 100%
-            vca_gain *= kb_gain;
-        }
-        
-        // VCA Level control (master output scaling)
-        vca_gain *= vca_level;
-        
-        // Apply VCA with extra headroom to prevent clipping (0.6f base scaling)
-        mix_buffer_[i] = filtered_ * vca_gain * 0.6f;
-        
-#ifdef DEBUG
-        static int debug_output_counter = 0;
-        
-        // Periodic output (once per second)
-        if (++debug_output_counter >= 48000 && i == 0) {  // Log once per second, first frame only
-            debug_output_counter = 0;
-            fprintf(stderr, "[Synth Output] DCO1=%.6f, mixed=%.6f, filtered=%.6f, env=%.6f, final=%.6f\n",
-                    dco1_out_, mixed_, filtered_, vca_env_out_, mix_buffer_[i]);
-            fflush(stderr);
-        }
-#endif
+        #ifdef PERF_MON
+        PERF_MON_END(perf_vcf_);
+        #endif
     }
     
-    #ifdef PERF_MON
-    PERF_MON_END(perf_effects_);
-    #endif
-    
-    // ============ Output stage with chorus/space effect ============
-    
+    // ============ Output stage with effects ============
     #ifdef PERF_MON
     PERF_MON_START(perf_effects_);
     #endif
     
-    // Sanitize buffer (remove NaN/Inf) and apply soft clamp
-    drupiter::neon::SanitizeAndClamp(mix_buffer_, 1.0f, frames);
-    
-    // Effect mode: 0=Chorus, 1=Space, 2=Dry, 3=Both
-    // Effect parameters are now configured in UpdateEffectParameters() on change,
-    // not every buffer (critical optimization)
-    const uint8_t effect_mode = current_preset_.params[PARAM_EFFECT];
-
-    if (effect_mode == 2) {
-        // DRY mode: Bypass all effects, just copy mono to stereo
-        for (uint32_t i = 0; i < frames; i++) {
-            left_buffer_[i] = mix_buffer_[i];
-            right_buffer_[i] = mix_buffer_[i];
-        }
-    } else {
-        // CHORUS/SPACE/BOTH: Process with pre-configured parameters
-        space_widener_.ProcessMonoBatch(mix_buffer_, left_buffer_, right_buffer_, frames);
-    }
-    
-    // Add tiny DC offset for denormal protection before interleaving
-    const float denormal_offset = 1.0e-15f;
-    drupiter::neon::ApplyGain(left_buffer_, 1.0f, frames);  // Could add offset here if needed
-    drupiter::neon::ApplyGain(right_buffer_, 1.0f, frames);  // Could add offset here if needed
-    
-    // Use neon_dsp InterleaveStereo function for optimized stereo interleaving
-    drupiter::neon::InterleaveStereo(left_buffer_, right_buffer_, out, frames);
-    
-    // Add DC offset to output (simpler than modifying buffers)
-    for (uint32_t i = 0; i < frames * 2; ++i) {
-        out[i] += denormal_offset;
-    }
+    // Finalize output (extracts ~50 lines)
+    FinalizeOutput(frames, out);
     
     #ifdef PERF_MON
     PERF_MON_END(perf_effects_);
@@ -1664,4 +989,301 @@ void DrupiterSynth::UpdateLfoSettings() {
     // Apply LFO waveform (0-3: TRI/RAMP/SQR/S&H)
     const uint8_t lfo_wave = mod_hub_.GetValue(MOD_LFO_WAVE);
     lfo_.SetWaveform(static_cast<dsp::JupiterLFO::Waveform>(lfo_wave & 0x03));
+}
+
+// ============================================================================
+// Render Helper Method Implementations
+// ============================================================================
+
+DrupiterSynth::RenderSetup DrupiterSynth::PrepareRenderSetup(uint32_t frames) {
+    RenderSetup setup;
+    
+    // Read oscillator parameters
+    const float osc_mix = current_preset_.params[PARAM_OSC_MIX] / 100.0f;
+    const float dco1_level_target = 1.0f - osc_mix;
+    const float dco2_level_target = osc_mix;
+    
+    // Update smoothed parameter targets
+    cutoff_smooth_.SetTarget(current_preset_.params[PARAM_VCF_CUTOFF] / 100.0f);
+    dco1_level_smooth_.SetTarget(dco1_level_target);
+    dco2_level_smooth_.SetTarget(dco2_level_target);
+    
+    // VCF resonance
+    setup.resonance = current_preset_.params[PARAM_VCF_RESONANCE] / 100.0f;
+    
+    // Process MIDI modulation smoothing
+    setup.smoothed_pitch_bend = pitch_bend_smooth_.Process();
+    setup.smoothed_pressure = pressure_smooth_.Process();
+    
+    // Pre-calculate DCO constants
+    setup.dco1_oct_mult = Dco1OctaveToMultiplier(current_preset_.params[PARAM_DCO1_OCT]);
+    setup.dco2_oct_mult = Dco2OctaveToMultiplier(current_preset_.params[PARAM_DCO2_OCT]);
+    
+    // Detune
+    const int32_t detune_param = current_preset_.params[PARAM_DCO2_TUNE];
+    const float detune_cents = (static_cast<float>(detune_param) - 50.0f);
+    setup.detune_ratio = cents_to_ratio(detune_cents);
+    
+    // Cross-modulation depth
+    setup.xmod_depth = xmod_depth_;
+    
+    // Read MOD HUB values
+    setup.lfo_pwm_depth = mod_hub_.GetValueNormalizedUnipolar(MOD_LFO_TO_PWM);
+    setup.lfo_vcf_depth = mod_hub_.GetValueNormalizedUnipolar(MOD_LFO_TO_VCF);
+    setup.lfo_vco_depth = mod_hub_.GetValueNormalizedUnipolar(MOD_LFO_TO_VCO);
+    setup.env_pwm_depth = mod_hub_.GetValueNormalizedUnipolar(MOD_ENV_TO_PWM);
+    setup.env_vcf_depth = mod_hub_.GetValueNormalizedBipolar(MOD_ENV_TO_VCF);
+    setup.env_pitch_depth = mod_hub_.GetValueScaledBipolar(MOD_ENV_TO_PITCH, 12.0f);
+    setup.lfo_env_amt = mod_hub_.GetValueNormalizedUnipolar(MOD_LFO_ENV_AMT);
+    setup.vca_level = mod_hub_.GetValueNormalizedUnipolar(MOD_VCA_LEVEL);
+    setup.vca_lfo_depth = mod_hub_.GetValueNormalizedUnipolar(MOD_VCA_LFO);
+    setup.vca_kybd = mod_hub_.GetValueNormalizedUnipolar(MOD_VCA_KYBD);
+    
+    // Update synthesis mode and allocator settings
+    const uint8_t synth_mode_value = mod_hub_.GetValue(MOD_SYNTH_MODE);
+    const dsp::SynthMode synth_mode = static_cast<dsp::SynthMode>(synth_mode_value < 3 ? synth_mode_value : 0);
+    if (synth_mode != current_mode_) {
+        current_mode_ = synth_mode;
+        allocator_.SetMode(current_mode_);
+    }
+    
+    // Unison detune control
+    const float unison_detune_cents = static_cast<float>(mod_hub_.GetValue(MOD_UNISON_DETUNE));
+    allocator_.SetUnisonDetune(unison_detune_cents);
+    
+    // Portamento time control
+    const uint8_t porta_param = mod_hub_.GetValue(MOD_PORTAMENTO_TIME);
+    float porta_time_ms = 0.0f;
+    if (porta_param > 0) {
+        const float porta_normalized = porta_param / 100.0f;
+        porta_time_ms = 10.0f * powf(50.0f, porta_normalized);
+    }
+    allocator_.SetPortamentoTime(porta_time_ms);
+    
+    // VCF filter type
+    const uint8_t vcf_type = mod_hub_.GetValue(MOD_VCF_TYPE);
+    setup.vcf_mode = (vcf_type < 50) ? dsp::JupiterVCF::MODE_LP12 : dsp::JupiterVCF::MODE_LP24;
+    vcf_.SetMode(setup.vcf_mode);
+    
+    // Pre-calculate HPF coefficient
+    const uint8_t hpf_cutoff = mod_hub_.GetValue(MOD_HPF);
+    setup.hpf_alpha = 0.0f;
+    if (hpf_cutoff > 0) {
+        const float hpf_freq = 20.0f + (hpf_cutoff / 100.0f) * 1980.0f;
+        const float rc = 1.0f / (2.0f * M_PI * hpf_freq);
+        const float dt = 1.0f / sample_rate_;
+        setup.hpf_alpha = rc / (rc + dt);
+    }
+    
+    // Keyboard tracking
+    setup.key_track = (current_preset_.params[PARAM_VCF_KEYFLW] / 100.0f) * 1.2f;
+    
+    // Velocity modulation for MONO/UNISON modes
+    setup.vel_mod = (current_velocity_ / 127.0f) * 0.5f;
+    
+    // Process portamento/glide for MONO/UNISON modes
+    if (current_mode_ == dsp::SYNTH_MODE_MONOPHONIC || 
+        current_mode_ == dsp::SYNTH_MODE_UNISON) {
+        dsp::Voice& voice0 = allocator_.GetVoiceMutable(0);
+        if (voice0.is_gliding) {
+            float log_pitch = logf(voice0.pitch_hz);
+            log_pitch += voice0.glide_increment * frames;
+            
+            float log_target = logf(voice0.glide_target_hz);
+            if ((voice0.glide_increment > 0.0f && log_pitch >= log_target) ||
+                (voice0.glide_increment < 0.0f && log_pitch <= log_target)) {
+                voice0.pitch_hz = voice0.glide_target_hz;
+                voice0.is_gliding = false;
+            } else {
+                voice0.pitch_hz = expf(log_pitch);
+            }
+            
+            current_freq_hz_ = voice0.pitch_hz;
+        }
+    }
+    
+    return setup;
+}
+
+DrupiterSynth::FrameModulation DrupiterSynth::ProcessFrameModulation(
+    const RenderSetup& setup, 
+    float base_pw
+) {
+    FrameModulation mod;
+    
+    // Process envelopes FIRST
+    vcf_env_out_ = env_vcf_.Process();
+    vca_env_out_ = env_vca_.Process();
+    
+    // Process LFO with optional envelope rate modulation
+    if (setup.lfo_env_amt > kMinModulation) {
+        const float rate_mult = 1.0f + (vcf_env_out_ * setup.lfo_env_amt);
+        lfo_out_ = lfo_.Process() * rate_mult;
+    } else {
+        lfo_out_ = lfo_.Process();
+    }
+    
+    // Get smoothed oscillator levels
+    mod.dco1_level = dco1_level_smooth_.Process();
+    mod.dco2_level = dco2_level_smooth_.Process();
+    
+    // Apply PWM modulation
+    float pw_mod = 0.0f;
+    if (setup.lfo_pwm_depth > kMinModulation) {
+        pw_mod += lfo_out_ * setup.lfo_pwm_depth * 0.4f;
+    }
+    if (setup.env_pwm_depth > kMinModulation) {
+        pw_mod += vcf_env_out_ * setup.env_pwm_depth * 0.4f;
+    }
+    mod.modulated_pw = clampf(base_pw + pw_mod, 0.1f, 0.9f);
+    
+    // Process cutoff smoothing and mapping
+    const float cutoff_norm = cutoff_smooth_.Process();
+    const float linear_blend = 0.15f;
+    const float exp_portion = fast_pow2(cutoff_norm * 7.0f);
+    const float lin_portion = 1.0f + cutoff_norm * 127.0f;
+    const float cutoff_mult = linear_blend * lin_portion + (1.0f - linear_blend) * exp_portion;
+    mod.cutoff_base_nominal = 100.0f * cutoff_mult;
+    
+    // Pre-calculate pitch envelope modulation ratio
+    mod.pitch_mod_ratio = 1.0f;
+    if (fabsf(setup.env_pitch_depth) > kMinModulation) {
+        mod.pitch_mod_ratio = powf(2.0f, vcf_env_out_ * setup.env_pitch_depth / 12.0f);
+    }
+    
+    return mod;
+}
+
+float DrupiterSynth::ProcessFilterVcaFrame(
+    const RenderSetup& setup,
+    float mixed,
+    float cutoff_base_nominal,
+    float lfo_out
+) {
+    // Soft clamp mixed oscillators
+    if (mixed > 1.2f) mixed = 1.2f + 0.5f * (mixed - 1.2f);
+    else if (mixed < -1.2f) mixed = -1.2f + 0.5f * (mixed + 1.2f);
+    
+    // Apply HPF (MONO and UNISON modes only)
+    float hpf_out = mixed;
+    if (setup.hpf_alpha > 0.0f && current_mode_ != dsp::SYNTH_MODE_POLYPHONIC) {
+        hpf_out = setup.hpf_alpha * (hpf_prev_output_ + mixed - hpf_prev_input_);
+        hpf_prev_output_ = hpf_out;
+        hpf_prev_input_ = mixed;
+        
+        if (hpf_out > 1.5f) hpf_out = 1.5f + 0.3f * (hpf_out - 1.5f);
+        else if (hpf_out < -1.5f) hpf_out = -1.5f + 0.3f * (hpf_out + 1.5f);
+    }
+    
+    // Apply keyboard tracking for MONO/UNISON modes
+    float cutoff_base = cutoff_base_nominal;
+    const float note_offset = (static_cast<int32_t>(current_note_) - 60) / 12.0f;
+    const float tracking_exponent = note_offset * setup.key_track;
+    const float clamped_exponent = (tracking_exponent > 4.0f) ? 4.0f :
+                      (tracking_exponent < -4.0f) ? -4.0f : tracking_exponent;
+    cutoff_base *= semitones_to_ratio(clamped_exponent * 12.0f);
+
+    // Combine all modulation sources
+    float total_mod = vcf_env_out_ * 2.0f
+                    + setup.env_vcf_depth * vcf_env_out_
+                    + lfo_out * setup.lfo_vcf_depth * 1.0f
+                    + setup.vel_mod * 2.0f
+                    + setup.smoothed_pressure * 1.0f;
+
+    if (total_mod > 3.0f) total_mod = 3.0f;
+    else if (total_mod < -3.0f) total_mod = -3.0f;
+    
+    float cutoff_modulated = cutoff_base * fast_pow2(total_mod);
+    
+    // Update filter if cutoff changed significantly
+    const float cutoff_diff = cutoff_modulated - last_cutoff_hz_;
+    if (cutoff_diff > 1.0f || cutoff_diff < -1.0f) {
+        vcf_.SetCutoffModulated(cutoff_modulated);
+        last_cutoff_hz_ = cutoff_modulated;
+    }
+    
+    // Apply VCF
+    float filtered;
+    if (current_mode_ == dsp::SYNTH_MODE_POLYPHONIC) {
+        filtered = hpf_out;
+    } else if (current_preset_.params[PARAM_VCF_CUTOFF] >= 100) {
+        filtered = hpf_out;
+    } else {
+        filtered = vcf_.Process(hpf_out);
+        if (filtered > 1.8f) filtered = 1.8f + 0.2f * (filtered - 1.8f);
+        else if (filtered < -1.8f) filtered = -1.8f + 0.2f * (filtered + 1.8f);
+    }
+    
+    // Apply VCA
+    float vca_gain = (current_mode_ == dsp::SYNTH_MODE_POLYPHONIC) ? 1.0f : vca_env_out_;
+    
+    if (current_mode_ != dsp::SYNTH_MODE_POLYPHONIC) {
+        const float velocity_vca = 0.2f + (current_velocity_ / 127.0f) * 0.8f;
+        vca_gain *= velocity_vca;
+    }
+    
+    if (current_mode_ == dsp::SYNTH_MODE_UNISON) {
+        dsp::Voice& lead_voice = allocator_.GetVoiceMutable(0);
+        vca_gain = lead_voice.env_amp.Process();
+        
+        if (!lead_voice.env_amp.IsActive()) {
+            vca_gain = 0.0f;
+            allocator_.MarkVoiceInactive(0);
+        }
+    } else if (current_mode_ == dsp::SYNTH_MODE_POLYPHONIC) {
+        vca_gain = 1.0f;
+    }
+    
+    // VCA LFO (tremolo)
+    if (setup.vca_lfo_depth > kMinModulation) {
+        const int vca_lfo_switch = static_cast<int>(setup.vca_lfo_depth * 3.999f);
+        static constexpr float kVcaLfoDepths[4] = {0.0f, 0.33f, 0.67f, 1.0f};
+        const float quantized_depth = kVcaLfoDepths[vca_lfo_switch];
+        const float tremolo = 1.0f + (lfo_out * quantized_depth * 0.5f);
+        vca_gain *= tremolo;
+    }
+    
+    // VCA Keyboard tracking
+    if (setup.vca_kybd > kMinModulation) {
+        const float note_offset = (static_cast<int32_t>(current_note_) - 60) / 12.0f;
+        const float kb_gain = 1.0f + (note_offset * setup.vca_kybd * 0.5f);
+        vca_gain *= kb_gain;
+    }
+    
+    // VCA Level control
+    vca_gain *= setup.vca_level;
+    
+    return filtered * vca_gain * 0.6f;
+}
+
+void DrupiterSynth::FinalizeOutput(uint32_t frames, float* out) {
+    // Sanitize buffer
+    drupiter::neon::SanitizeAndClamp(mix_buffer_, 1.0f, frames);
+    
+    // Effect mode processing
+    const uint8_t effect_mode = current_preset_.params[PARAM_EFFECT];
+    
+    if (effect_mode == 2) {
+        // DRY mode: Bypass effects
+        for (uint32_t i = 0; i < frames; i++) {
+            left_buffer_[i] = mix_buffer_[i];
+            right_buffer_[i] = mix_buffer_[i];
+        }
+    } else {
+        // Process with pre-configured parameters
+        space_widener_.ProcessMonoBatch(mix_buffer_, left_buffer_, right_buffer_, frames);
+    }
+    
+    // Add DC offset for denormal protection
+    const float denormal_offset = 1.0e-15f;
+    drupiter::neon::ApplyGain(left_buffer_, 1.0f, frames);
+    drupiter::neon::ApplyGain(right_buffer_, 1.0f, frames);
+    
+    // Interleave stereo
+    drupiter::neon::InterleaveStereo(left_buffer_, right_buffer_, out, frames);
+    
+    // Add DC offset to output
+    for (uint32_t i = 0; i < frames * 2; ++i) {
+        out[i] += denormal_offset;
+    }
 }

@@ -350,6 +350,40 @@ public:
         allocator_.SetMode(mode);
     }
 
+    // ============================================================================
+    // Renderer Access Methods (for extracted renderer classes)
+    // ============================================================================
+
+    /**
+     * @brief Get voice allocator (for renderers)
+     * @return Reference to voice allocator
+     */
+    dsp::VoiceAllocator& GetAllocator() { return allocator_; }
+
+    /**
+     * @brief Get current preset (for renderers)
+     * @return Const reference to current preset
+     */
+    const Preset& GetCurrentPreset() const { return current_preset_; }
+
+    /**
+     * @brief Get current frequency in Hz (for renderers)
+     * @return Current frequency
+     */
+    float GetCurrentFreqHz() const { return current_freq_hz_; }
+
+    /**
+     * @brief Get DCO1 oscillator (for renderers)
+     * @return Reference to DCO1
+     */
+    dsp::JupiterDCO& GetDCO1() { return dco1_; }
+
+    /**
+     * @brief Get DCO2 oscillator (for renderers)
+     * @return Reference to DCO2
+     */
+    dsp::JupiterDCO& GetDCO2() { return dco2_; }
+
 private:
     // Voice allocator (Hoover v2.0)
     dsp::VoiceAllocator allocator_;
@@ -504,6 +538,89 @@ private:
     void UpdateVCFParameters();
     void UpdateEnvelopeParameters();
     void UpdateLFOParameters();
+    
+    // ========================================================================
+    // Render Helper Methods (extracted from monolithic Render)
+    // ========================================================================
+    
+    /**
+     * @brief Setup per-buffer rendering context
+     * Extracts parameter reading and pre-calculations from Render preamble
+     */
+    struct RenderSetup {
+        // Oscillator parameters
+        float dco1_oct_mult;
+        float dco2_oct_mult;
+        float detune_ratio;
+        float xmod_depth;
+        
+        // Modulation depths
+        float lfo_pwm_depth;
+        float lfo_vcf_depth;
+        float lfo_vco_depth;
+        float env_pwm_depth;
+        float env_vcf_depth;
+        float env_pitch_depth;
+        float lfo_env_amt;
+        float vca_level;
+        float vca_lfo_depth;
+        float vca_kybd;
+        
+        // Filter parameters
+        float resonance;
+        dsp::JupiterVCF::Mode vcf_mode;
+        float hpf_alpha;
+        float key_track;
+        float vel_mod;
+        
+        // MIDI smoothing
+        float smoothed_pitch_bend;
+        float smoothed_pressure;
+    };
+    
+    /**
+     * @brief Per-frame modulation state
+     */
+    struct FrameModulation {
+        float modulated_pw;
+        float dco1_level;
+        float dco2_level;
+        float cutoff_base_nominal;
+        float pitch_mod_ratio;
+    };
+    
+    /**
+     * @brief Initialize per-buffer render setup
+     * @param frames Number of frames to render
+     * @return Render setup struct
+     */
+    RenderSetup PrepareRenderSetup(uint32_t frames);
+    
+    /**
+     * @brief Process per-frame modulation
+     * @param setup Render setup context
+     * @param base_pw Base pulse width
+     * @return Frame modulation state
+     */
+    FrameModulation ProcessFrameModulation(const RenderSetup& setup, float base_pw);
+    
+    /**
+     * @brief Process filter and VCA for one frame
+     * @param setup Render setup context
+     * @param mixed Oscillator mix input
+     * @param cutoff_base_nominal Base cutoff frequency
+     * @param lfo_out Current LFO output
+     * @return Processed sample after filter and VCA
+     */
+    float ProcessFilterVcaFrame(const RenderSetup& setup, float mixed, 
+                                float cutoff_base_nominal, float lfo_out);
+    
+    /**
+     * @brief Finalize output stage with effects
+     * @param frames Number of frames
+     * @param out Output buffer
+     */
+    void FinalizeOutput(uint32_t frames, float* out);
     
     // ========================================================================
     // Performance Monitoring (when -DPERF_MON enabled)
