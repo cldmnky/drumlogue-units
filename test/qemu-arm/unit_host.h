@@ -45,6 +45,7 @@ typedef struct {
     bool verbose;               // Verbose logging
     bool profile;               // Enable CPU profiling
     bool perf_mon;              // Enable PERF_MON output (requires unit built with PERF_MON=1)
+    bool test_presets;          // Test preset loading/switching
 } unit_host_config_t;
 
 /**

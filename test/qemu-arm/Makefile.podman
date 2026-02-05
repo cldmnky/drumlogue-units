@@ -85,6 +85,12 @@ podman-build: check-podman
 		file unit_host_arm && \
 		ls -lah unit_host_arm'
 
+# Generate test signals (WAV files)
+generate-signals:
+	@echo "Creating test signal directory..."
+	@mkdir -p fixtures
+	@echo "✓ fixtures directory ready for test signals"
+
 # Test specific unit
 test-unit: check-podman podman-build generate-signals
 	@if [ -z "$(UNIT)" ]; then \

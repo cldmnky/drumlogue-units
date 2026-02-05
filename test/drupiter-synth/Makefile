@@ -27,6 +27,9 @@ DSP_SOURCES += ../../drumlogue/drupiter-synth/dsp/jupiter_lfo.cc
 DSP_SOURCES += ../../drumlogue/drupiter-synth/dsp/voice_allocator.cc
 DSP_SOURCES += ../../drumlogue/common/voice_allocator_core.cc
 DSP_SOURCES += ../../drumlogue/drupiter-synth/dsp/unison_oscillator.cc
+DSP_SOURCES += ../../drumlogue/drupiter-synth/polyphonic_renderer.cc
+DSP_SOURCES += ../../drumlogue/drupiter-synth/mono_renderer.cc
+DSP_SOURCES += ../../drumlogue/drupiter-synth/unison_renderer.cc
 DSP_SOURCES += ../../drumlogue/drupiter-synth/drupiter_synth.cc
 DSP_SOURCES += ../../drumlogue/common/perf_mon.cc
 

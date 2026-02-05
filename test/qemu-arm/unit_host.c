@@ -6,7 +6,7 @@
  * Loads units as shared libraries and processes WAV files through them.
  */
 
-#define _POSIX_C_SOURCE 199309L  // For clock_gettime
+#define _POSIX_C_SOURCE 200809L  // For clock_gettime and usleep
 
 #include "unit_host.h"
 #include "sdk_stubs.h"
@@ -15,8 +15,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <dlfcn.h>
 #include <unistd.h>
+#include <dlfcn.h>
 #include <errno.h>
 #include <getopt.h>
 #include <time.h>
@@ -221,7 +221,7 @@ int unit_host_process_wav(const char* input_path, const char* output_path,
     // Validate input format
     uint32_t input_sr = wav_file_get_sample_rate(&input_wav);
     uint8_t input_channels = wav_file_get_channels(&input_wav);
-    uint32_t input_frames = wav_file_get_frames(&input_wav);
+    // uint32_t input_frames = wav_file_get_frames(&input_wav);  // Not used, but available for future validation
     
     if (input_sr != config->sample_rate) {
         fprintf(stderr, "Warning: Input sample rate (%u) != config (%u)\n", 
@@ -511,7 +511,8 @@ int unit_host_test_presets(unit_host_state_t* state, unit_host_config_t* config)
         
         // Give the unit a moment to settle (simulate hardware timing)
         // This is important because some units may defer preset loading
-        usleep(1000);  // 1ms delay
+        struct timespec ts = {.tv_sec = 0, .tv_nsec = 1000000};  // 1ms
+        nanosleep(&ts, NULL);
         
         // Verify preset index matches
         uint8_t actual_index = g_callbacks.unit_get_preset_index();
@@ -536,7 +537,6 @@ int unit_host_test_presets(unit_host_state_t* state, unit_host_config_t* config)
         
         // Check some parameters to ensure they've changed
         // (this is a heuristic - we can't know exact values without unit internals)
-        bool params_changed = false;
         if (g_callbacks.unit_get_param_value) {
             for (uint8_t p = 0; p < state->unit_header->num_params; p++) {
                 int32_t value = g_callbacks.unit_get_param_value(p);

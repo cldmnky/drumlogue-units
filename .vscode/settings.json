@@ -1,5 +1,6 @@
 {
     "chat.tools.terminal.autoApprove": {
         "./drupiter_test": true
-    }
+    },
+    "C_Cpp.default.configurationProvider": "ms-vscode.makefile-tools"
 }

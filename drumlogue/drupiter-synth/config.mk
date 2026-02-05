@@ -16,6 +16,11 @@ CSRC = header.c
 CXXSRC = unit.cc
 CXXSRC += drupiter_synth.cc
 
+# Renderer sources (extracted from drupiter_synth.cc)
+CXXSRC += polyphonic_renderer.cc
+CXXSRC += mono_renderer.cc
+CXXSRC += unison_renderer.cc
+
 # Common utilities (conditionally compiled based on PERF_MON)
 # CXXSRC += ../common/perf_mon.cc  # Only when PERF_MON is defined
 
