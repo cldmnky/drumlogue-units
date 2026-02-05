@@ -221,7 +221,9 @@ int8_t DrupiterSynth::Init(const unit_runtime_desc_t* desc) {
     channel_pressure_normalized_ = 0.0f;
     
     // Initialize chorus effect (delay-based stereo spread)
-    space_widener_.Init(sample_rate_);
+    if (!space_widener_.Init(sample_rate_)) {
+        return -1;  // Allocation failure
+    }
     space_widener_.SetDelayTime(15.0f);      // 15ms base delay
     space_widener_.SetModDepth(3.0f);        // ±3ms modulation
     space_widener_.SetLfoRate(0.5f);         // 0.5 Hz LFO
