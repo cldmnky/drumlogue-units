@@ -17,6 +17,7 @@
 
 #include <cstdint>
 #include <cmath>
+#include <new>  // For std::nothrow
 
 #ifdef USE_NEON
 #include <arm_neon.h>
@@ -62,6 +63,10 @@ inline float32x4_t TriangleLfo4(float32x4_t phases) {
 class StereoWidener {
 public:
     StereoWidener() : width_(0.5f) {}
+    
+    // Disable copying (not needed for simple POD-like class)
+    StereoWidener(const StereoWidener&) = delete;
+    StereoWidener& operator=(const StereoWidener&) = delete;
     
     /**
      * @brief Set stereo width
@@ -220,6 +225,10 @@ public:
         , lfo_phase_(0.0f)
         , lfo_depth_(0.25f)
         , sample_rate_(48000.0f) {}
+    
+    // Disable copying (contains state that shouldn't be duplicated)
+    AnimatedStereoWidener(const AnimatedStereoWidener&) = delete;
+    AnimatedStereoWidener& operator=(const AnimatedStereoWidener&) = delete;
     
     void Init(float sample_rate) {
         sample_rate_ = sample_rate;
@@ -673,31 +682,50 @@ public:
         if (delay_buffer_right_) delete[] delay_buffer_right_;
     }
     
+    // Disable copying (owns heap memory via raw pointers)
+    ChorusStereoWidener(const ChorusStereoWidener&) = delete;
+    ChorusStereoWidener& operator=(const ChorusStereoWidener&) = delete;
+    
     /**
      * @brief Initialize chorus with sample rate
+     * @return true if initialization succeeded, false on allocation failure
      */
-    void Init(float sample_rate) {
+    bool Init(float sample_rate) {
         sample_rate_ = sample_rate;
         lfo_rate_ = 0.5f / sample_rate_;
         
-        // Allocate delay buffers
-        max_delay_samples_ = static_cast<size_t>((kMaxDelayMs / 1000.0f) * sample_rate_) + 1;
+        // Calculate required buffer size
+        size_t new_size = static_cast<size_t>((kMaxDelayMs / 1000.0f) * sample_rate_) + 1;
         
-        if (delay_buffer_left_) delete[] delay_buffer_left_;
-        if (delay_buffer_right_) delete[] delay_buffer_right_;
+        // Allocate new buffers with nothrow (safe allocation)
+        float* new_left = new(std::nothrow) float[new_size];
+        float* new_right = new(std::nothrow) float[new_size];
         
-        delay_buffer_left_ = new float[max_delay_samples_];
-        delay_buffer_right_ = new float[max_delay_samples_];
-        
-        // Clear buffers
-        for (size_t i = 0; i < max_delay_samples_; ++i) {
-            delay_buffer_left_[i] = 0.0f;
-            delay_buffer_right_[i] = 0.0f;
+        // Check allocation success
+        if (!new_left || !new_right) {
+            delete[] new_left;
+            delete[] new_right;
+            return false;  // Allocation failed, keep existing buffers
         }
+        
+        // Clear new buffers
+        for (size_t i = 0; i < new_size; ++i) {
+            new_left[i] = 0.0f;
+            new_right[i] = 0.0f;
+        }
+        
+        // Safe to delete old buffers and swap in new ones
+        delete[] delay_buffer_left_;
+        delete[] delay_buffer_right_;
+        delay_buffer_left_ = new_left;
+        delay_buffer_right_ = new_right;
+        max_delay_samples_ = new_size;
         
         write_pos_ = 0;
         lfo_phase_left_ = 0.0f;
         lfo_phase_right_ = 0.5f;  // Start 180° out of phase
+        
+        return true;
     }
     
     /**
