@@ -61,7 +61,14 @@ fi
 # Check if ARM host exists
 if [ ! -f "unit_host_arm" ]; then
     echo "⚙️  Building ARM unit host..."
-    make -f Makefile.podman podman-build
+    # Use appropriate Makefile based on OS
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        # macOS: Use Podman-based build
+        make -f Makefile.podman podman-build
+    else
+        # Linux: Use native ARM cross-compilation
+        make -f Makefile.arm
+    fi
 fi
 
 # Check if test signals exist (skip if only testing presets)
@@ -80,24 +87,35 @@ else
 fi
 echo ""
 
-# Run test
-podman run --rm -it \
-    -v "$(pwd):/workspace:Z" \
-    -v "$(pwd)/../..:/repo:ro,Z" \
-    -w /workspace \
-    ubuntu:22.04 \
-    bash -c "
-    apt-get update -qq && \
-    dpkg --add-architecture armhf && \
-    apt-get update -qq && \
-    apt-get install -y -qq qemu-user-static libsndfile1:armhf libstdc++6:armhf > /dev/null 2>&1 && \
-    qemu-arm-static -cpu cortex-a7 -L /usr/arm-linux-gnueabihf \
-        /workspace/unit_host_arm \
-        /repo/drumlogue/${UNIT_NAME}/${UNIT_FILE_NAME}.drmlgunit \
-        /workspace/${INPUT_WAV} \
-        /workspace/${OUTPUT_WAV} \
+# Run test - different approach for macOS (podman) vs Linux (native)
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    # macOS: Use Podman container with qemu-user-static
+    podman run --rm -it \
+        -v "$(pwd):/workspace:Z" \
+        -v "$(pwd)/../..:/repo:ro,Z" \
+        -w /workspace \
+        ubuntu:22.04 \
+        bash -c "
+        apt-get update -qq && \
+        dpkg --add-architecture armhf && \
+        apt-get update -qq && \
+        apt-get install -y -qq qemu-user-static libsndfile1:armhf libstdc++6:armhf > /dev/null 2>&1 && \
+        qemu-arm-static -cpu cortex-a7 -L /usr/arm-linux-gnueabihf \
+            /workspace/unit_host_arm \
+            /repo/drumlogue/${UNIT_NAME}/${UNIT_FILE_NAME}.drmlgunit \
+            /workspace/${INPUT_WAV} \
+            /workspace/${OUTPUT_WAV} \
+            --verbose $PROFILE_FLAG $PERF_MON_FLAG
+    "
+else
+    # Linux: Use native qemu-arm directly
+    qemu-arm -cpu cortex-a7 -L /usr/arm-linux-gnueabihf \
+        ./unit_host_arm \
+        ../../drumlogue/${UNIT_NAME}/${UNIT_FILE_NAME}.drmlgunit \
+        ./${INPUT_WAV} \
+        ./${OUTPUT_WAV} \
         --verbose $PROFILE_FLAG $PERF_MON_FLAG
-"
+fi
 
 if [ $? -eq 0 ]; then
     echo ""
