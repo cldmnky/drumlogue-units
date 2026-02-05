@@ -71,6 +71,7 @@ class DelayLine {
 - **NO virtual functions** in hot paths (prefer templates or function pointers)
 - **NO exceptions** (compile with `-fno-exceptions`)
 - **NO recursion** in audio callback
+- **ALWAYS return from rendering functions** - missing returns cause silent failures
 
 ### Memory Management
 ```cpp
@@ -84,6 +85,16 @@ void unit_init(const unit_runtime_desc_t* runtime) {
 // ❌ BAD: Allocate in unit_render()
 void unit_render(...) {
   float* buffer = new float[size];  // NEVER DO THIS
+}
+
+// ✅ GOOD: Use std::nothrow for rare init-time allocations
+void Init() {
+  buffer_ = new (std::nothrow) float[size];
+  if (buffer_ == nullptr) {
+    // Handle allocation failure gracefully
+    size_ = 0;
+    return;
+  }
 }
 ```
 
@@ -194,6 +205,27 @@ void ProcessBlock(float* buffer, size_t size) {
 #endif
 ```
 
+### NEON Class Safety
+```cpp
+// Classes with NEON state must delete copy operations
+class NeonProcessor {
+ public:
+  NeonProcessor() = default;
+  ~NeonProcessor() = default;
+  
+  // Prevent accidental copies (NEON registers are expensive to copy)
+  NeonProcessor(const NeonProcessor&) = delete;
+  NeonProcessor& operator=(const NeonProcessor&) = delete;
+  
+  // Allow moves if needed
+  NeonProcessor(NeonProcessor&&) = default;
+  NeonProcessor& operator=(NeonProcessor&&) = default;
+  
+ private:
+  float32x4_t state_[16];  // NEON registers
+};
+```
+
 ### Desktop Test Code
 ```cpp
 // Conditionally compile test-only code
@@ -203,6 +235,28 @@ void ProcessBlock(float* buffer, size_t size) {
 #else
   #define DEBUG_PRINT(x)
 #endif
+```
+
+### QEMU ARM Testing
+```cpp
+// Hardware register access won't work in QEMU user-mode
+// Use fallback for cycle counting in testing
+#include <chrono>
+
+static inline uint32_t GetCycleCount() {
+#if defined(TEST) || defined(__QEMU_ARM__)
+  // Fallback: use std::chrono for testing
+  using namespace std::chrono;
+  static auto start_time = high_resolution_clock::now();
+  auto now = high_resolution_clock::now();
+  auto elapsed_us = duration_cast<microseconds>(now - start_time).count();
+  return static_cast<uint32_t>(elapsed_us * 900);  // 900MHz simulation
+#else
+  // Real hardware: ARM DWT PMCCNTR register
+  volatile uint32_t* pmccntr = (volatile uint32_t*)0xE0001004;
+  return *pmccntr;
+#endif
+}
 ```
 
 ## Common Patterns
@@ -226,6 +280,27 @@ void unit_render(const float* in, float* out,
       out[i * channels + 1] = out_r;
     }
   }
+}
+```
+
+### Renderer Functions Must Return Values
+```cpp
+// ❌ BAD: Missing return statement causes silent failure
+void Render(const float* in, float* out, uint32_t frames) {
+  // ... process audio ...
+  // Oops, forgot to return - compiler won't catch this!
+}
+
+// ✅ GOOD: Always return, even if void
+void Render(const float* in, float* out, uint32_t frames) {
+  // ... process audio ...
+  return;  // Explicit return for clarity
+}
+
+// ✅ BETTER: Use [[nodiscard]] for non-void returns
+[[nodiscard]] bool Render(const float* in, float* out, uint32_t frames) {
+  // ... process audio ...
+  return true;  // Compiler warns if caller ignores return
 }
 ```
 
@@ -377,6 +452,8 @@ float MoogFilter(float input) {
 - Profile on actual hardware (ARM performance differs from x86)
 - Use `-O2` or `-O3` optimization
 - Consider lookup tables for transcendental functions
+- Use `powf()` not `pow()` for single-precision (ARM has hardware sqrtf/powf)
+- Normalize MIDI velocity: `velocity / 127.0f` not `/128.0f`
 
 ## Security
 
