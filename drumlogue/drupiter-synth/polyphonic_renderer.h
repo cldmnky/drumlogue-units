@@ -18,7 +18,6 @@ public:
     /**
      * @brief Render polyphonic voices
      * @param synth Reference to the main synth
-     * @param frames Number of frames to render
      * @param modulated_pw Current pulse width modulation
      * @param dco1_oct_mult DCO1 octave multiplier
      * @param dco2_oct_mult DCO2 octave multiplier
@@ -43,7 +42,6 @@ public:
      */
     static float RenderVoices(
         DrupiterSynth& synth,
-        uint32_t frames,
         float modulated_pw,
         float dco1_oct_mult,
         float dco2_oct_mult,

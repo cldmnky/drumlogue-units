@@ -68,7 +68,6 @@ namespace dsp {
 
 float PolyphonicRenderer::RenderVoices(
     DrupiterSynth& synth,
-    uint32_t frames,
     float modulated_pw,
     float dco1_oct_mult,
     float dco2_oct_mult,
@@ -119,7 +118,7 @@ float PolyphonicRenderer::RenderVoices(
         // CRITICAL: Apply glide increment for EACH FRAME in the buffer, not just once
         // OPTIMIZATION: Use multiplication instead of expensive log/exp operations
         if (voice_mut.is_gliding) {
-            const float glide_ratio = 1.0f + voice_mut.glide_increment * frames;
+            const float glide_ratio = 1.0f + voice_mut.glide_increment;
             voice_mut.pitch_hz *= glide_ratio;
 
             // Check if we've reached target (compare in frequency domain directly)
@@ -222,7 +221,8 @@ float PolyphonicRenderer::RenderVoices(
         voice_cutoff_base *= semitones_to_ratio(voice_clamped_exponent * 12.0f);
 
         // Per-voice velocity modulation for VCF (0-50% scaled)
-        const float voice_vel_mod = (voice.velocity / 127.0f) * 0.5f;
+        // Note: voice.velocity is already normalized (0.0-1.0)
+        const float voice_vel_mod = voice.velocity * 0.5f;
 
         // Combine envelope, LFO, velocity, and pressure modulation (shared sources)
         float voice_total_mod = voice_vcf_env * 2.0f              // Base envelope modulation

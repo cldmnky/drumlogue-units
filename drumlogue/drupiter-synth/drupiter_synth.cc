@@ -315,7 +315,7 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
         
         // Delegate mode-specific rendering to specialized renderers
         if (current_mode_ == dsp::SYNTH_MODE_POLYPHONIC) {
-            dsp::PolyphonicRenderer::RenderVoices(*this, frames, mod.modulated_pw, setup.dco1_oct_mult, setup.dco2_oct_mult,
+            mixed_ = dsp::PolyphonicRenderer::RenderVoices(*this, mod.modulated_pw, setup.dco1_oct_mult, setup.dco2_oct_mult,
                                            setup.detune_ratio, setup.xmod_depth, setup.lfo_vco_depth, lfo_out_, mod.pitch_mod_ratio,
                                            setup.env_pitch_depth, mod.dco1_level, mod.dco2_level, mod.cutoff_base_nominal,
                                            setup.resonance, setup.vcf_mode, setup.hpf_alpha, setup.key_track, setup.smoothed_pressure,
@@ -323,16 +323,16 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
                                            current_preset_.params[PARAM_DCO2_WAVE], current_preset_.params[PARAM_VCF_CUTOFF],
                                            fast_pow2, semitones_to_ratio);
         } else if (current_mode_ == dsp::SYNTH_MODE_UNISON) {
-            dsp::UnisonRenderer::RenderUnison(*this, mod.modulated_pw, setup.dco1_oct_mult, setup.dco2_oct_mult,
+            mixed_ = dsp::UnisonRenderer::RenderUnison(*this, mod.modulated_pw, setup.dco1_oct_mult, setup.dco2_oct_mult,
                                        setup.detune_ratio, setup.lfo_vco_depth, lfo_out_, mod.pitch_mod_ratio,
                                        setup.smoothed_pitch_bend, mod.dco1_level, mod.dco2_level,
                                        current_preset_.params[PARAM_DCO1_WAVE], semitones_to_ratio);
         } else {
             // MONO mode
-            dsp::MonoRenderer::RenderMono(*this, mod.modulated_pw, setup.dco1_oct_mult, setup.dco2_oct_mult,
-                                   setup.detune_ratio, setup.lfo_vco_depth, lfo_out_, mod.pitch_mod_ratio,
+            mixed_ = dsp::MonoRenderer::RenderMono(*this, mod.modulated_pw, setup.dco1_oct_mult, setup.dco2_oct_mult,
+                                   setup.detune_ratio, setup.xmod_depth, setup.lfo_vco_depth, lfo_out_, mod.pitch_mod_ratio,
                                    setup.smoothed_pitch_bend, mod.dco1_level, mod.dco2_level,
-                                   current_preset_.params[PARAM_DCO1_WAVE], semitones_to_ratio);
+                                   semitones_to_ratio);
         }
         
         #ifdef PERF_MON
@@ -1148,7 +1148,7 @@ DrupiterSynth::FrameModulation DrupiterSynth::ProcessFrameModulation(
     // Pre-calculate pitch envelope modulation ratio
     mod.pitch_mod_ratio = 1.0f;
     if (fabsf(setup.env_pitch_depth) > kMinModulation) {
-        mod.pitch_mod_ratio = powf(2.0f, vcf_env_out_ * setup.env_pitch_depth / 12.0f);
+        mod.pitch_mod_ratio = fasterpow2f(vcf_env_out_ * setup.env_pitch_depth / 12.0f);
     }
     
     return mod;
