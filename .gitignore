@@ -74,6 +74,9 @@ test/elements-synth/elements_synth_test
 test/drupiter-synth/drupiter_test
 test/drupiter-synth/perf_test
 test/drupiter-synth/fixtures/
+test/pepege-synth/pepege_test
+test/pepege-synth/*.wav
+test/*.log
 
 # UI test artifacts
 test/ui/ui_player
@@ -85,6 +88,7 @@ test/qemu-arm/unit_host_arm
 test/qemu-arm/unit_host_native
 test/qemu-arm/*.o
 test/qemu-arm/build/
+test/qemu-arm/*.core
 test/qemu-arm/fixtures/*.wav
 
 test/presets-editor/bin/
