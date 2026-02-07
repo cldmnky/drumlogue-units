@@ -97,12 +97,12 @@ The unit has 24 parameters organized across 6 pages:
 
 | Parameter | Range | Description |
 |-----------|-------|-------------|
-| **LFO SPD** | 0-127 | LFO speed |
+| **LFO SPD** | 0-100 | LFO speed |
 | **LFO SHAPE** | 0-5 | LFO waveform: SINE, TRI, SAW↑, SAW↓, SQR, S&H |
-| **MORPH MOD** | -64 to +63 | LFO to wavetable morph amount |
-| **FILTER MOD** | -64 to +63 | LFO to filter cutoff amount |
-| **VEL→FILTER** | 0-127 | Velocity to filter amount |
-| **KEY TRACK** | 0-127 | Filter keyboard tracking |
+| **MORPH MOD** | 0-100 | LFO to wavetable morph amount (50 = center) |
+| **FILTER MOD** | 0-100 | LFO to filter cutoff amount (50 = center) |
+| **VEL→FILTER** | 0-100 | Velocity to filter amount |
+| **KEY TRACK** | 0-100 | Filter keyboard tracking |
 
 ## PPG Modes
 
@@ -123,6 +123,15 @@ The unit has 24 parameters organized across 6 pages:
 - **drumlogue Port**: Adapted for Korg logue SDK
 
 ## Version History
+
+- **v1.1.0** - MOD HUB update and stability fixes
+  - HubControl-based MOD HUB with consistent value formatting
+  - MOD HUB values use 0-100 scale with preset migration
+  - Updated PPG waveform resource data
+  - Smoother wavetable morphing response
+  - HPF state reset on voice trigger to avoid state carryover
+  - Monophonic last-note priority voice allocation fix
+  - Filter type clamping for safety
 
 - **v1.0.0** - Initial Release
   - 2-voice polyphonic PPG wavetable synthesis

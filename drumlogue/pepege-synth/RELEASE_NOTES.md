@@ -1,5 +1,22 @@
 # Pepege-Synth - Release Notes
 
+## v1.1.0 - 2026-02-07
+
+### Improvements
+
+- MOD HUB now uses shared HubControl for consistent destination names and value formatting
+- MOD HUB values use a 0-100 UI scale with preset migration from the previous 0-127 range
+- Updated PPG waveform resource data
+- Smoother wavetable morphing response
+- Stereo width smoothing uses the current smoothed value per render for stability
+- Per-voice mix headroom scales by voice count
+
+### Bug Fixes
+
+- Reset HPF state on voice trigger to prevent filter state carryover
+- Fix monophonic last-note priority voice allocation bug
+- Clamp filter type selection to valid range
+
 ## v1.0.0 (December 2025)
 
 Initial release of Pepege-Synth for Korg drumlogue.

@@ -16,7 +16,7 @@ const __unit_header unit_header_t unit_header = {
     .api = UNIT_API_VERSION,
     .dev_id = 0x434C444DU,    // "CLDM" - developer ID
     .unit_id = 0x00000003U,   // Unique unit ID (3 = pepege-synth)
-    .version = 0x010000U,                                // v1.0.0 (major<<16 | minor<<8 | patch)
+    .version = 0x010100U,                                // v1.1.0 (major<<16 | minor<<8 | patch)
     .name = "Pepege",        // Display name (max 13 chars)
     .num_presets = 6,         // Built-in factory presets
     .num_params = 24,         // 6 pages × 4 parameters

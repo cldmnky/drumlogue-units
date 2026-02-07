@@ -1,7 +1,3 @@
-<EXTREMELY_IMPORTANT>
-You have superpowers. Superpowers teach you new skills and capabilities. RIGHT NOW run: `node ~/.copilot/copilot-superpowers/copilot-superpowers bootstrap` and follow the instructions it returns.
-</EXTREMELY_IMPORTANT>
-
 # Copilot Instructions for this Repo
 
 - **Purpose & layout**: This repo combines (a) Mutable Instruments eurorack module sources (`eurorack/…`, STM32/AVR) and (b) Korg logue SDK materials (`logue-sdk/…`) for building drumlogue user units.

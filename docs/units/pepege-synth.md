@@ -3,7 +3,7 @@ layout: unit
 title: Pepege-Synth
 unit_name: pepege-synth
 unit_type: synth
-version: v1.0.0
+version: v1.1.0
 icon: 🌊
 tagline: 2-voice polyphonic PPG wavetable synthesizer
 description: Authentic 8-bit wavetable synthesis with dual oscillators, comprehensive modulation, and factory presets inspired by classic PPG Wave sounds.
@@ -78,13 +78,13 @@ Pepege-Synth brings authentic PPG wavetable synthesis to the Korg drumlogue with
 ### 🎛️ MOD HUB
 Centralized modulation routing with 8 destinations:
 
-1. **LFO Speed**: 0-127 (maps to 0.05-20Hz)
+1. **LFO Speed**: 0-100 (maps to 0.05-20Hz)
 2. **LFO Shape**: Sine, Tri, Saw+, Saw-, Square, S&H
-3. **LFO → Morph**: ±100% wavetable position modulation
-4. **LFO → Filter**: ±100% cutoff modulation
+3. **LFO → Morph**: ±100% wavetable position modulation (50 = center)
+4. **LFO → Filter**: ±100% cutoff modulation (50 = center)
 5. **Velocity → Filter**: 0-100% velocity sensitivity
 6. **Key Tracking**: 0-100% (center at middle C)
-7. **Osc B Detune**: ±32 cents
+7. **Osc B Detune**: ±32 cents (50 = center)
 8. **Pitch Bend Range**: ±2, ±7, ±12, or ±24 semitones
 
 ### 🎵 6 Factory Presets
@@ -143,7 +143,7 @@ Centralized modulation routing with 8 destinations:
 | Parameter | Range | Description |
 |-----------|-------|-------------|
 | **MOD SEL** | 0-7 | Select modulation destination |
-| **MOD VAL** | 0-127 | Value for selected destination |
+| **MOD VAL** | 0-100 | Value for selected destination |
 | **OSC MIX** | -64 to +63 | A/B oscillator balance |
 | **SPACE** | -64 to +63 | Stereo width |
 
@@ -228,6 +228,7 @@ The MOD HUB provides a centralized way to manage modulation:
 
 ## Version History
 
+- **v1.1.0** (2026-02-07): MOD HUB update, waveform refresh, and smoother morphing
 - **v1.0.0** (December 2025): Initial release
 
 ---
