@@ -1,6 +1,6 @@
 ---
 agent: 'agent'
-model: Claude Sonnet 4
+model: Auto
 tools: ['codebase', 'edit', 'runCommands', 'search']
 description: 'Create a new drumlogue unit from template'
 ---

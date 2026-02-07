@@ -26,19 +26,19 @@ Modal synthesis voice combining bow, blow, and strike exciters with versatile re
 
 [Documentation](https://cldmnky.github.io/drumlogue-units/units/elementish-synth/) • [Download](https://github.com/cldmnky/drumlogue-units/releases/tag/elementish-synth/v1.2.0)
 
-### 🌊 Pepege-Synth (v1.0.0)
+### 🌊 Pepege-Synth (v1.1.0)
 2-voice polyphonic PPG wavetable synthesizer with dual oscillators, comprehensive modulation, and authentic 8-bit character.
 
 **Features:** 2-voice polyphony • 16 wavetable banks • 3 interpolation modes • Dual ADSR • LFO • State-variable filter
 
-[Documentation](https://cldmnky.github.io/drumlogue-units/units/pepege-synth/) • [Download](https://github.com/cldmnky/drumlogue-units/releases/tag/pepege-synth/v1.0.0)
+[Documentation](https://cldmnky.github.io/drumlogue-units/units/pepege-synth/) • [Download](https://github.com/cldmnky/drumlogue-units/releases/tag/pepege-synth/v1.1.0)
 
-### 🪐 Drupiter Synth (v1.1.0)
+### 🪐 Drupiter Synth (v1.2.0)
 Jupiter-8 inspired polyphonic/monophonic synthesizer with dual DCOs, multi-mode filter, hard sync, and cross-modulation. Based on Bristol Jupiter-8 emulation.
 
 **Features:** Polyphonic/Unison/Mono modes • Dual DCOs • Hard sync • Cross-modulation • Multi-mode filter • Dual ADSR • 12 presets
 
-[Documentation](https://cldmnky.github.io/drumlogue-units/units/drupiter-synth/) • [Download](https://github.com/cldmnky/drumlogue-units/releases/tag/drupiter-synth/v1.1.0)
+[Documentation](https://cldmnky.github.io/drumlogue-units/units/drupiter-synth/) • [Download](https://github.com/cldmnky/drumlogue-units/releases/tag/drupiter-synth/v1.2.0)
 
 ---
 

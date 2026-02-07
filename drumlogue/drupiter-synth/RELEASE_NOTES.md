@@ -1,6 +1,6 @@
 # Release Notes - Drupiter Synth
 
-## v1.2.0 - 2026-01-18
+## v1.2.0 - 2026-02-07
 
 ### 🎛️ MIDI Expression & Bug Fixes
 
@@ -20,6 +20,15 @@ Third release with enhanced MIDI expressiveness and comprehensive stability impr
 - Standardized MIDI parameter scaling (0-127 → 0.0-1.0 normalized range)
 - New `catchable_value.h` utility: Generic knob catch mechanism (±3 unit threshold)
 - Reusable by all drumlogue units
+
+### Improvements
+
+- Extracted mono/poly/unison renderers for clearer DSP flow and easier maintenance
+- Added shared voice allocator core in `drumlogue/common` for consistent note handling
+- Key-trigger LFO support for tighter Jupiter-8 style modulation
+- Q31 wavetable interpolation path for DCO tables
+- JP-8 envelope time calibration (attack, decay, release ranges)
+- QEMU/perf monitoring fallback timing and stereo widener allocation safety
 
 ### Technical Improvements
 
@@ -42,9 +51,10 @@ Third release with enhanced MIDI expressiveness and comprehensive stability impr
 
 ### Bug Fixes
 
-- Fixed compilation warnings across all source files
-- Fixed VoiceAllocator symbol resolution issues
-- Resolved voice allocation edge cases in polyphonic/unison modes
+- Fixed DCO waveform mapping and saw/PolyBLEP edge artifacts
+- Reset HPF state on voice trigger to avoid carryover
+- Fixed mono/unison last-note priority edge cases
+- Resolved VoiceAllocator symbol resolution issues
 - Eliminated undefined reference errors from static constexpr members
 
 ### Knob Catch Mechanism

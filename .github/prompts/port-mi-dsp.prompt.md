@@ -1,6 +1,6 @@
 ---
 agent: 'agent'
-model: Claude Sonnet 4
+model: Auto
 tools: ['codebase', 'edit', 'search', 'fetch']
 description: 'Port Mutable Instruments eurorack DSP to drumlogue'
 ---

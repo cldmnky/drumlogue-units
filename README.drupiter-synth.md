@@ -17,6 +17,8 @@ A versatile Jupiter-8 inspired synthesizer for the Korg drumlogue, featuring dua
 - **12 Factory Presets** covering all synthesis modes
 - **LFO** with 4 waveforms and delay envelope
 - **Keyboard Tracking** (50% default) for natural filter response
+- **MIDI Expression**: velocity, pitch bend, channel pressure, aftertouch
+- **Knob Catch** mechanism to prevent parameter jumps on preset load
 
 ## Installation
 
@@ -84,31 +86,6 @@ The unit has 24 parameters organized across 6 pages:
 | **MOD AMT** | 0-100 | Amount for selected modulation destination |
 | **EFFECT** | 0-3 | Effect: CHORUS, SPACE, DRY, BOTH |
 
-| Parameter | Range | Description |
-|-----------|-------|-------------|
-| **FILTER** | 0-3 | Filter type: LP12, LP24, HP12, BP12 |
-| **CUTOFF** | 0-127 | Filter cutoff frequency |
-| **RESONANCE** | 0-127 | Filter resonance |
-| **ENV AMT** | -64 to +63 | Filter envelope amount |
-
-### Page 5: Envelopes & LFO
-
-| Parameter | Range | Description |
-|-----------|-------|-------------|
-| **ATTACK** | 0-127 | Envelope attack time |
-| **DECAY** | 0-127 | Envelope decay time |
-| **SUSTAIN** | 0-127 | Envelope sustain level |
-| **RELEASE** | 0-127 | Envelope release time |
-
-### Page 6: Global Controls
-
-| Parameter | Range | Description |
-|-----------|-------|-------------|
-| **MODE** | 0-2 | Synthesis mode: MONO, POLY, UNISON |
-| **GLIDE** | 0-127 | Portamento time |
-| **LFO RATE** | 0-127 | LFO speed |
-| **LFO SHAPE** | 0-3 | LFO waveform |
-
 ## Factory Presets
 
 Drupiter includes 12 factory presets covering all synthesis modes:
@@ -141,6 +118,13 @@ Drupiter includes 12 factory presets covering all synthesis modes:
 - **drumlogue Port**: Adapted for Korg logue SDK
 
 ## Version History
+
+- **v1.2.0** - MIDI Expression and Stability Update
+  - Velocity, pitch bend, channel pressure, and aftertouch support
+  - Knob catch mechanism for smoother preset transitions
+  - Renderer refactor for mono/poly/unison consistency
+  - Voice allocator core shared in `drumlogue/common`
+  - Waveform fixes and HPF state reset on voice trigger
 
 - **v1.1.0** - Polyphonic Synthesis Update
   - Polyphonic and Unison modes with voice allocation

@@ -36,7 +36,7 @@ Browse all available drumlogue units. Each unit can be downloaded and installed 
     <div class="unit-info">
       <h3>Pepege-Synth</h3>
       <span class="unit-type-badge synth">Synthesizer</span>
-      <span class="unit-version">v1.0.0</span>
+      <span class="unit-version">v1.1.0</span>
       <p>2-voice polyphonic PPG wavetable synthesizer with dual oscillators, comprehensive modulation, and authentic 8-bit character. Inspired by VAST Dynamics Vaporizer2.</p>
     </div>
   </a>
@@ -46,7 +46,7 @@ Browse all available drumlogue units. Each unit can be downloaded and installed 
     <div class="unit-info">
       <h3>Drupiter Synth</h3>
       <span class="unit-type-badge synth">Synthesizer</span>
-      <span class="unit-version">v1.1.0</span>
+      <span class="unit-version">v1.2.0</span>
       <p>Jupiter-8 inspired polyphonic/monophonic synthesizer with dual DCOs, multi-mode filter, hard sync, cross-modulation, and comprehensive modulation capabilities. Based on Bristol Jupiter-8.</p>
     </div>
   </a>

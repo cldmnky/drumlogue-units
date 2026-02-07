@@ -3,7 +3,7 @@ layout: unit
 title: Drupiter Synth
 unit_name: drupiter-synth
 unit_type: synth
-version: v1.1.0
+version: v1.2.0
 icon: 🪐
 tagline: Jupiter-8 inspired polyphonic/monophonic synthesizer
 description: Classic analog-style synthesis with dual DCOs, multi-mode filter, hard sync, cross-modulation, and comprehensive modulation capabilities. Now with polyphonic and unison modes.
@@ -211,7 +211,7 @@ Drupiter has **24 parameters** organized across **6 pages**. Use the drumlogue's
 - **Parameters:** 24 (6 pages × 4 parameters)
 - **Presets:** 12 factory presets
 - **Sample Rate:** 48 kHz
-- **MIDI:** Full note on/off with velocity
+- **MIDI:** Velocity, pitch bend, channel pressure, aftertouch
 - **CPU Usage:** High (approaches drumlogue limits)
 
 ---
@@ -228,8 +228,8 @@ Drupiter has **24 parameters** organized across **6 pages**. Use the drumlogue's
 ## Download
 
 <div class="download-section">
-  <a href="https://github.com/cldmnky/drumlogue-units/releases/download/drupiter-synth/v1.1.0/drupiter_synth.drmlgunit" class="download-button">
-    ⬇️ Download Drupiter v1.1.0
+  <a href="https://github.com/cldmnky/drumlogue-units/releases/download/drupiter-synth/v1.2.0/drupiter_synth.drmlgunit" class="download-button">
+    ⬇️ Download Drupiter v1.2.0
   </a>
   <p class="download-info">File: drupiter_synth.drmlgunit • Size: 31 KB</p>
 </div>
@@ -239,7 +239,6 @@ Drupiter has **24 parameters** organized across **6 pages**. Use the drumlogue's
 ## Documentation
 
 - [README.md](https://github.com/cldmnky/drumlogue-units/blob/main/drumlogue/drupiter-synth/README.md) - Detailed documentation
-- [UI.md](https://github.com/cldmnky/drumlogue-units/blob/main/drumlogue/drupiter-synth/UI.md) - User interface guide
 - [RELEASE_NOTES.md](https://github.com/cldmnky/drumlogue-units/blob/main/drumlogue/drupiter-synth/RELEASE_NOTES.md) - Version history
 
 ---

@@ -1,6 +1,6 @@
 # Drupiter - Jupiter-8 Synthesizer for Korg Drumlogue
 
-**Version**: 1.1.0  
+**Version**: 1.2.0  
 **Developer**: CLDM (0x434C444D)  
 **Type**: Polyphonic/Monophonic Synthesizer Unit  
 **Based on**: Bristol Jupiter-8 Emulation
@@ -26,7 +26,8 @@ Drupiter is a versatile synthesizer unit for the Korg drumlogue that brings the 
 - **12 Factory Presets** covering all synthesis modes
 - **LFO** with 4 waveforms and delay envelope
 - **Keyboard Tracking** (50% default) for natural filter response
-- **12 Factory Presets** covering all synthesis modes
+- **MIDI Expression**: velocity, pitch bend, channel pressure, aftertouch
+- **Knob Catch** mechanism to prevent parameter jumps on preset load
 
 ---
 
@@ -191,12 +192,10 @@ Drupiter includes **12 factory presets** covering common synthesizer sounds:
 
 ## Technical Specifications
 
-- **Polyphony**: Monophonic
+- **Polyphony**: 4-voice polyphonic + unison mode
 - **Sample Rate**: 48kHz
 - **Bit Depth**: 32-bit float processing
-- **CPU Usage**: ~13% (estimated)
-- **Binary Size**: 19,740 bytes
-- **Wavetable Size**: 2048 samples per waveform
+- **CPU Usage**: ~15-40% (mode dependent)
 - **Latency**: Zero added latency
 
 ### DSP Architecture
@@ -273,6 +272,17 @@ This unit is released under MIT License. See LICENSE file for details.
 ---
 
 ## Version History
+
+**v1.2.0** (2026-02-07)
+- MIDI expression (velocity, pitch bend, pressure, aftertouch)
+- Knob catch mechanism for smoother preset transitions
+- Renderer refactor for mono/poly/unison consistency
+- Waveform fixes and HPF state reset on voice trigger
+
+**v1.1.0** (2025-12-29)
+- Polyphonic and unison modes with 12 presets
+- Extended modulation hub (18 destinations)
+- ENV to pitch modulation and portamento/glide
 
 **v1.0.0** (December 10, 2025)
 - Initial release
