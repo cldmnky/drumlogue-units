@@ -66,6 +66,19 @@ build/
 *.lst
 *.drmlgunit
 
+# Drumpler ROM resources (large binary files, but keep documentation)
+drumlogue/drumpler/resources/*.bin
+drumlogue/drumpler/resources/*.BIN
+drumlogue/drumpler/resources/*.zip
+drumlogue/drumpler-*/resources/
+
+# Drumpler multi-ROM build artifacts
+drumlogue/drumpler/rom_data.cc
+drumlogue/drumpler/.rom_*.bin
+drumlogue/drumpler/header.c.bak
+drumlogue/drumpler/config.mk.bak
+drumlogue/drumpler/roms.manifest
+
 .mcp-debug-tools/
 
 .DS_Store
@@ -92,3 +105,7 @@ test/qemu-arm/*.core
 test/qemu-arm/fixtures/*.wav
 
 test/presets-editor/bin/
+
+# Drumpler test artifacts
+test/drumpler/drumpler_test
+test/drumpler/*.wav

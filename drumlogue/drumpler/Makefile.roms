@@ -1,0 +1,159 @@
+##############################################################################
+# Drumpler ROM Management Makefile
+#
+# Automates downloading, extracting, and managing JV-880 ROM files
+# without checking them into git.
+#
+# Usage:
+#   make -f Makefile.roms roms      - Download and extract ROM pack
+#   make -f Makefile.roms manifest  - Generate roms.manifest from downloaded ROMs
+#   make -f Makefile.roms all       - Download ROMs and generate manifest
+#   make -f Makefile.roms clean     - Remove downloaded ROMs and generated files
+##############################################################################
+
+SHELL := /bin/bash
+
+# ROM pack URL from archive.org
+ROM_PACK_URL := https://ia800705.us.archive.org/26/items/jv880_rompack_v1/jv880_rompack_v1.zip
+ROM_PACK_ZIP := resources/jv880_rompack_v1.zip
+RESOURCES_DIR := resources
+
+# Base ROM files (required)
+BASE_ROMS := \
+	$(RESOURCES_DIR)/jv880_rom1.bin \
+	$(RESOURCES_DIR)/jv880_rom2.bin \
+	$(RESOURCES_DIR)/jv880_waverom1.bin \
+	$(RESOURCES_DIR)/jv880_waverom2.bin \
+	$(RESOURCES_DIR)/jv880_nvram.bin
+
+# Expected expansion ROM count
+EXPANSION_ROM_COUNT := 19
+
+# Manifest file
+MANIFEST := roms.manifest
+
+# Colors for output
+RED := \033[0;31m
+GREEN := \033[0;32m
+YELLOW := \033[1;33m
+BLUE := \033[0;34m
+NC := \033[0m
+
+##############################################################################
+# Default target
+##############################################################################
+
+.PHONY: all
+all: roms manifest
+	@echo -e "$(GREEN)✓$(NC) ROM pack ready for building"
+	@echo -e "$(BLUE)>>$(NC) Run: cd ../.. && ./build.sh drumpler"
+
+##############################################################################
+# Download and extract ROM pack
+##############################################################################
+
+.PHONY: roms
+roms: $(BASE_ROMS)
+	@echo -e "$(GREEN)✓$(NC) ROM pack extracted successfully"
+	@echo -e "$(BLUE)>>$(NC) Base ROMs: $(words $(BASE_ROMS))"
+	@echo -e "$(BLUE)>>$(NC) Expansion ROMs: $$(ls -1 $(RESOURCES_DIR)/SR-JV80-*.bin $(RESOURCES_DIR)/SR-JV80-*.BIN 2>/dev/null | wc -l | tr -d ' ')"
+
+$(BASE_ROMS): $(ROM_PACK_ZIP)
+	@echo -e "$(BLUE)>>$(NC) Extracting ROM pack..."
+	@cd $(RESOURCES_DIR) && unzip -o -q jv880_rompack_v1.zip
+	@if [ ! -f $(RESOURCES_DIR)/jv880_rom1.bin ]; then \
+		echo -e "$(RED)✗$(NC) Extraction failed - base ROM files not found"; \
+		exit 1; \
+	fi
+	@touch $(BASE_ROMS)  # Update timestamps
+
+$(ROM_PACK_ZIP):
+	@echo -e "$(BLUE)>>$(NC) Creating resources directory..."
+	@mkdir -p $(RESOURCES_DIR)
+	@echo -e "$(BLUE)>>$(NC) Downloading ROM pack from archive.org..."
+	@echo -e "$(YELLOW)>>$(NC) URL: $(ROM_PACK_URL)"
+	@if command -v curl >/dev/null 2>&1; then \
+		curl -L -o $(ROM_PACK_ZIP) $(ROM_PACK_URL) || { \
+			echo -e "$(RED)✗$(NC) Download failed"; exit 1; \
+		}; \
+	elif command -v wget >/dev/null 2>&1; then \
+		wget -O $(ROM_PACK_ZIP) $(ROM_PACK_URL) || { \
+			echo -e "$(RED)✗$(NC) Download failed"; exit 1; \
+		}; \
+	else \
+		echo -e "$(RED)✗$(NC) Neither curl nor wget found. Please install one."; \
+		exit 1; \
+	fi
+	@echo -e "$(GREEN)✓$(NC) Downloaded $$(ls -lh $(ROM_PACK_ZIP) | awk '{print $$5}') ROM pack"
+
+##############################################################################
+# Generate roms.manifest from downloaded ROMs
+##############################################################################
+
+.PHONY: manifest
+manifest: $(BASE_ROMS)
+	@echo -e "$(BLUE)>>$(NC) Generating roms.manifest from downloaded ROMs..."
+	@./generate_manifest.sh > $(MANIFEST)
+	@echo -e "$(GREEN)✓$(NC) Generated $(MANIFEST) with $$(grep -v '^#' $(MANIFEST) | grep -v '^$$' | wc -l | tr -d ' ') ROM variants"
+
+##############################################################################
+# Clean targets
+##############################################################################
+
+.PHONY: clean-roms
+clean-roms:
+	@echo -e "$(YELLOW)>>$(NC) Removing downloaded ROM files..."
+	@rm -f $(RESOURCES_DIR)/*.bin $(RESOURCES_DIR)/*.BIN
+	@rm -f $(ROM_PACK_ZIP)
+	@echo -e "$(GREEN)✓$(NC) ROM files removed"
+
+.PHONY: clean
+clean: clean-roms
+	@echo -e "$(YELLOW)>>$(NC) Removing generated files..."
+	@rm -f $(MANIFEST)
+	@rm -f rom_data.cc .rom_*.bin header.c.bak config.mk.bak
+	@rm -f *.drmlgunit
+	@echo -e "$(GREEN)✓$(NC) All generated files removed"
+
+##############################################################################
+# Verification
+##############################################################################
+
+.PHONY: verify
+verify:
+	@echo -e "$(BLUE)>>$(NC) Verifying ROM pack integrity..."
+	@error=0; \
+	for rom in $(BASE_ROMS); do \
+		if [ ! -f $$rom ]; then \
+			echo -e "$(RED)✗$(NC) Missing: $$rom"; \
+			error=1; \
+		else \
+			echo -e "$(GREEN)✓$(NC) Found: $$rom ($$(ls -lh $$rom | awk '{print $$5}'))"; \
+		fi; \
+	done; \
+	expansion_count=$$(ls -1 $(RESOURCES_DIR)/SR-JV80-*.bin $(RESOURCES_DIR)/SR-JV80-*.BIN 2>/dev/null | wc -l | tr -d ' '); \
+	echo -e "$(BLUE)>>$(NC) Expansion ROMs found: $$expansion_count"; \
+	if [ $$expansion_count -lt $(EXPANSION_ROM_COUNT) ]; then \
+		echo -e "$(YELLOW)⚠$(NC)  Expected $(EXPANSION_ROM_COUNT) expansion ROMs, found $$expansion_count"; \
+	fi; \
+	exit $$error
+
+##############################################################################
+# Help
+##############################################################################
+
+.PHONY: help
+help:
+	@echo "Drumpler ROM Management"
+	@echo ""
+	@echo "Targets:"
+	@echo "  all          - Download ROMs and generate manifest (default)"
+	@echo "  roms         - Download and extract ROM pack"
+	@echo "  manifest     - Generate roms.manifest from downloaded ROMs"
+	@echo "  verify       - Verify ROM pack integrity"
+	@echo "  clean-roms   - Remove downloaded ROM files"
+	@echo "  clean        - Remove ROMs and all generated files"
+	@echo "  help         - Show this help"
+	@echo ""
+	@echo "ROM Source:"
+	@echo "  $(ROM_PACK_URL)"

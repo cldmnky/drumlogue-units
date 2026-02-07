@@ -72,6 +72,37 @@ If SDL2/ImGui are missing, the gui target will print a dependency hint. On macOS
 brew install sdl2 imgui
 ```
 
+## Building Drumpler ROM Variants
+
+The **drumpler** unit has multiple ROM variants (internal + 19 SR-JV80 expansions). To build all variants as native libraries:
+
+```bash
+cd test/presets-editor
+
+# Build all ROM variants from roms.manifest
+./build-system/build-drumpler-roms.sh
+```
+
+This creates separate `.dylib` files for each ROM variant:
+- `drumpler_internal.dylib` (4.6 MB) - Internal ROM only
+- `drumpler_orchestral.dylib` (13 MB) - SR-JV80-02 Orchestral
+- `drumpler_pop.dylib` (13 MB) - SR-JV80-01 Pop
+- ...and 17 more expansion variants
+
+**Prerequisites:** ROM files must be downloaded first:
+```bash
+cd ../../drumlogue/drumpler
+make -f Makefile.roms all
+cd ../../test/presets-editor
+```
+
+**Control which ROMs build:** Edit `drumlogue/drumpler/roms.manifest` and comment out unwanted variants with `#`.
+
+**Note:** Each variant has unique:
+- Unit ID (0x00000005 + offset)
+- Display name (shown in GUI)
+- Embedded ROM data (4-13 MB per library)
+
 ## Requirements
 
 ### System

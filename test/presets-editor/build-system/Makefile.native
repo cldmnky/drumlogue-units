@@ -90,7 +90,7 @@ $(TARGET): $(OBJS)
 # Per-source compile rules (C vs C++)
 define COMPILE_TEMPLATE
 $(call OBJ_FROM_SRC,$(1)): $(1) | dirs
-	$$(if $$(filter %.c,$(1)),$(CC) $(CFLAGS) $(INCLUDES) -c $$< -o $$@,$(CXX) $(CXXFLAGS) $(INCLUDES) -c $$< -o $$@)
+	$$(if $$(filter %.c,$(1)),$(CC) $(CFLAGS) $(UDEFS) $(INCLUDES) -c $$< -o $$@,$(CXX) $(CXXFLAGS) $(UDEFS) $(INCLUDES) -c $$< -o $$@)
 endef
 $(foreach s,$(SRCS),$(eval $(call COMPILE_TEMPLATE,$(s))))
 

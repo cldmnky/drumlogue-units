@@ -37,6 +37,28 @@ fi
 PROJECT="${1:-clouds-revfx}"
 ACTION="${2:-build}"
 
+# Special handling for drumpler: build all ROM variants
+# Skip if _DRUMPLER_INTERNAL_BUILD is set (prevents recursion from build_all_roms.sh)
+if [ "$PROJECT" = "drumpler" ] && [ "$ACTION" = "build" ] && [ -z "$_DRUMPLER_INTERNAL_BUILD" ]; then
+    echo ">> Detected drumpler project: building all ROM variants..."
+    
+    # Check if ROMs are available
+    DRUMPLER_RESOURCES="${SCRIPT_DIR}/drumlogue/drumpler/resources"
+    if [ ! -f "${DRUMPLER_RESOURCES}/jv880_rom1.bin" ]; then
+        echo ""
+        echo "ERROR: ROM files not found in ${DRUMPLER_RESOURCES}"
+        echo ""
+        echo "To download and prepare ROM files:"
+        echo "  cd drumlogue/drumpler && make -f Makefile.roms all"
+        echo ""
+        echo "This will download the JV-880 ROM pack from archive.org and generate the manifest."
+        echo ""
+        exit 1
+    fi
+    
+    exec "${SCRIPT_DIR}/drumlogue/drumpler/build_all_roms.sh"
+fi
+
 # Parse additional arguments (e.g., PERF_MON=1)
 shift 2 2>/dev/null || shift $# 2>/dev/null
 MAKE_VARS=""
