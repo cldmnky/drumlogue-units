@@ -309,12 +309,9 @@ class Synth {
     }
 
     // Check for silence to enable idle mode
-    float max_abs = 0.0f;
-    const float* out_check = out;
-    for (size_t i = 0; i < frames * 2; ++i) {
-      float abs_val = fabsf(out_check[i]);
-      if (abs_val > max_abs) max_abs = abs_val;
-    }
+    // Use NEON MaxAbsBuffer with early-exit threshold — when audio is playing,
+    // the first chunk typically exceeds kSilenceLevel so this is O(1).
+    float max_abs = drumpler::neon::MaxAbsBuffer(out, static_cast<uint32_t>(frames * 2), kSilenceLevel);
     
     if (max_abs < kSilenceLevel) {
       silence_frames_ += frames;
@@ -495,8 +492,6 @@ class Synth {
 #ifdef DEBUG
     fprintf(stderr, "[Drumpler] synth.h NoteOn: note=%d vel=%d channel=%d\n", note, velocity, channel_);
     fflush(stderr);
-#else
-    fprintf(stderr, "[Drumpler] NoteOn: note=%d vel=%d\n", note, velocity);
 #endif
     // Send to emulator on MIDI channel (channel_ is 0-based)
     last_note_ = note;

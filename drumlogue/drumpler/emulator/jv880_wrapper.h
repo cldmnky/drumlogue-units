@@ -202,6 +202,11 @@ private:
     bool ValidateROM(const uint8_t* rom_data, uint32_t rom_size);
     bool UnpackROM(const uint8_t* rom_data, uint32_t rom_size);
     
+    // Helper: compute Roland checksum over buf[start..end] inclusive
+    static uint8_t ComputeRolandChecksum(const uint8_t* buf, int start, int end);
+    
+    // Helper: locate patch data pointer for a given program index
+    const uint8_t* GetPatchDataPtr(uint8_t index) const;
 };
 
 }  // namespace drumpler

@@ -258,30 +258,7 @@ bool JV880Emulator::SetCurrentProgram(uint8_t index) {
     if (!mcu_) return false;
     
     static constexpr int kPatchSize = 0x16a;
-    const uint8_t* patch_data = nullptr;
-    
-    if (waverom_exp_ != nullptr) {
-        // Expansion ROM: read patch count and offset from ROM header
-        uint16_t nPatches = (uint16_t)(waverom_exp_[0x66] << 8) | waverom_exp_[0x67];
-        uint32_t patchesOffset = 
-            ((uint32_t)waverom_exp_[0x8c] << 24) |
-            ((uint32_t)waverom_exp_[0x8d] << 16) |
-            ((uint32_t)waverom_exp_[0x8e] << 8) |
-            ((uint32_t)waverom_exp_[0x8f]);
-        
-        if (index < nPatches) {
-            patch_data = &waverom_exp_[patchesOffset + index * kPatchSize];
-        }
-    } else if (rom2_) {
-        // Internal ROM patches
-        if (index < 64) {
-            // Internal A: rom2 + 0x010ce0 + index * 0x16a
-            patch_data = &rom2_[0x010ce0 + index * kPatchSize];
-        } else if (index < 128) {
-            // Internal B: rom2 + 0x018ce0 + (index-64) * 0x16a
-            patch_data = &rom2_[0x018ce0 + (index - 64) * kPatchSize];
-        }
-    }
+    const uint8_t* patch_data = GetPatchDataPtr(index);
     
     if (!patch_data) {
 #ifdef DEBUG
@@ -326,6 +303,38 @@ bool JV880Emulator::SetCurrentProgram(uint8_t index) {
     return true;
 }
 
+uint8_t JV880Emulator::ComputeRolandChecksum(const uint8_t* buf, int start, int end) {
+    uint32_t sum = 0;
+    for (int i = start; i <= end; ++i) {
+        sum += buf[i];
+    }
+    uint32_t cs = 128 - (sum % 128);
+    return static_cast<uint8_t>(cs == 128 ? 0 : cs);
+}
+
+const uint8_t* JV880Emulator::GetPatchDataPtr(uint8_t index) const {
+    static constexpr int kPatchSize = 0x16a;
+    
+    if (waverom_exp_ != nullptr) {
+        uint16_t nPatches = (uint16_t)(waverom_exp_[0x66] << 8) | waverom_exp_[0x67];
+        uint32_t patchesOffset =
+            ((uint32_t)waverom_exp_[0x8c] << 24) |
+            ((uint32_t)waverom_exp_[0x8d] << 16) |
+            ((uint32_t)waverom_exp_[0x8e] << 8) |
+            ((uint32_t)waverom_exp_[0x8f]);
+        if (index < nPatches) {
+            return &waverom_exp_[patchesOffset + index * kPatchSize];
+        }
+    } else if (rom2_ != nullptr) {
+        if (index < 64) {
+            return &rom2_[0x010ce0 + index * kPatchSize];
+        } else if (index < 128) {
+            return &rom2_[0x018ce0 + (index - 64) * kPatchSize];
+        }
+    }
+    return nullptr;
+}
+
 void JV880Emulator::SendSysexPatchCommonParam(uint8_t offset, uint8_t value) {
     if (!mcu_) return;
     
@@ -342,16 +351,7 @@ void JV880Emulator::SendSysexPatchCommonParam(uint8_t offset, uint8_t value) {
     buf[7]  = 0x20;   // Address (Patch Common block)
     buf[8]  = offset & 0x7F;  // Address LSB (parameter offset)
     buf[9]  = value & 0x7F;   // Data
-    
-    // Roland checksum: 128 - (sum of address+data bytes % 128)
-    uint32_t checksum = 0;
-    for (int i = 5; i <= 9; i++) {
-        checksum += buf[i];
-    }
-    checksum = 128 - (checksum % 128);
-    if (checksum == 128) checksum = 0;
-    
-    buf[10] = static_cast<uint8_t>(checksum);
+    buf[10] = ComputeRolandChecksum(buf, 5, 9);
     buf[11] = 0xF7;   // SysEx end
     
 #ifdef DEBUG
@@ -383,14 +383,7 @@ void JV880Emulator::SendSysexPatchToneParam(uint8_t tone, uint8_t offset, uint8_
     buf[8]  = offset & 0x7F;
     buf[9]  = value & 0x7F;
     
-    uint32_t checksum = 0;
-    for (int i = 5; i <= 9; i++) {
-        checksum += buf[i];
-    }
-    checksum = 128 - (checksum % 128);
-    if (checksum == 128) checksum = 0;
-    
-    buf[10] = static_cast<uint8_t>(checksum);
+    buf[10] = ComputeRolandChecksum(buf, 5, 9);
     buf[11] = 0xF7;
     
 #ifdef DEBUG
@@ -419,15 +412,7 @@ void JV880Emulator::SendSysexSystemParam(uint32_t address, uint8_t value) {
     buf[7]  = (address >> 7) & 0x7F;
     buf[8]  = (address >> 0) & 0x7F;
     buf[9]  = value & 0x7F;
-    
-    uint32_t checksum = 0;
-    for (int i = 5; i <= 9; i++) {
-        checksum += buf[i];
-    }
-    checksum = 128 - (checksum % 128);
-    if (checksum == 128) checksum = 0;
-    
-    buf[10] = static_cast<uint8_t>(checksum);
+    buf[10] = ComputeRolandChecksum(buf, 5, 9);
     buf[11] = 0xF7;
     
 #ifdef DEBUG
@@ -447,37 +432,9 @@ void JV880Emulator::Reset() {
 bool JV880Emulator::GetPatchName(uint8_t index, char* name, int max_len) const {
     if (!name || max_len < 2) return false;
     
-    // Patch struct is 0x16a bytes, name is first 12 bytes (char name[12])
-    static constexpr int kPatchSize = 0x16a;
     static constexpr int kNameLen = 12;
     
-    const uint8_t* name_ptr = nullptr;
-    
-    if (waverom_exp_ != nullptr) {
-        // Expansion ROM: read patch count and offset from ROM header
-        // Number of patches at bytes 0x66-0x67 (big-endian 16-bit)
-        uint16_t nPatches = (uint16_t)(waverom_exp_[0x66] << 8) | waverom_exp_[0x67];
-        
-        // Patches offset at bytes 0x8c-0x8f (big-endian 32-bit)
-        uint32_t patchesOffset = 
-            ((uint32_t)waverom_exp_[0x8c] << 24) |
-            ((uint32_t)waverom_exp_[0x8d] << 16) |
-            ((uint32_t)waverom_exp_[0x8e] << 8) |
-            ((uint32_t)waverom_exp_[0x8f]);
-        
-        if (index < nPatches) {
-            name_ptr = &waverom_exp_[patchesOffset + index * kPatchSize];
-        }
-    } else if (rom2_ != nullptr) {
-        // Internal ROM: patches stored in ROM2
-        // Internal A (0-63):  rom2 + 0x010ce0
-        // Internal B (64-127): rom2 + 0x018ce0
-        if (index < 64) {
-            name_ptr = &rom2_[0x010ce0 + index * kPatchSize];
-        } else if (index < 128) {
-            name_ptr = &rom2_[0x018ce0 + (index - 64) * kPatchSize];
-        }
-    }
+    const uint8_t* name_ptr = GetPatchDataPtr(index);
     
     if (!name_ptr) {
         // Fallback: numeric name
