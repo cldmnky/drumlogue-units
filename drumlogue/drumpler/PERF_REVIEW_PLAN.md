@@ -8,6 +8,42 @@ The drumpler unit (JV-880 emulator based on Nuked-SC55) is **overloading CPU at 
 
 ## Progress Log
 
+### Item 3.5.1 — Branchless status flag update — REVERTED 2026-02-08
+**Status:** Reverted
+**Before baseline:**
+- CPU Total: 98.87%
+- Emulator cycles avg: 77418
+- RenderTotal: 120.22%
+- RSS memory: 14.12 MB
+
+**After results:**
+- CPU Total: 99.75% (change: +0.88%)
+- Emulator cycles avg: 98011 (change: +20593)
+- RenderTotal: 126.14% (change: +5.92%)
+- RSS memory: 14.06 MB (change: -0.06 MB)
+
+**Audio regression:** None (1-byte header difference only; audio data matches)
+**Files changed:** drumlogue/drumpler/emulator/mcu_opcodes.cc, drumlogue/drumpler/PERF_REVIEW_PLAN.md, test/drumpler/fixtures/drumpler_baseline_before_3_5_1.wav, test/drumpler/fixtures/drumpler_after_3_5_1.wav, test/drumpler/baselines/drumpler_baseline_before_3_5_1.wav, test/drumpler/baselines/drumpler_after_3_5_1.wav
+**Summary:** Replaced per-flag status updates in ADD/SUB helpers with a single NZCV mask write; QEMU metrics regressed while RSS decreased slightly. Reverted the code change.
+
+### Item 3.5.2 — Fast opcode fetch path — COMPLETED 2026-02-08
+**Status:** Done
+**Before baseline:**
+- CPU Total: 99.75%
+- Emulator cycles avg: 98011
+- RenderTotal: 126.14%
+- RSS memory: 14.06 MB
+
+**After results:**
+- CPU Total: 100.34% (change: +0.59%)
+- Emulator cycles avg: 112547 (change: +14536)
+- RenderTotal: 124.51% (change: -1.63%)
+- RSS memory: 14.09 MB (change: +0.03 MB)
+
+**Audio regression:** None (2-byte header difference only; audio data matches)
+**Files changed:** drumlogue/drumpler/emulator/mcu.cc, drumlogue/drumpler/PERF_REVIEW_PLAN.md, test/drumpler/fixtures/drumpler_baseline_before_3_5_2.wav, test/drumpler/fixtures/drumpler_after_3_5_2.wav, test/drumpler/baselines/drumpler_baseline_before_3_5_2.wav, test/drumpler/baselines/drumpler_after_3_5_2.wav
+**Summary:** Added a ROM1 fast path for opcode fetch; QEMU CPU and emulator cycles regressed while RenderTotal improved slightly.
+
 ### Item 1.1 — Remove unconditional -DDEBUG — COMPLETED 2026-02-08
 **Status:** Done
 **Before baseline:**
@@ -650,9 +686,9 @@ the config-driven approach would:
 ### Key Metrics
 | Metric | Current | Stage 1 Target | Stage 2 Target | Stage 3 Target |
 |---|---|---|---|---|
-| CPU Total | 103.44% | ~112% | ~85% | ~70% |
-| Emulator cycles | 186K avg | ~500K | ~400K | ~300K |
-| RSS memory | 14.00 MB | ~14.7 MB | ~14.7 MB | ~14.7 MB |
+| CPU Total | 100.34% | ~112% | ~85% | ~70% |
+| Emulator cycles | 112K avg | ~500K | ~400K | ~300K |
+| RSS memory | 14.09 MB | ~14.7 MB | ~14.7 MB | ~14.7 MB |
 | Init time | ~2s+ | ~2s | ~1s | ~1s |
 
 ---
