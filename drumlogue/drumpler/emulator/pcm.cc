@@ -42,6 +42,11 @@
 #include "../../common/perf_mon.h"
 #endif
 
+static inline void PCM_UpdateConfig(pcm_t& pcm) {
+    // Cache derived config to avoid recomputing in the hot update loop.
+    pcm.config.reg_slots = static_cast<uint8_t>((pcm.config_reg_3d & 31) + 1);
+}
+
 Pcm::Pcm(MCU *mcu)
     : mcu(mcu)
     , waverom1(nullptr)
@@ -135,10 +140,12 @@ void Pcm::PCM_Write(uint32_t address, uint8_t data)
     else if (address == 0x3c)
     {
         pcm.config_reg_3c = data;
+        PCM_UpdateConfig(pcm);
     }
     else if (address == 0x3d)
     {
         pcm.config_reg_3d = data;
+        PCM_UpdateConfig(pcm);
     }
     else if (address == 0x3e)
     {
@@ -283,6 +290,7 @@ void Pcm::PCM_Reset(void)
     for (int i = 0; i < 32; ++i) {
         pcm.voice_idle_frames[i] = 0;
     }
+    PCM_UpdateConfig(pcm);
 }
 
 // Sign-extends a 20-bit signed integer to a 32-bit signed integer.
@@ -476,7 +484,7 @@ inline void eram_pack(pcm_t *pcm, int addr, int val)
 
 void Pcm::PCM_Update(uint64_t cycles)
 {
-    int reg_slots = (pcm.config_reg_3d & 31) + 1;
+    const int reg_slots = pcm.config.reg_slots;
     int voice_active = pcm.voice_mask & pcm.voice_mask_pending;
     while (pcm.cycles < cycles)
     {
@@ -1009,26 +1017,23 @@ void Pcm::PCM_Update(uint64_t cycles)
 
         for (int slot = 0; slot < reg_slots; slot++)
         {
+            const int key = (voice_active >> slot) & 1;
+            if (!key) {
+                uint16_t idle = pcm.voice_idle_frames[slot];
+                if (idle > pcm_t::kIdleThreshold) {
+                    // Skip idle voices early to avoid heavy per-voice work.
+                    continue;
+                }
+                pcm.voice_idle_frames[slot] = idle + 1;
+            } else {
+                pcm.voice_idle_frames[slot] = 0;
+            }
+
             uint32_t *ram1 = pcm.ram1[slot];
             uint16_t *ram2 = pcm.ram2[slot];
             int okey = (ram2[7] & 0x20) != 0;
-            int key = (voice_active >> slot) & 1;
-
             int active = okey && key;
             int kon = key && !okey;
-            
-            // Voice activity detection optimization
-            // Skip processing for voices that have been idle for >20ms
-            if (!active && ! kon) {
-                pcm.voice_idle_frames[slot]++;
-                if (pcm.voice_idle_frames[slot] > pcm_t::kIdleThreshold) {
-                    // Voice is idle - skip expensive processing
-                    continue;
-                }
-            } else {
-                // Voice is active - reset idle counter
-                pcm.voice_idle_frames[slot] = 0;
-            }
 
             // address generator
 

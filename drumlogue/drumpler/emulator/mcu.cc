@@ -1336,15 +1336,44 @@ int MCU::startSC55(const uint8_t* s_rom1, const uint8_t* s_rom2, const uint8_t* 
     return 0;
 }
 
-void MCU::updateSC55WithSampleRate(float *dataL, float *dataR, unsigned int nFrames, int destSampleRate) {
+namespace {
+
+static inline void MCU_Step(MCU& self, mcu_t& state) {
+    if (!state.ex_ignore)
+        MCU_Interrupt_Handle(&self);
+    else
+        state.ex_ignore = 0;
+
+    if (!state.sleep)
+        self.MCU_ReadInstruction();
+
+    state.cycles += 12; // FIXME: assume 12 cycles per instruction
+
+    self.pcm.PCM_Update(state.cycles);
+
+    self.mcu_timer.TIMER_Clock(state.cycles);
+
+    if (!self.mcu_mk1 && !self.mcu_jv880)
+        self.sub_mcu.SM_Update(state.cycles);
+    else {
+        self.MCU_UpdateUART_RX();
+        self.MCU_UpdateUART_TX();
+    }
+
+    self.MCU_UpdateAnalog(state.cycles);
+}
+
+static inline void MCU_UpdateSC55WithSampleRate(MCU& self, float *dataL, float *dataR,
+                                               unsigned int nFrames, int destSampleRate) {
     // Resampling architecture:
     // 1. MCU runs internally at 64kHz, generating samples into sample_buffer_l/r
-    // 2. We resample 64kHz → destSampleRate (e.g., 48kHz) using interpolation
+    // 2. We resample 64kHz -> destSampleRate (e.g., 48kHz) using interpolation
     //
     // Two paths:
     // - USE_LIBRESAMPLE: streaming sinc resampler with error accumulator (JUCE-compatible)
     // - else: persistent-phase linear interpolation (no malloc, embedded-safe)
 
+    mcu_t& state = self.mcu;
     const double step = 64000.0 / static_cast<double>(destSampleRate);  // ~1.333 for 48kHz
 
 #ifdef USE_LIBRESAMPLE
@@ -1354,10 +1383,10 @@ void MCU::updateSC55WithSampleRate(float *dataL, float *dataR, unsigned int nFra
     double currentError = renderBufferFrames - renderBufferFramesFloat;
 
     int limit = static_cast<int>(nFrames) / 2;
-    if (samplesError > limit) {
+    if (self.samplesError > limit) {
         renderBufferFrames -= limit;
         currentError -= limit;
-    } else if (-samplesError > limit) {
+    } else if (-self.samplesError > limit) {
         renderBufferFrames += limit;
         currentError += limit;
     }
@@ -1365,7 +1394,7 @@ void MCU::updateSC55WithSampleRate(float *dataL, float *dataR, unsigned int nFra
     // --- Persistent-phase path: compute exact needed input samples ---
     // resample_phase is the fractional offset into this call's generated buffer
     // We need enough input samples so that phase doesn't exceed the buffer
-    double maxPhase = resample_phase + static_cast<double>(nFrames - 1) * step;
+    double maxPhase = self.resample_phase + static_cast<double>(nFrames - 1) * step;
     int renderBufferFrames = static_cast<int>(std::floor(maxPhase)) + 2;  // +2 for interp margin
 #endif
 
@@ -1376,47 +1405,25 @@ void MCU::updateSC55WithSampleRate(float *dataL, float *dataR, unsigned int nFra
     }
 
     // Reset write pointer to 0 each call - linear buffer
-    sample_write_ptr = 0;
+    self.sample_write_ptr = 0;
 
     int maxCycles = static_cast<int>(nFrames) * 256;
 
-    for (int i = 0; sample_write_ptr < renderBufferFrames; i++) {
+    for (int i = 0; self.sample_write_ptr < renderBufferFrames; i++) {
         if (i > maxCycles) {
             printf("Not enough samples!\n");
             fflush(stdout);
             break;
         }
 
-        for (int j = 0; j < midiQueueCount; j++) {
-            if (!midiQueue[j].processed && midiQueue[j].samplePos <= sample_write_ptr) {
-                postMidiSC55(midiQueue[j].data, midiQueue[j].length);
-                midiQueue[j].processed = true;
+        for (int j = 0; j < self.midiQueueCount; j++) {
+            if (!self.midiQueue[j].processed && self.midiQueue[j].samplePos <= self.sample_write_ptr) {
+                self.postMidiSC55(self.midiQueue[j].data, self.midiQueue[j].length);
+                self.midiQueue[j].processed = true;
             }
         }
 
-        if (!mcu.ex_ignore)
-            MCU_Interrupt_Handle(this);
-        else
-            mcu.ex_ignore = 0;
-
-        if (!mcu.sleep)
-            MCU_ReadInstruction();
-
-        mcu.cycles += 12; // FIXME: assume 12 cycles per instruction
-
-        pcm.PCM_Update(mcu.cycles);
-
-        mcu_timer.TIMER_Clock(mcu.cycles);
-
-        if (!mcu_mk1 && !mcu_jv880)
-            sub_mcu.SM_Update(mcu.cycles);
-        else
-        {
-            MCU_UpdateUART_RX();
-            MCU_UpdateUART_TX();
-        }
-
-        MCU_UpdateAnalog(mcu.cycles);
+        MCU_Step(self, state);
     }
 
 #ifdef AUDIO_DEBUG
@@ -1424,50 +1431,50 @@ void MCU::updateSC55WithSampleRate(float *dataL, float *dataR, unsigned int nFra
     if (g_audio_debug_counter % AUDIO_DEBUG_INTERVAL == 1) {
         AudioStats pre_l, pre_r;
         pre_l.reset(); pre_r.reset();
-        for (int i = 0; i < sample_write_ptr; i++) {
-            pre_l.accumulate(sample_buffer_l[i]);
-            pre_r.accumulate(sample_buffer_r[i]);
+        for (int i = 0; i < self.sample_write_ptr; i++) {
+            pre_l.accumulate(self.sample_buffer_l[i]);
+            pre_r.accumulate(self.sample_buffer_r[i]);
         }
 #ifdef USE_LIBRESAMPLE
         fprintf(stderr, "\n[AUDIO_DEBUG] === Call #%d === nFrames=%u destRate=%d renderBufFrames=%d written=%d error=%.4f\n",
-                g_audio_debug_counter, nFrames, destSampleRate, renderBufferFrames, sample_write_ptr, samplesError);
+                g_audio_debug_counter, nFrames, destSampleRate, renderBufferFrames, self.sample_write_ptr, self.samplesError);
 #else
         fprintf(stderr, "\n[AUDIO_DEBUG] === Call #%d === nFrames=%u destRate=%d renderBufFrames=%d written=%d phase=%.6f\n",
-                g_audio_debug_counter, nFrames, destSampleRate, renderBufferFrames, sample_write_ptr, resample_phase);
+                g_audio_debug_counter, nFrames, destSampleRate, renderBufferFrames, self.sample_write_ptr, self.resample_phase);
 #endif
         pre_l.print("64kHz_L");
         pre_r.print("64kHz_R");
 
         fprintf(stderr, "  [64kHz_L first8]");
-        for (int i = 0; i < 8 && i < sample_write_ptr; i++)
-            fprintf(stderr, " %.6f", sample_buffer_l[i]);
+        for (int i = 0; i < 8 && i < self.sample_write_ptr; i++)
+            fprintf(stderr, " %.6f", self.sample_buffer_l[i]);
         fprintf(stderr, "\n");
     }
 #endif
 
-    // ===== Resample 64kHz → destSampleRate =====
+    // ===== Resample 64kHz -> destSampleRate =====
 
 #ifdef USE_LIBRESAMPLE
     // Streaming sinc resampler (matches JUCE plugin)
     const double ratio = static_cast<double>(destSampleRate) / 64000.0;
-    if (savedDestSampleRate != destSampleRate) {
-        savedDestSampleRate = destSampleRate;
-        if (resampleL) resample_close(resampleL);
-        if (resampleR) resample_close(resampleR);
-        resampleL = resample_open(1, ratio, ratio);
-        resampleR = resample_open(1, ratio, ratio);
-        samplesError = 0.0;
+    if (self.savedDestSampleRate != destSampleRate) {
+        self.savedDestSampleRate = destSampleRate;
+        if (self.resampleL) resample_close(self.resampleL);
+        if (self.resampleR) resample_close(self.resampleR);
+        self.resampleL = resample_open(1, ratio, ratio);
+        self.resampleR = resample_open(1, ratio, ratio);
+        self.samplesError = 0.0;
     }
 
     int inUsedL = 0, inUsedR = 0;
-    int outL = resample_process(resampleL, ratio, sample_buffer_l, renderBufferFrames,
+    int outL = resample_process(self.resampleL, ratio, self.sample_buffer_l, renderBufferFrames,
                                 0, &inUsedL, dataL, static_cast<int>(nFrames));
-    int outR = resample_process(resampleR, ratio, sample_buffer_r, renderBufferFrames,
+    int outR = resample_process(self.resampleR, ratio, self.sample_buffer_r, renderBufferFrames,
                                 0, &inUsedR, dataR, static_cast<int>(nFrames));
 
-    samplesError += currentError;
+    self.samplesError += currentError;
     if (inUsedL == 0 || inUsedR == 0) {
-        samplesError = 0.0;
+        self.samplesError = 0.0;
     }
 
     for (int i = outL; i < static_cast<int>(nFrames); ++i) dataL[i] = 0.0f;
@@ -1480,8 +1487,8 @@ void MCU::updateSC55WithSampleRate(float *dataL, float *dataR, unsigned int nFra
     // - No error accumulator needed (phase handles drift naturally)
     // - No periodic silence dropouts
     {
-        double phase = resample_phase;
-        const int inputLen = sample_write_ptr;  // actual samples generated
+        double phase = self.resample_phase;
+        const int inputLen = self.sample_write_ptr;  // actual samples generated
         const int outputLen = static_cast<int>(nFrames);
         int outCount = 0;
 
@@ -1492,8 +1499,8 @@ void MCU::updateSC55WithSampleRate(float *dataL, float *dataR, unsigned int nFra
                 break;
             }
             const float frac = static_cast<float>(phase - idx);
-            dataL[i] = sample_buffer_l[idx] + frac * (sample_buffer_l[idx + 1] - sample_buffer_l[idx]);
-            dataR[i] = sample_buffer_r[idx] + frac * (sample_buffer_r[idx + 1] - sample_buffer_r[idx]);
+            dataL[i] = self.sample_buffer_l[idx] + frac * (self.sample_buffer_l[idx + 1] - self.sample_buffer_l[idx]);
+            dataR[i] = self.sample_buffer_r[idx] + frac * (self.sample_buffer_r[idx + 1] - self.sample_buffer_r[idx]);
             phase += step;
             outCount++;
         }
@@ -1507,12 +1514,12 @@ void MCU::updateSC55WithSampleRate(float *dataL, float *dataR, unsigned int nFra
         // Update persistent phase: subtract consumed integer samples
         // Next call starts from the fractional remainder
         int consumed = static_cast<int>(std::floor(phase));
-        resample_phase = phase - static_cast<double>(consumed);
+        self.resample_phase = phase - static_cast<double>(consumed);
 
 #ifdef AUDIO_DEBUG
         if (g_audio_debug_counter % AUDIO_DEBUG_INTERVAL == 1) {
             fprintf(stderr, "  [Resample] step=%.6f outCount=%d/%d phase_in=%.6f phase_out=%.6f consumed=%d\n",
-                    step, outCount, outputLen, resample_phase + consumed - phase + resample_phase, resample_phase, consumed);
+                    step, outCount, outputLen, self.resample_phase + consumed - phase + self.resample_phase, self.resample_phase, consumed);
             AudioStats out_l, out_r;
             out_l.reset(); out_r.reset();
             for (int j = 0; j < outputLen; j++) {
@@ -1533,13 +1540,19 @@ void MCU::updateSC55WithSampleRate(float *dataL, float *dataR, unsigned int nFra
 #endif
 
     // Flush the midi buffer
-    for (int i = 0; i < midiQueueCount; i++) {
-        if (!midiQueue[i].processed) {
-            postMidiSC55(midiQueue[i].data, midiQueue[i].length);
-            midiQueue[i].processed = true;
+    for (int i = 0; i < self.midiQueueCount; i++) {
+        if (!self.midiQueue[i].processed) {
+            self.postMidiSC55(self.midiQueue[i].data, self.midiQueue[i].length);
+            self.midiQueue[i].processed = true;
         }
     }
-    midiQueueCount = 0;
+    self.midiQueueCount = 0;
+}
+
+}  // namespace
+
+void MCU::updateSC55WithSampleRate(float *dataL, float *dataR, unsigned int nFrames, int destSampleRate) {
+    MCU_UpdateSC55WithSampleRate(*this, dataL, dataR, nFrames, destSampleRate);
 }
 
 void MCU::SC55_Reset() {

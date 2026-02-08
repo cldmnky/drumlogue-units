@@ -34,6 +34,10 @@
 #pragma once
 #include <stdint.h>
 
+struct pcm_config_t {
+    uint8_t reg_slots;
+};
+
 struct pcm_t {
     uint32_t ram1[32][8];
     uint16_t ram2[32][16];
@@ -47,6 +51,7 @@ struct pcm_t {
     uint32_t read_latch;
     uint8_t config_reg_3c; // SC55:c3 JV880:c0
     uint8_t config_reg_3d;
+    pcm_config_t config;
     uint32_t irq_channel;
     uint32_t irq_assert;
 

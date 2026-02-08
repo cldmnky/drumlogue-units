@@ -104,6 +104,78 @@ The drumpler unit (JV-880 emulator based on Nuked-SC55) is **overloading CPU at 
 **Net change:** CPU +5.27%, Emulator +125711, RenderTotal +7.95%, RSS +0.31 MB
 **Notes:** All Stage 1 changes removed blocking debug I/O but regressed QEMU metrics; audio output unchanged.
 
+### Item 2.1 — Free-function architecture (jcmoyer pattern) — COMPLETED 2026-02-08
+**Status:** Done
+**Before baseline:**
+- CPU Total: 107.03%
+- Emulator cycles avg: 273367
+- RenderTotal: 124.52%
+- RSS memory: 14.29 MB
+
+**After results:**
+- CPU Total: 107.59% (change: +0.56%)
+- Emulator cycles avg: 286836 (change: +13469)
+- RenderTotal: 125.33% (change: +0.81%)
+- RSS memory: 14.63 MB (change: +0.34 MB)
+
+**Audio regression:** None (2-byte header difference only; audio data matches)
+**Files changed:** drumlogue/drumpler/emulator/mcu.cc, drumlogue/drumpler/PERF_REVIEW_PLAN.md, test/drumpler/fixtures/drumpler_baseline_after_2_1.wav, test/drumpler/baselines/drumpler_baseline_after_2_1.wav
+**Summary:** Refactored the hot update loop into free-function helpers; QEMU metrics regressed slightly while audio output stayed unchanged.
+
+### Item 2.2 — Precompute PCM Configuration (PCM_Config pattern) — COMPLETED 2026-02-08
+**Status:** Done
+**Before baseline:**
+- CPU Total: 105.46%
+- Emulator cycles avg: 235677
+- RenderTotal: 124.16%
+- RSS memory: 14.36 MB
+
+**After results:**
+- CPU Total: 105.60% (change: +0.14%)
+- Emulator cycles avg: 239101 (change: +3424)
+- RenderTotal: 124.35% (change: +0.19%)
+- RSS memory: 14.50 MB (change: +0.14 MB)
+
+**Audio regression:** None (2-byte header difference only; audio data matches)
+**Files changed:** drumlogue/drumpler/emulator/pcm.h, drumlogue/drumpler/emulator/pcm.cc, drumlogue/drumpler/PERF_REVIEW_PLAN.md, test/drumpler/fixtures/drumpler_baseline_after_2_2.wav, test/drumpler/baselines/drumpler_baseline_after_2_2.wav, test/drumpler/fixtures/drumpler_baseline_before_2_2.wav, test/drumpler/baselines/drumpler_baseline_before_2_2.wav
+**Summary:** Cached `reg_slots` in a small PCM config struct and updated it only on register writes; QEMU metrics regressed slightly while audio output stayed unchanged.
+
+### Item 2.3 — Voice-skip optimization in PCM_Update — COMPLETED 2026-02-08
+**Status:** Done
+**Before baseline:**
+- CPU Total: 106.87%
+- Emulator cycles avg: 269123
+- RenderTotal: 129.38%
+- RSS memory: 14.46 MB
+
+**After results:**
+- CPU Total: 106.76% (change: -0.11%)
+- Emulator cycles avg: 266538 (change: -2585)
+- RenderTotal: 127.65% (change: -1.73%)
+- RSS memory: 14.58 MB (change: +0.12 MB)
+
+**Audio regression:** None (2-byte header difference only; audio data matches)
+**Files changed:** drumlogue/drumpler/emulator/pcm.cc, drumlogue/drumpler/PERF_REVIEW_PLAN.md, test/drumpler/fixtures/drumpler_baseline_after_2_3.wav, test/drumpler/baselines/drumpler_baseline_after_2_3.wav, test/drumpler/fixtures/drumpler_baseline_before_2_3.wav, test/drumpler/baselines/drumpler_baseline_before_2_3.wav
+**Summary:** Skipped idle voices before touching per-voice state; modest improvement in emulator cycles with no audio regression.
+
+### Item 2.4 — Reduce Init warmup iterations — COMPLETED 2026-02-08
+**Status:** Done
+**Before baseline:**
+- CPU Total: 107.66%
+- Emulator cycles avg: 288097
+- RenderTotal: 125.64%
+- RSS memory: 14.78 MB
+
+**After results:**
+- CPU Total: 107.89% (change: +0.23%)
+- Emulator cycles avg: 293846 (change: +5749)
+- RenderTotal: 126.30% (change: +0.66%)
+- RSS memory: 14.31 MB (change: -0.47 MB)
+
+**Audio regression:** None (1-byte header difference only; audio data matches)
+**Files changed:** drumlogue/drumpler/synth.h, drumlogue/drumpler/PERF_REVIEW_PLAN.md, test/drumpler/fixtures/drumpler_baseline_after_2_4.wav, test/drumpler/baselines/drumpler_baseline_after_2_4.wav, test/drumpler/fixtures/drumpler_baseline_before_2_4.wav, test/drumpler/baselines/drumpler_baseline_before_2_4.wav
+**Summary:** Reduced warmup iterations to shorten init time; QEMU performance regressed slightly while audio output stayed unchanged.
+
 ---
 
 ## 1. Current Profiling Baseline (QEMU ARM)
@@ -450,9 +522,9 @@ The jcmoyer fork has several months of optimization work beyond nukeykt's origin
 ### Key Metrics
 | Metric | Current | Stage 1 Target | Stage 2 Target | Stage 3 Target |
 |---|---|---|---|---|
-| CPU Total | 109.10% | ~112% | ~85% | ~70% |
-| Emulator cycles | 322K avg | ~500K | ~400K | ~300K |
-| RSS memory | 14.67 MB | ~14.7 MB | ~14.7 MB | ~14.7 MB |
+| CPU Total | 107.89% | ~112% | ~85% | ~70% |
+| Emulator cycles | 294K avg | ~500K | ~400K | ~300K |
+| RSS memory | 14.31 MB | ~14.7 MB | ~14.7 MB | ~14.7 MB |
 | Init time | ~2s+ | ~2s | ~1s | ~1s |
 
 ---

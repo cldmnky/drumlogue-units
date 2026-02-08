@@ -113,7 +113,7 @@ class Synth {
     fflush(stderr);
     float warmup_l[128];
     float warmup_r[128];
-    const int warmup_iterations = 750;  // ~2 seconds @ 48kHz (750 * 128 frames)
+    const int warmup_iterations = 500;  // ~1.3 seconds @ 48kHz (500 * 128 frames)
     
     // Send a test note halfway through warmup to prime the audio engine
     bool found_audio = false;
