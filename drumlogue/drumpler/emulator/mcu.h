@@ -384,6 +384,12 @@ struct MCU {
     MidiEvent midiQueue[MAX_MIDI_QUEUE];
     int midiQueueCount;
 
+    // Sleep optimization: set by MCU_Interrupt_SetRequest/Exception/TRAPA
+    // when a new interrupt is posted. Allows the render loop to skip the
+    // expensive MCU_Interrupt_Handle scan during sleep when no interrupt
+    // has been requested since the last check.
+    uint8_t wakeup_pending;
+
     MCU();
     ~MCU();
 

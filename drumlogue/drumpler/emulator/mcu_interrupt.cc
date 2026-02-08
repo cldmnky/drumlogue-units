@@ -52,6 +52,8 @@ void MCU_Interrupt_Start(MCU* mcu, int32_t mask)
 void MCU_Interrupt_SetRequest(MCU* mcu, uint32_t interrupt, uint32_t value)
 {
     mcu->mcu.interrupt_pending[interrupt] = value;
+    if (value)
+        mcu->wakeup_pending = 1;
 }
 
 void MCU_Interrupt_Exception(MCU* mcu, uint32_t exception)
@@ -63,11 +65,13 @@ void MCU_Interrupt_Exception(MCU* mcu, uint32_t exception)
         return;
 #endif
     mcu->mcu.exception_pending = exception;
+    mcu->wakeup_pending = 1;
 }
 
 void MCU_Interrupt_TRAPA(MCU* mcu, uint32_t vector)
 {
     mcu->mcu.trapa_pending[vector] = 1;
+    mcu->wakeup_pending = 1;
 }
 
 void MCU_Interrupt_StartVector(MCU* mcu, uint32_t vector, int32_t mask)
