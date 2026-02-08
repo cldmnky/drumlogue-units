@@ -212,6 +212,24 @@ The drumpler unit (JV-880 emulator based on Nuked-SC55) is **overloading CPU at 
 **Files changed:** drumlogue/drumpler/emulator/pcm.cc, drumlogue/drumpler/PERF_REVIEW_PLAN.md, test/drumpler/fixtures/drumpler_baseline_after_3_2.wav, test/drumpler/baselines/drumpler_baseline_after_3_2.wav, test/drumpler/fixtures/drumpler_baseline_before_3_2.wav, test/drumpler/baselines/drumpler_baseline_before_3_2.wav
 **Summary:** Added a NEON helper for pan/reverb/chorus multiplies in the PCM mix path with a scalar fallback; emulator cycles improved with no audio regression.
 
+### Item 3.3.1 — addclip20 simplification — COMPLETED 2026-02-08
+**Status:** Done
+**Before baseline:**
+- CPU Total: 102.46%
+- Emulator cycles avg: 163588
+- RenderTotal: 125.87%
+- RSS memory: 13.88 MB
+
+**After results:**
+- CPU Total: 99.93% (change: -2.53%)
+- Emulator cycles avg: 102897 (change: -60691)
+- RenderTotal: 121.06% (change: -4.81%)
+- RSS memory: 14.12 MB (change: +0.24 MB)
+
+**Audio regression:** None (1-byte header difference only; audio data matches)
+**Files changed:** drumlogue/drumpler/emulator/pcm.cc, drumlogue/drumpler/PERF_REVIEW_PLAN.md, test/drumpler/fixtures/drumpler_baseline_before_3_3_1.wav, test/drumpler/fixtures/drumpler_after_3_3_1.wav, test/drumpler/baselines/drumpler_baseline_before_3_3_1.wav, test/drumpler/baselines/drumpler_after_3_3_1.wav
+**Summary:** Simplified `addclip20` to sign-extend + add; QEMU CPU/cycles improved while RSS ticked up slightly.
+
 ---
 
 ## 1. Current Profiling Baseline (QEMU ARM)
@@ -472,24 +490,98 @@ inline int32_t multi(int32_t val1, int8_t val2) {
 
 **Expected impact:** 2-4× speedup of PCM voice processing if parallelizable. Likely 1.5-2× realistic due to dependencies.
 
-#### 3.3 Port to jcmoyer Fork Codebase
+#### 3.3 Cherry-Pick jcmoyer Fork Optimizations
 
 **Reference:** https://github.com/jcmoyer/Nuked-SC55
 
-The jcmoyer fork has several months of optimization work beyond nukeykt's original code:
-- Free-function architecture (already discussed)
-- Separated heap allocations for MCU, PCM, SubMcu, Timer, LCD
-- `PCM_Config` struct for precomputed values
-- Cleaner `MCU_Step()` function combining all per-cycle operations
-- Sample callback architecture (vs. buffer-based)
+**Analysis completed** — the jcmoyer fork was reviewed in detail. Below are the specific
+cherry-pickable optimizations, ranked by expected impact on ARM Cortex-A7.
 
-**Trade-offs:**
-- **Pro:** Most optimizations already implemented and tested
-- **Con:** jcmoyer targets desktop (SC-55/SC-55mkII), not JV-880 specifically. Would need to merge JV-880 adaptations from our fork.
-- **Con:** Uses C++17 features (std::span, std::unique_ptr) that may need adaptation for the GCC 6.5 toolchain in the logue SDK container
-- **Con:** Different memory model (waverom arrays embedded in pcm_t vs. our pointer approach — our approach is better for embedded)
+##### 3.3.1 `addclip20` Simplification — HIGH IMPACT
 
-**Expected impact:** Combined 15-30% speedup from all jcmoyer optimizations together.
+**Our version** (pcm.cc:305-313) uses uint32_t with explicit overflow clipping (2 branches + 5 ANDs + 2 comparisons per call):
+```cpp
+inline uint32_t addclip20(uint32_t add1, uint32_t add2, uint32_t cin) {
+    uint32_t sum = (add1 + add2 + cin) & 0xfffff;
+    if ((add1 & 0x80000) != 0 && (add2 & 0x80000) != 0 && (sum & 0x80000) == 0)
+        sum = 0x80000;
+    else if ((add1 & 0x80000) == 0 && (add2 & 0x80000) == 0 && (sum & 0x80000) != 0)
+        sum = 0x7ffff;
+    return sum;
+}
+```
+
+**jcmoyer's version** (pcm.cpp:279-283) — branchless, just sign-extend + add:
+```cpp
+inline int32_t addclip20(int32_t add1, int32_t add2, int32_t cin) {
+    return sx20(add1) + sx20(add2) + cin;
+}
+```
+
+**Why it matters:** `addclip20` is called **72 times** in pcm.cc, many inside the per-voice
+loop (~72 × N_active_voices × per_cycle). Each branch miss costs ~10 cycles on Cortex-A7.
+
+**Risk:** Semantic difference — our version explicitly clips to 20-bit signed range on overflow;
+jcmoyer's doesn't clip, result can exceed 20-bit range. Need WAV regression testing.
+Also requires changing signature from uint32_t to int32_t at all 72 call sites.
+
+**Estimated savings:** ~5-15% of PCM_Update time. Single biggest win available.
+
+##### 3.3.2 `PCM_Config` Expansion + `PCM_GetConfig()` — MEDIUM IMPACT
+
+**Our `pcm_config_t`** (pcm.h:37-39): Only caches `reg_slots`.
+
+**jcmoyer's `PCM_Config`** (pcm.h:39-52):
+```cpp
+struct PCM_Config {
+    uint32_t orval        = 0;
+    int      dac_mask     = 0;
+    uint8_t  noise_mask   = 0;
+    uint8_t  write_mask   = 0;
+    bool     oversampling = false;
+    uint8_t  reg_slots    = 1;
+};
+```
+
+Our final-mixing section hardcodes `noise_mask = 0`, `orval = 0`, `write_mask = 3` as local
+variables every cycle (pcm.cc:526-528). jcmoyer pre-computes these when `config_reg_3c` is
+written via `PCM_GetConfig()`, then reads from `pcm.config.*` in the hot loop.
+
+**Risk:** Low — purely structural. Port `PCM_GetConfig()` and expand the struct.
+
+**Estimated savings:** Small per-cycle reduction, but also a **correctness fix** (our hardcoded
+values prevent proper noise/dithering config for different JV-880 modes).
+
+##### 3.3.3 Oversampling Control Toggle — MEDIUM PRIORITY (CORRECTNESS)
+
+Our code has `if (true) // oversampling` hardcoded (pcm.cc:569). jcmoyer has
+`pcm.enable_oversampling` flag and `pcm.config.oversampling` (from config register). Porting
+the config-driven approach would:
+- Allow disabling oversampling to halve PCM output rate (64kHz → 32kHz)
+- Save ~40% of sample callback overhead
+- But reduces audio quality
+
+**Recommendation:** Port the mechanism, default to enabled. Useful as opt-in CPU saver.
+
+##### Items Already Ported or Not Applicable
+
+| Item | Status | Notes |
+|------|--------|-------|
+| `MCU_Step` sleep optimization | ✅ Already ported | Our MCU_Step matches jcmoyer's exactly |
+| Filter direct multiplication | ✅ Already ported | `!is_mk1` path uses `reg1 * (int8_t)(...)` |
+| Free-function architecture | ✅ Partial (2.1) | Hot MCU path done; further refactor low ROI |
+| Component-separated memory | ❌ Skip | Our monolithic layout is better for ARM cache |
+| `BoundedOrderedBitSet` | ❌ Skip | Interrupt handler runs 0-1 times; marginal |
+
+##### Implementation Order for 3.3
+
+| # | Sub-item | Impact | Risk | Effort |
+|---|----------|--------|------|--------|
+| 1 | `addclip20` simplification (3.3.1) | HIGH (~5-15% PCM) | Medium (audio diff) | Small |
+| 2 | `PCM_Config` expansion (3.3.2) | Medium (correctness) | Low | Small |
+| 3 | Oversampling control (3.3.3) | Medium (opt-in CPU) | Low | Small |
+
+**Workflow per sub-item:** Capture baseline WAV → apply change → run WAV regression → QEMU profile → commit.
 
 #### 3.4 Decimation / Reduced Internal Rate
 
