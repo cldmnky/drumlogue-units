@@ -1020,9 +1020,19 @@ void MCU::MCU_ReadInstruction(void)
 {
     // Tighten the hot instruction loop by avoiding extra helper calls.
     mcu_t& state = mcu;
-    const uint32_t address = (static_cast<uint32_t>(state.cp) << 16) | state.pc;
-    const uint8_t operand = MCU_Read(address);
-    state.pc++;
+    uint8_t operand = 0;
+    if (__builtin_expect(state.cp == 0 && state.pc < 0x8000, 1))
+    {
+        // Fast path: ROM1 fetch for the common opcode stream.
+        operand = rom1[state.pc];
+        state.pc++;
+    }
+    else
+    {
+        const uint32_t address = (static_cast<uint32_t>(state.cp) << 16) | state.pc;
+        operand = MCU_Read(address);
+        state.pc++;
+    }
 
     MCU_Operand_Table[operand](this, operand);
 
