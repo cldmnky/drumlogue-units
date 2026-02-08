@@ -79,7 +79,9 @@ enum {
 
 void SubMcu::SM_ErrorTrap(void)
 {
+#ifdef DEBUG
     printf("smtrap %.4x\n", sm.pc);
+#endif
 }
 
 uint8_t SubMcu::SM_Read(uint16_t address)
@@ -145,7 +147,9 @@ uint8_t SubMcu::SM_Read(uint16_t address)
     }
     else
     {
+#ifdef DEBUG
         printf("sm: unknown read %x\n", address);
+#endif
         return 0;
     }
 }
@@ -205,7 +209,9 @@ void SubMcu::SM_Write(uint16_t address, uint8_t data)
     }
     else
     {
+#ifdef DEBUG
         printf("sm: unknown write %x %x\n", address, data);
+#endif
     }
 }
 
@@ -246,7 +252,9 @@ void SubMcu::SM_SysWrite(uint32_t address, uint8_t data)
     }
     else
     {
+#ifdef DEBUG
         printf("sm: unknown sys write %x %x\n", address, data);
+#endif
     }
 }
 
@@ -287,7 +295,9 @@ uint8_t SubMcu::SM_SysRead(uint32_t address)
     }
     else
     {
+#ifdef DEBUG
         printf("sm: unknown sys read %x\n", address);
+#endif
         return 0;
     }
 }

@@ -472,7 +472,9 @@ class Synth {
 
   inline void NoteOn(uint8_t note, uint8_t velocity) {
     if (!initialized_) {
+#ifdef DEBUG
       fprintf(stderr, "[Drumpler] NoteOn called but NOT INITIALIZED!\n");
+#endif
       return;
     }
     
@@ -563,10 +565,12 @@ class Synth {
       }
     }
     // Fallback if not initialized or GetPatchName fails
+#ifdef DEBUG
     static int warn_once = 0;
     if (!warn_once++) {
       fprintf(stderr, "[Drumpler] getPresetName fallback: initialized=%d\n", initialized_);
     }
+#endif
     std::snprintf(preset_str_, sizeof(preset_str_), "P%03d", idx);
     return preset_str_;
   }

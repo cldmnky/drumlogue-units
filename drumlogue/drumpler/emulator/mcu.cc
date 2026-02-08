@@ -132,7 +132,9 @@ int romset = ROM_SET_MK2;
 
 void MCU::MCU_ErrorTrap(void)
 {
+#ifdef DEBUG
     printf("trap %.2x %.4x\n", mcu.cp, mcu.pc);
+#endif
 }
 
 uint8_t MCU::RCU_Read(void)
@@ -716,7 +718,9 @@ uint8_t MCU::MCU_Read(uint32_t address)
                 }
                 else
                 {
+#ifdef DEBUG
                     printf("Unknown read %x\n", address);
+#endif
                     ret = 0xff;
                 }
                 //
@@ -772,7 +776,9 @@ uint8_t MCU::MCU_Read(uint32_t address)
                 }
                 else
                 {
+#ifdef DEBUG
                     printf("Unknown read %x\n", address);
+#endif
                     ret = 0xff;
                 }
                 //
@@ -896,7 +902,11 @@ void MCU::MCU_Write(uint32_t address, uint8_t value)
                     else if (address == (base | 0x402))
                         ga_int_enable = (value << 1);
                     else
+                    {
+#ifdef DEBUG
                         printf("Unknown write %x %x\n", address, value);
+#endif
+                    }
                     //
                     // e400: always 4?
                     // e401: SC0-6?
@@ -931,7 +941,9 @@ void MCU::MCU_Write(uint32_t address, uint8_t value)
                 }
                 else
                 {
+#ifdef DEBUG
                     printf("Unknown write %x %x\n", address, value);
+#endif
                 }
             }
             else
@@ -974,7 +986,9 @@ void MCU::MCU_Write(uint32_t address, uint8_t value)
                 }
                 else
                 {
+#ifdef DEBUG
                     printf("Unknown write %x %x\n", address, value);
+#endif
                 }
             }
         }
@@ -1005,7 +1019,9 @@ void MCU::MCU_Write(uint32_t address, uint8_t value)
     }
     else
     {
+#ifdef DEBUG
         printf("Unknown write %x %x\n", (page << 16) | address, value);
+#endif
     }
 }
 
@@ -1411,8 +1427,10 @@ static inline void MCU_UpdateSC55WithSampleRate(MCU& self, float *dataL, float *
 #endif
 
     if (renderBufferFrames > static_cast<int>(audio_buffer_size)) {
+#ifdef DEBUG
         printf("Audio buffer size is too small. (%d requested)\n", renderBufferFrames);
         fflush(stdout);
+#endif
         return;
     }
 
@@ -1423,8 +1441,10 @@ static inline void MCU_UpdateSC55WithSampleRate(MCU& self, float *dataL, float *
 
     for (int i = 0; self.sample_write_ptr < renderBufferFrames; i++) {
         if (i > maxCycles) {
+#ifdef DEBUG
             printf("Not enough samples!\n");
             fflush(stdout);
+#endif
             break;
         }
 
