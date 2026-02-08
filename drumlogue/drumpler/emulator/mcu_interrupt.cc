@@ -52,8 +52,12 @@ void MCU_Interrupt_Start(MCU* mcu, int32_t mask)
 void MCU_Interrupt_SetRequest(MCU* mcu, uint32_t interrupt, uint32_t value)
 {
     mcu->mcu.interrupt_pending[interrupt] = value;
-    if (value)
+    if (value) {
+        mcu->mcu.interrupt_pending_mask |= (1u << interrupt);
         mcu->wakeup_pending = 1;
+    } else {
+        mcu->mcu.interrupt_pending_mask &= ~(1u << interrupt);
+    }
 }
 
 void MCU_Interrupt_Exception(MCU* mcu, uint32_t exception)
@@ -71,6 +75,7 @@ void MCU_Interrupt_Exception(MCU* mcu, uint32_t exception)
 void MCU_Interrupt_TRAPA(MCU* mcu, uint32_t vector)
 {
     mcu->mcu.trapa_pending[vector] = 1;
+    mcu->mcu.trapa_pending_mask |= (1u << vector);
     mcu->wakeup_pending = 1;
 }
 
@@ -82,35 +87,87 @@ void MCU_Interrupt_StartVector(MCU* mcu, uint32_t vector, int32_t mask)
     mcu->mcu.pc = address;
 }
 
+// Static dispatch table: maps interrupt source index → (vector, dev_reg, shift).
+// Entries with vector == 0 are unused/ICI sources (never dispatched).
+// IRQ0/IRQ1 have special enable-bit checks handled inline.
+struct InterruptDispatchEntry {
+    uint16_t vector;
+    uint8_t  dev_reg;
+    uint8_t  shift;
+};
+
+static const InterruptDispatchEntry kInterruptDispatch[INTERRUPT_SOURCE_MAX] = {
+    // [0] NMI — handled separately (highest priority, fixed mask=7)
+    { VECTOR_NMI,                       0,        0 },
+    // [1] IRQ0 — needs P1CR bit5 enable check
+    { VECTOR_IRQ0,                      DEV_IPRA, 4 },
+    // [2] IRQ1 — needs P1CR bit6 enable check
+    { VECTOR_IRQ1,                      DEV_IPRA, 0 },
+    // [3] FRT0_ICI — unused (no code sets this)
+    { 0,                                0,        0 },
+    // [4] FRT0_OCIA
+    { VECTOR_INTERNAL_INTERRUPT_94,     DEV_IPRB, 4 },
+    // [5] FRT0_OCIB
+    { VECTOR_INTERNAL_INTERRUPT_98,     DEV_IPRB, 4 },
+    // [6] FRT0_FOVI
+    { VECTOR_INTERNAL_INTERRUPT_9C,     DEV_IPRB, 4 },
+    // [7] FRT1_ICI — unused
+    { 0,                                0,        0 },
+    // [8] FRT1_OCIA
+    { VECTOR_INTERNAL_INTERRUPT_A4,     DEV_IPRB, 0 },
+    // [9] FRT1_OCIB
+    { VECTOR_INTERNAL_INTERRUPT_A8,     DEV_IPRB, 0 },
+    // [10] FRT1_FOVI
+    { VECTOR_INTERNAL_INTERRUPT_AC,     DEV_IPRB, 0 },
+    // [11] FRT2_ICI — unused
+    { 0,                                0,        0 },
+    // [12] FRT2_OCIA
+    { VECTOR_INTERNAL_INTERRUPT_B4,     DEV_IPRC, 4 },
+    // [13] FRT2_OCIB
+    { VECTOR_INTERNAL_INTERRUPT_B8,     DEV_IPRC, 4 },
+    // [14] FRT2_FOVI
+    { VECTOR_INTERNAL_INTERRUPT_BC,     DEV_IPRC, 4 },
+    // [15] TIMER_CMIA
+    { VECTOR_INTERNAL_INTERRUPT_C0,     DEV_IPRC, 0 },
+    // [16] TIMER_CMIB
+    { VECTOR_INTERNAL_INTERRUPT_C4,     DEV_IPRC, 0 },
+    // [17] TIMER_OVI
+    { VECTOR_INTERNAL_INTERRUPT_C8,     DEV_IPRC, 0 },
+    // [18] ANALOG
+    { VECTOR_INTERNAL_INTERRUPT_E0,     DEV_IPRD, 0 },
+    // [19] UART_RX
+    { VECTOR_INTERNAL_INTERRUPT_D4,     DEV_IPRD, 4 },
+    // [20] UART_TX
+    { VECTOR_INTERNAL_INTERRUPT_D8,     DEV_IPRD, 4 },
+};
+
 void MCU_Interrupt_Handle(MCU* mcu)
 {
-#if 0
-    if (mcu->mcu.cycles % 2000 == 0 && mcu->mcu.sleep)
+    // ── Fast path: check bitmask mirrors before any scanning ──
+    // trapa_pending_mask, exception_pending, and interrupt_pending_mask
+    // together cover all possible interrupt sources. When all are clear,
+    // we return immediately (~1 branch on ARM vs. scanning 36+ flags).
+    if (!mcu->mcu.trapa_pending_mask
+        && mcu->mcu.exception_pending < 0
+        && !mcu->mcu.interrupt_pending_mask)
     {
-        MCU_Interrupt_StartVector(mcu, VECTOR_INTERNAL_INTERRUPT_94);
         return;
     }
-    if (mcu->mcu.cycles % 2000 == 1000 && mcu->mcu.sleep)
+
+    // ── TRAPA: use CTZ to find first pending ──
     {
-        MCU_Interrupt_StartVector(mcu, VECTOR_INTERNAL_INTERRUPT_A4);
-        return;
-    }
-    if (mcu->mcu.cycles % 2000 == 1500 && mcu->mcu.sleep)
-    {
-        MCU_Interrupt_StartVector(mcu, VECTOR_INTERNAL_INTERRUPT_B4);
-        return;
-    }
-#endif
-    uint32_t i;
-    for (i = 0; i < 16; i++)
-    {
-        if (mcu->mcu.trapa_pending[i])
+        uint32_t tmask = mcu->mcu.trapa_pending_mask;
+        if (tmask)
         {
+            int i = __builtin_ctz(tmask);
             mcu->mcu.trapa_pending[i] = 0;
+            mcu->mcu.trapa_pending_mask &= ~(1u << i);
             MCU_Interrupt_StartVector(mcu, VECTOR_TRAPA_0 + i, -1);
             return;
         }
     }
+
+    // ── Exceptions (address error, invalid instruction, trace) ──
     if (mcu->mcu.exception_pending >= 0)
     {
         switch (mcu->mcu.exception_pending)
@@ -124,106 +181,44 @@ void MCU_Interrupt_Handle(MCU* mcu)
             case EXCEPTION_SOURCE_TRACE:
                 MCU_Interrupt_StartVector(mcu, VECTOR_TRACE, -1);
                 break;
-
         }
         mcu->mcu.exception_pending = -1;
         return;
     }
-    if (mcu->mcu.interrupt_pending[INTERRUPT_SOURCE_NMI])
+
+    // ── NMI: highest priority, fixed mask=7 ──
+    if (mcu->mcu.interrupt_pending_mask & (1u << INTERRUPT_SOURCE_NMI))
     {
-        // mcu->mcu.interrupt_pending[INTERRUPT_SOURCE_NMI] = 0;
         MCU_Interrupt_StartVector(mcu, VECTOR_NMI, 7);
         return;
     }
-    uint32_t mask = (mcu->mcu.sr >> 8) & 7;
-    for (i = INTERRUPT_SOURCE_NMI + 1; i < INTERRUPT_SOURCE_MAX; i++)
+
+    // ── Maskable interrupts: iterate only set bits via CTZ ──
+    uint32_t sr_mask_level = (mcu->mcu.sr >> 8) & 7;
+    // Skip NMI bit (already handled) and ICI bits (never dispatched)
+    uint32_t pending = mcu->mcu.interrupt_pending_mask & ~(1u << INTERRUPT_SOURCE_NMI);
+    while (pending)
     {
-        int32_t vector = -1;
-        int32_t level = 0;
-        if (!mcu->mcu.interrupt_pending[i])
-            continue;
-        switch (i)
-        {
-            case INTERRUPT_SOURCE_IRQ0:
-                if ((mcu->dev_register[DEV_P1CR] & 0x20) == 0)
-                    continue;
-                vector = VECTOR_IRQ0;
-                level = (mcu->dev_register[DEV_IPRA] >> 4) & 7;
-                break;
-            case INTERRUPT_SOURCE_IRQ1:
-                if ((mcu->dev_register[DEV_P1CR] & 0x40) == 0)
-                    continue;
-                vector = VECTOR_IRQ1;
-                level = (mcu->dev_register[DEV_IPRA] >> 0) & 7;
-                break;
-            case INTERRUPT_SOURCE_FRT0_OCIA:
-                vector = VECTOR_INTERNAL_INTERRUPT_94;
-                level = (mcu->dev_register[DEV_IPRB] >> 4) & 7;
-                break;
-            case INTERRUPT_SOURCE_FRT0_OCIB:
-                vector = VECTOR_INTERNAL_INTERRUPT_98;
-                level = (mcu->dev_register[DEV_IPRB] >> 4) & 7;
-                break;
-            case INTERRUPT_SOURCE_FRT0_FOVI:
-                vector = VECTOR_INTERNAL_INTERRUPT_9C;
-                level = (mcu->dev_register[DEV_IPRB] >> 4) & 7;
-                break;
-            case INTERRUPT_SOURCE_FRT1_OCIA:
-                vector = VECTOR_INTERNAL_INTERRUPT_A4;
-                level = (mcu->dev_register[DEV_IPRB] >> 0) & 7;
-                break;
-            case INTERRUPT_SOURCE_FRT1_OCIB:
-                vector = VECTOR_INTERNAL_INTERRUPT_A8;
-                level = (mcu->dev_register[DEV_IPRB] >> 0) & 7;
-                break;
-            case INTERRUPT_SOURCE_FRT1_FOVI:
-                vector = VECTOR_INTERNAL_INTERRUPT_AC;
-                level = (mcu->dev_register[DEV_IPRB] >> 0) & 7;
-                break;
-            case INTERRUPT_SOURCE_FRT2_OCIA:
-                vector = VECTOR_INTERNAL_INTERRUPT_B4;
-                level = (mcu->dev_register[DEV_IPRC] >> 4) & 7;
-                break;
-            case INTERRUPT_SOURCE_FRT2_OCIB:
-                vector = VECTOR_INTERNAL_INTERRUPT_B8;
-                level = (mcu->dev_register[DEV_IPRC] >> 4) & 7;
-                break;
-            case INTERRUPT_SOURCE_FRT2_FOVI:
-                vector = VECTOR_INTERNAL_INTERRUPT_BC;
-                level = (mcu->dev_register[DEV_IPRC] >> 4) & 7;
-                break;
-            case INTERRUPT_SOURCE_TIMER_CMIA:
-                vector = VECTOR_INTERNAL_INTERRUPT_C0;
-                level = (mcu->dev_register[DEV_IPRC] >> 0) & 7;
-                break;
-            case INTERRUPT_SOURCE_TIMER_CMIB:
-                vector = VECTOR_INTERNAL_INTERRUPT_C4;
-                level = (mcu->dev_register[DEV_IPRC] >> 0) & 7;
-                break;
-            case INTERRUPT_SOURCE_TIMER_OVI:
-                vector = VECTOR_INTERNAL_INTERRUPT_C8;
-                level = (mcu->dev_register[DEV_IPRC] >> 0) & 7;
-                break;
-            case INTERRUPT_SOURCE_ANALOG:
-                vector = VECTOR_INTERNAL_INTERRUPT_E0;
-                level = (mcu->dev_register[DEV_IPRD] >> 0) & 7;
-                break;
-            case INTERRUPT_SOURCE_UART_RX:
-                vector = VECTOR_INTERNAL_INTERRUPT_D4;
-                level = (mcu->dev_register[DEV_IPRD] >> 4) & 7;
-                break;
-            case INTERRUPT_SOURCE_UART_TX:
-                vector = VECTOR_INTERNAL_INTERRUPT_D8;
-                level = (mcu->dev_register[DEV_IPRD] >> 4) & 7;
-                break;
-            default:
-                break;
+        int i = __builtin_ctz(pending);
+        pending &= pending - 1;  // clear lowest set bit
+
+        const InterruptDispatchEntry& d = kInterruptDispatch[i];
+        if (!d.vector)
+            continue;  // ICI sources — no dispatch
+
+        // IRQ0/IRQ1 have additional enable-bit checks
+        if (i == INTERRUPT_SOURCE_IRQ0) {
+            if ((mcu->dev_register[DEV_P1CR] & 0x20) == 0)
+                continue;
+        } else if (i == INTERRUPT_SOURCE_IRQ1) {
+            if ((mcu->dev_register[DEV_P1CR] & 0x40) == 0)
+                continue;
         }
 
-        if ((int32_t)mask < level)
+        int32_t level = (mcu->dev_register[d.dev_reg] >> d.shift) & 7;
+        if ((int32_t)sr_mask_level < level)
         {
-            // mcu->mcu.interrupt_pending[INTERRUPT_SOURCE_NMI] = 0;
-            MCU_Interrupt_StartVector(mcu, vector, level);
+            MCU_Interrupt_StartVector(mcu, d.vector, level);
             return;
         }
     }

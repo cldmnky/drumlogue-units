@@ -69,7 +69,7 @@ struct pcm_t {
     
     // Voice activity tracking for optimization
     uint16_t voice_idle_frames[32];  // Frames since last activity per voice
-    static constexpr uint16_t kIdleThreshold = 960;  // 20ms @ 48kHz (~480 @ 64kHz internal)
+    static constexpr uint16_t kIdleThreshold = 480;  // 10ms @ 48kHz — faster voice culling
 };
 
 struct MCU;

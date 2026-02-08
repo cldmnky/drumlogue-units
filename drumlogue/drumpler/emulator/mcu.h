@@ -191,6 +191,11 @@ struct mcu_t {
     int32_t exception_pending;
     uint8_t interrupt_pending[INTERRUPT_SOURCE_MAX];
     uint8_t trapa_pending[16];
+    // Bitmask mirrors for fast scanning in MCU_Interrupt_Handle.
+    // Maintained by MCU_Interrupt_SetRequest/TRAPA; avoids scanning
+    // the full arrays every MCU step (~19,500 calls per render).
+    uint32_t interrupt_pending_mask;  // bit i set ↔ interrupt_pending[i] != 0
+    uint16_t trapa_pending_mask;      // bit i set ↔ trapa_pending[i] != 0
     uint64_t cycles;
 };
 
