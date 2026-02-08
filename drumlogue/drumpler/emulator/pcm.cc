@@ -38,7 +38,32 @@
 #include "mcu_interrupt.h"
 #include "pcm.h"
 
-Pcm::Pcm(MCU *mcu): mcu(mcu) {}
+#ifdef PERF_MON
+#include "../../common/perf_mon.h"
+#endif
+
+Pcm::Pcm(MCU *mcu)
+    : mcu(mcu)
+    , waverom1(nullptr)
+    , waverom2(nullptr)
+    , waverom3(nullptr)
+    , waverom_card(nullptr)
+    , waverom_exp(nullptr) {
+#ifdef PERF_MON
+    perf_voice_loop_ = PERF_MON_REGISTER("PCM_VoiceLoop");
+    perf_sample_read_ = PERF_MON_REGISTER("PCM_SampleRead");
+    perf_interpolation_ = PERF_MON_REGISTER("PCM_Interpolation");
+    perf_filter_ = PERF_MON_REGISTER("PCM_Filter");
+    perf_envelope_ = PERF_MON_REGISTER("PCM_Envelope");
+    perf_mixing_ = PERF_MON_REGISTER("PCM_Mixing");
+    perf_effects_ = PERF_MON_REGISTER("PCM_Effects");
+#endif
+}
+
+Pcm::~Pcm() {
+    // Waveroms point to embedded ROM data (pre-unscrambled at build time)
+    // No dynamic allocations to free
+}
 
 inline uint8_t Pcm::PCM_ReadROM(uint32_t address)
 {
@@ -46,16 +71,16 @@ inline uint8_t Pcm::PCM_ReadROM(uint32_t address)
     switch (bank)
     {
         case 0:
-            return waverom1[address & 0x1fffff];
+            return waverom1 ? waverom1[address & 0x1fffff] : 0;
         case 1:
-            return waverom2[address & 0x1fffff];
+            return waverom2 ? waverom2[address & 0x1fffff] : 0;
         case 2:
-            return waverom_card[address & 0x1fffff];
+            return waverom_card ? waverom_card[address & 0x1fffff] : 0;
         case 3:
         case 4:
         case 5:
         case 6:
-            return waverom_exp[(address & 0x1fffff) + (bank - 3) * 0x200000];
+            return waverom_exp ? waverom_exp[(address & 0x1fffff) + (bank - 3) * 0x200000] : 0;
         default:
             break;
     }
@@ -254,6 +279,10 @@ uint8_t Pcm::PCM_Read(uint32_t address)
 void Pcm::PCM_Reset(void)
 {
     memset(&pcm, 0, sizeof(pcm));
+    // Initialize voice activity tracking
+    for (int i = 0; i < 32; ++i) {
+        pcm.voice_idle_frames[i] = 0;
+    }
 }
 
 // Sign-extends a 20-bit signed integer to a 32-bit signed integer.
@@ -521,7 +550,9 @@ void Pcm::PCM_Update(uint64_t cycles)
         }
 
         // chorus/reverb
-
+#ifdef PERF_MON
+        PERF_MON_START(perf_effects_);
+#endif
         { // fixme
             if (pcm.ram2[31][8] & 0x8000)
                 pcm.ram2[31][9] = pcm.ram2[31][8] & 0x7fff;
@@ -969,6 +1000,12 @@ void Pcm::PCM_Update(uint64_t cycles)
         pcm.ram1[31][3] = 0;
         pcm.rcsum[0] = 0;
         pcm.rcsum[1] = 0;
+#ifdef PERF_MON
+        PERF_MON_END(perf_effects_);
+        
+        // Start profiling the entire voice loop
+        PERF_MON_START(perf_voice_loop_);
+#endif
 
         for (int slot = 0; slot < reg_slots; slot++)
         {
@@ -979,6 +1016,19 @@ void Pcm::PCM_Update(uint64_t cycles)
 
             int active = okey && key;
             int kon = key && !okey;
+            
+            // Voice activity detection optimization
+            // Skip processing for voices that have been idle for >20ms
+            if (!active && ! kon) {
+                pcm.voice_idle_frames[slot]++;
+                if (pcm.voice_idle_frames[slot] > pcm_t::kIdleThreshold) {
+                    // Voice is idle - skip expensive processing
+                    continue;
+                }
+            } else {
+                // Voice is active - reset idle counter
+                pcm.voice_idle_frames[slot] = 0;
+            }
 
             // address generator
 
@@ -1244,9 +1294,7 @@ void Pcm::PCM_Update(uint64_t cycles)
             test = addclip20(test, step2 >> 1, step2 & 1);
 
             int filter = ram2[11];
-            int v3;
-
-            if (false)
+            int v3;      if (false)
             {
                 int mult1 = multi(reg1, filter >> 8); // 8
                 int mult2 = multi(reg1, (filter >> 1) & 127); // 9
@@ -1294,15 +1342,11 @@ void Pcm::PCM_Update(uint64_t cycles)
                 ram1[1] = v5;
             }
 
-
             ram1[5] = reference;
 
             if (active && (ram2[6] & 1) != 0 && (ram2[8] & 0x4000) == 0 && !pcm.irq_assert && irq_flag)
             {
                 //printf("irq voice %i\n", slot);
-                if (pcm.nfs)
-                    ram2[8] |= 0x4000;
-                pcm.irq_assert = 1;
                 pcm.irq_channel = slot;
                 mcu->MCU_GA_SetGAInt(5, 1);
             }

@@ -20,6 +20,13 @@
 
 #include "unit.h"  // Note: Include common definitions for all units
 #include "emulator/jv880_wrapper.h"  // JV-880 emulator wrapper
+#include "../common/perf_mon.h"
+
+#ifdef USE_NEON
+#define NEON_DSP_NS drumpler
+#include "../common/neon_dsp.h"
+#undef NEON_DSP_NS
+#endif
 
 #ifndef fast_inline
 #define fast_inline inline
@@ -76,7 +83,11 @@ class Synth {
         chorus_(0),
         delay_(0),
         preset_index_(0),
-        channel_(0) {}
+        channel_(0),
+        last_note_(60),
+        last_velocity_(100),
+        silence_frames_(0),
+        is_idle_(true) {}
   ~Synth(void) {}
 
   inline int8_t Init(const unit_runtime_desc_t * desc) {
@@ -143,6 +154,12 @@ class Synth {
     initialized_ = true;
     fprintf(stderr, "[Drumpler] Emulator initialized successfully\n");
     ApplyAllParams();
+  #ifdef PERF_MON
+    PERF_MON_INIT();
+    perf_render_total_ = PERF_MON_REGISTER("RenderTotal");
+    perf_emulator_ = PERF_MON_REGISTER("Emulator");
+    perf_interleave_ = PERF_MON_REGISTER("Interleave");
+  #endif
 #else
     fprintf(stderr, "[Drumpler] ERROR: DRUMPLER_ROM_EMBEDDED not defined!\n");
     // Without embedded ROM, unit is non-functional
@@ -185,34 +202,73 @@ class Synth {
       if (warn_count++ < 5) {
         fprintf(stderr, "[Drumpler] Render: outputting silence (initialized=%d, frames=%zu)\n", initialized_, frames);
       }
+    #ifdef USE_NEON
+      drumpler::neon::ClearBuffer(out, static_cast<uint32_t>(frames * 2));
+    #else
       float * __restrict out_p = out;
       const float * out_e = out_p + (frames << 1);  // assuming stereo output
       for (; out_p != out_e; out_p += 2) {
         out_p[0] = 0.0f;
         out_p[1] = 0.0f;
       }
+    #endif
       return;
     }
+
+    // OPTIMIZATION: Skip emulation when idle (no notes for 2 seconds)
+    // This dramatically reduces CPU load when no audio is playing
+    if (is_idle_) {
+    #ifdef USE_NEON
+      drumpler::neon::ClearBuffer(out, static_cast<uint32_t>(frames * 2));
+    #else
+      float * __restrict out_p = out;
+      const float * out_e = out_p + (frames << 1);
+      for (; out_p != out_e; out_p += 2) {
+        out_p[0] = 0.0f;
+        out_p[1] = 0.0f;
+      }
+    #endif
+      return;
+    }
+
+  #ifdef PERF_MON
+    PERF_MON_START(perf_render_total_);
+  #endif
 
     // Render emulator output (internally resampled from 64kHz to 48kHz)
     // Output format: interleaved stereo [L0, R0, L1, R1, ...]
     float * __restrict out_p = out;
-    
-    // Create temp buffers for deinterleaved output (emulator expects separate L/R)
-    static float temp_l[128];  // Max frames per callback is typically 32-64
-    static float temp_r[128];
-    
-    const size_t render_frames = (frames > 128) ? 128 : frames;
+
+    static constexpr size_t kRenderBlockFrames = 128;
+    static float temp_l[kRenderBlockFrames];
+    static float temp_r[kRenderBlockFrames];
     
 #ifdef DEBUG
     static int render_debug_count = 0;
-    if (render_debug_count++ < 3) {
-      fprintf(stderr, "[Drumpler] synth.h Render: calling emulator_.Render() with %zu frames\n", render_frames);
-      fflush(stderr);
-    }
 #endif
-    
-    emulator_.Render(temp_l, temp_r, render_frames);
+
+    size_t remaining = frames;
+    size_t out_index = 0;
+
+    while (remaining > 0) {
+      const size_t render_frames = (remaining > kRenderBlockFrames)
+                                    ? kRenderBlockFrames
+                                    : remaining;
+
+#ifdef DEBUG
+      if (render_debug_count++ < 3) {
+        fprintf(stderr, "[Drumpler] synth.h Render: calling emulator_.Render() with %zu frames\n", render_frames);
+        fflush(stderr);
+      }
+#endif
+
+    #ifdef PERF_MON
+      PERF_MON_START(perf_emulator_);
+    #endif
+      emulator_.Render(temp_l, temp_r, render_frames);
+    #ifdef PERF_MON
+      PERF_MON_END(perf_emulator_);
+    #endif
     
 #ifdef DEBUG
     if (render_debug_count <= 3) {
@@ -229,11 +285,49 @@ class Synth {
     }
 #endif
     
-    // Interleave L/R into output buffer
-    for (size_t i = 0; i < render_frames; ++i) {
-      out_p[i * 2 + 0] = temp_l[i];
-      out_p[i * 2 + 1] = temp_r[i];
+      // Interleave L/R into output buffer
+    #ifdef PERF_MON
+      PERF_MON_START(perf_interleave_);
+    #endif
+    #ifdef USE_NEON
+      drumpler::neon::InterleaveStereo(temp_l, temp_r,
+                   out_p + out_index * 2,
+                   static_cast<uint32_t>(render_frames));
+    #else
+      for (size_t i = 0; i < render_frames; ++i) {
+        const size_t dst = (out_index + i) * 2;
+        out_p[dst + 0] = temp_l[i];
+        out_p[dst + 1] = temp_r[i];
+      }
+    #endif
+    #ifdef PERF_MON
+      PERF_MON_END(perf_interleave_);
+    #endif
+
+      out_index += render_frames;
+      remaining -= render_frames;
     }
+
+    // Check for silence to enable idle mode
+    float max_abs = 0.0f;
+    const float* out_check = out;
+    for (size_t i = 0; i < frames * 2; ++i) {
+      float abs_val = fabsf(out_check[i]);
+      if (abs_val > max_abs) max_abs = abs_val;
+    }
+    
+    if (max_abs < kSilenceLevel) {
+      silence_frames_ += frames;
+      if (silence_frames_ >= kSilenceThreshold) {
+        is_idle_ = true;
+      }
+    } else {
+      silence_frames_ = 0;
+    }
+
+  #ifdef PERF_MON
+    PERF_MON_END(perf_render_total_);
+  #endif
   }
 
   inline void setParameter(uint8_t index, int32_t value) {
@@ -259,31 +353,53 @@ class Synth {
       case kParamTone:
         tone_ = clamp_int(static_cast<int>(value), 0, 127);
         preset_index_ = static_cast<uint8_t>(tone_);
-        emulator_.ProgramChange(channel_, static_cast<uint8_t>(tone_));
+        // JV-880 requires direct nvram patch write, not standard MIDI Program Change
+        emulator_.SetCurrentProgram(static_cast<uint8_t>(tone_));
         break;
       case kParamCutoff:
         cutoff_ = clamp_int(static_cast<int>(value), 0, 100);
-        SendCc(74, PercentToMidi(cutoff_));
+        // Send cutoff to all 4 tones via SysEx (TVF Cutoff Frequency at tone offset 0x4A)
+        {
+          uint8_t midi_val = PercentToMidi(cutoff_);
+          for (uint8_t t = 0; t < 4; ++t) {
+            emulator_.SendSysexPatchToneParam(t, 0x4A, midi_val);
+          }
+        }
         break;
       case kParamResonance:
         resonance_ = clamp_int(static_cast<int>(value), 0, 100);
-        SendCc(71, PercentToMidi(resonance_));
+        // Send resonance to all 4 tones via SysEx (TVF Resonance at tone offset 0x4B)
+        {
+          uint8_t midi_val = PercentToMidi(resonance_);
+          for (uint8_t t = 0; t < 4; ++t) {
+            emulator_.SendSysexPatchToneParam(t, 0x4B, midi_val);
+          }
+        }
         break;
       case kParamAttack:
         attack_ = clamp_int(static_cast<int>(value), 0, 100);
-        SendCc(73, PercentToMidi(attack_));
+        // Send attack time to all 4 tones via SysEx (TVA Env Time 1 at tone offset 0x69)
+        {
+          uint8_t midi_val = PercentToMidi(attack_);
+          for (uint8_t t = 0; t < 4; ++t) {
+            emulator_.SendSysexPatchToneParam(t, 0x69, midi_val);
+          }
+        }
         break;
       case kParamReverb:
         reverb_ = clamp_int(static_cast<int>(value), 0, 100);
-        SendCc(91, PercentToMidi(reverb_));
+        // Reverb Level via SysEx Patch Common param (offset 0x0E)
+        emulator_.SendSysexPatchCommonParam(0x0E, PercentToMidi(reverb_));
         break;
       case kParamChorus:
         chorus_ = clamp_int(static_cast<int>(value), 0, 100);
-        SendCc(93, PercentToMidi(chorus_));
+        // Chorus Level via SysEx Patch Common param (offset 0x12)
+        emulator_.SendSysexPatchCommonParam(0x12, PercentToMidi(chorus_));
         break;
       case kParamDelay:
         delay_ = clamp_int(static_cast<int>(value), 0, 100);
-        SendCc(94, PercentToMidi(delay_));
+        // Delay Feedback via SysEx Patch Common param (offset 0x10)
+        emulator_.SendSysexPatchCommonParam(0x10, PercentToMidi(delay_));
         break;
       default:
         break;
@@ -371,6 +487,11 @@ class Synth {
       fprintf(stderr, "[Drumpler] NoteOn called but NOT INITIALIZED!\n");
       return;
     }
+    
+    // Wake up from idle when note triggered
+    is_idle_ = false;
+    silence_frames_ = 0;
+    
 #ifdef DEBUG
     fprintf(stderr, "[Drumpler] synth.h NoteOn: note=%d vel=%d channel=%d\n", note, velocity, channel_);
     fflush(stderr);
@@ -378,30 +499,38 @@ class Synth {
     fprintf(stderr, "[Drumpler] NoteOn: note=%d vel=%d\n", note, velocity);
 #endif
     // Send to emulator on MIDI channel (channel_ is 0-based)
+    last_note_ = note;
+    last_velocity_ = velocity;
     emulator_.NoteOn(channel_, note, velocity);
   }
 
   inline void NoteOff(uint8_t note) {
     if (!initialized_) return;
-    emulator_.NoteOff(0, note);
+    emulator_.NoteOff(channel_, note);
   }
 
   inline void GateOn(uint8_t velocity) {
     // For monophonic mode - send note on for middle C
     if (!initialized_) return;
-    emulator_.NoteOn(0, 60, velocity);
+    
+    // Wake up from idle
+    is_idle_ = false;
+    silence_frames_ = 0;
+    
+    last_velocity_ = velocity;
+    emulator_.NoteOn(channel_, last_note_, velocity);
   }
 
   inline void GateOff() {
     // For monophonic mode - send note off for middle C
     if (!initialized_) return;
-    emulator_.NoteOff(0, 60);
+    emulator_.NoteOff(channel_, last_note_);
   }
 
   inline void AllNoteOff() {
     if (!initialized_) return;
     // Send MIDI All Notes Off (CC 123)
-    emulator_.ControlChange(0, 123, 0);
+    emulator_.ControlChange(channel_, 123, 0);
   }
 
   inline void PitchBend(uint16_t bend) {
@@ -431,7 +560,8 @@ class Synth {
     fprintf(stderr, "[Drumpler] LoadPreset: idx=%d → tone=%d ch=%d\n", idx, tone_, channel_);
     fflush(stderr);
 #endif
-    emulator_.ProgramChange(channel_, static_cast<uint8_t>(tone_));
+    // JV-880 requires direct nvram patch write, not standard MIDI Program Change
+    emulator_.SetCurrentProgram(static_cast<uint8_t>(tone_));
   }
 
   inline uint8_t getPresetIndex() const { return preset_index_; }
@@ -477,8 +607,22 @@ class Synth {
   int delay_;
   uint8_t preset_index_;
   uint8_t channel_;
+  uint8_t last_note_;
+  uint8_t last_velocity_;
   mutable char param_str_[16];
   mutable char preset_str_[16];
+  
+  // Idle detection to reduce CPU load when silent
+  uint32_t silence_frames_;      // Count consecutive silent frames
+  bool is_idle_;                 // True when emulator can be skipped
+  static constexpr uint32_t kSilenceThreshold = 96000; // 2 seconds @ 48kHz
+  static constexpr float kSilenceLevel = 0.0001f;      // -80dB threshold
+
+#ifdef PERF_MON
+  uint8_t perf_render_total_ = 0;
+  uint8_t perf_emulator_ = 0;
+  uint8_t perf_interleave_ = 0;
+#endif
 
   /*===========================================================================*/
   /* Private Methods. */
@@ -497,19 +641,39 @@ class Synth {
     fprintf(stderr, "[Drumpler] ApplyAllParams: ch=%d tone=%d level=%d\n", channel_, tone_, level_);
     fflush(stderr);
 #endif
-    emulator_.ProgramChange(channel_, static_cast<uint8_t>(tone_));
+    // Load patch via direct nvram write (matching JUCE setCurrentProgram)
+    emulator_.SetCurrentProgram(static_cast<uint8_t>(tone_));
+    // Ensure global reverb and chorus are enabled (System params, matches JUCE SettingsTab)
+    emulator_.SendSysexSystemParam(0x04, 1);  // Reverb Switch ON
+    emulator_.SendSysexSystemParam(0x05, 1);  // Chorus Switch ON
+    // Standard MIDI CCs for volume and pan (JV-880 supports these natively)
     SendCc(7, PercentToMidi(level_));
     SendCc(10, static_cast<uint8_t>(pan_ + 64));
-    SendCc(74, PercentToMidi(cutoff_));
-    SendCc(71, PercentToMidi(resonance_));
-    SendCc(73, PercentToMidi(attack_));
-    SendCc(91, PercentToMidi(reverb_));
-    SendCc(93, PercentToMidi(chorus_));
-    SendCc(94, PercentToMidi(delay_));
+    // SysEx for effects (Patch Common parameters)
+    emulator_.SendSysexPatchCommonParam(0x0E, PercentToMidi(reverb_));   // Reverb Level
+    emulator_.SendSysexPatchCommonParam(0x12, PercentToMidi(chorus_));   // Chorus Level
+    emulator_.SendSysexPatchCommonParam(0x10, PercentToMidi(delay_));    // Delay Feedback
+    // SysEx for tone parameters (all 4 tones)
+    for (uint8_t t = 0; t < 4; ++t) {
+      emulator_.SendSysexPatchToneParam(t, 0x4A, PercentToMidi(cutoff_));     // TVF Cutoff Frequency
+      emulator_.SendSysexPatchToneParam(t, 0x4B, PercentToMidi(resonance_));  // TVF Resonance
+      emulator_.SendSysexPatchToneParam(t, 0x69, PercentToMidi(attack_));     // TVA Env Time 1
+    }
   }
 
   /*===========================================================================*/
   /* Constants. */
   /*===========================================================================*/
 };
+
+#ifdef PERF_MON
+namespace {
+__attribute__((used)) auto kPerfMonGetCount = &dsp::PerfMon::GetCounterCount;
+__attribute__((used)) auto kPerfMonGetName = &dsp::PerfMon::GetCounterName;
+__attribute__((used)) auto kPerfMonGetAvg = &dsp::PerfMon::GetAverageCycles;
+__attribute__((used)) auto kPerfMonGetPeak = &dsp::PerfMon::GetPeakCycles;
+__attribute__((used)) auto kPerfMonGetMin = &dsp::PerfMon::GetMinCycles;
+__attribute__((used)) auto kPerfMonGetFrames = &dsp::PerfMon::GetFrameCount;
+}  // namespace
+#endif
 

@@ -61,6 +61,10 @@ struct pcm_t {
     int accum_l;
     int accum_r;
     int rcsum[2];
+    
+    // Voice activity tracking for optimization
+    uint16_t voice_idle_frames[32];  // Frames since last activity per voice
+    static constexpr uint16_t kIdleThreshold = 960;  // 20ms @ 48kHz (~480 @ 64kHz internal)
 };
 
 struct MCU;
@@ -68,13 +72,29 @@ struct MCU;
 struct Pcm {
     MCU *mcu;
     Pcm(MCU *mcu);
+    ~Pcm();
 
     pcm_t pcm = {};
-    uint8_t waverom1[0x200000];
-    uint8_t waverom2[0x200000];
-    uint8_t waverom3[0x100000];
-    uint8_t waverom_card[0x200000];
-    uint8_t waverom_exp[0x800000];
+    
+    // Use pointers instead of arrays to avoid copying 15MB to RAM
+    // These point directly to ROM data (pre-unscrambled at build time)
+    const uint8_t* waverom1;
+    const uint8_t* waverom2;
+    const uint8_t* waverom3;
+    const uint8_t* waverom_card;
+    
+    // Expansion ROM pointer (pre-unscrambled at build time, embedded in ROM blob)
+    const uint8_t* waverom_exp;
+
+#ifdef PERF_MON
+    int perf_voice_loop_;
+    int perf_sample_read_;
+    int perf_interpolation_;
+    int perf_filter_;
+    int perf_envelope_;
+    int perf_mixing_;
+    int perf_effects_;
+#endif
 
     void PCM_Write(uint32_t address, uint8_t data);
     uint8_t PCM_Read(uint32_t address);

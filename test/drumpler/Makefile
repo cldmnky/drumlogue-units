@@ -2,7 +2,7 @@
 # Builds emulator code for host machine testing
 
 CXX := g++
-CXXFLAGS := -std=c++17 -O2 -Wall -Wextra -DTEST -DDEBUG
+CXXFLAGS := -std=c++17 -O2 -Wall -Wextra -DTEST -DDEBUG -DAUDIO_DEBUG
 CXXFLAGS += -I../../drumlogue/drumpler -I../../drumlogue/drumpler/emulator \
   -I../../drumlogue/common -I../../eurorack/stmlib -I../../eurorack -I.
 

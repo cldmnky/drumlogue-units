@@ -3,6 +3,8 @@
 # Build all drumpler ROM variants from roms.manifest
 # Each variant gets a unique unit_id and is built as a separate .drmlgunit file
 #
+# Usage: build_all_roms.sh [PERF_MON=1] [__QEMU_ARM__=1] [...]
+#
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,6 +15,9 @@ HEADER_BACKUP="${SCRIPT_DIR}/header.c.bak"
 CONFIG_BACKUP="${SCRIPT_DIR}/config.mk.bak"
 BASE_UNIT_ID=0x00000005
 BASE_PROJECT_NAME="drumpler"
+
+# Capture extra build flags to pass through (e.g., PERF_MON=1, __QEMU_ARM__=1)
+BUILD_FLAGS="$*"
 
 # Colors for output
 RED='\033[0;31m'
@@ -37,17 +42,49 @@ log_error() {
     echo -e "${RED}>>✗${NC} $*"
 }
 
+# Build unscramble tool if needed
+UNSCRAMBLE_TOOL="${RESOURCES_DIR}/unscramble_waverom"
+
+build_unscramble_tool() {
+    if [ ! -f "$UNSCRAMBLE_TOOL" ] || [ "${RESOURCES_DIR}/unscramble_waverom.c" -nt "$UNSCRAMBLE_TOOL" ]; then
+        log_info "Compiling waverom unscramble tool..."
+        cc -O2 -Wall -o "$UNSCRAMBLE_TOOL" "${RESOURCES_DIR}/unscramble_waverom.c"
+    fi
+}
+
+# Unscramble a waverom file (cached: skip if output already exists and is newer than input)
+unscramble_waverom() {
+    local input_file="$1"
+    local output_file="$2"
+
+    if [ -f "$output_file" ] && [ "$output_file" -nt "$input_file" ]; then
+        log_info "  Using cached unscrambled: $(basename "$output_file")"
+        return 0
+    fi
+
+    log_info "  Unscrambling: $(basename "$input_file")..."
+    "$UNSCRAMBLE_TOOL" "$input_file" "$output_file"
+}
+
 # Function: create_rom_binary
 # Combines base ROM files + optional expansion into single binary
+# Waveroms are pre-unscrambled at build time (Roland address+data bit scrambling)
 create_rom_binary() {
     local expansion_file="$1"
     local output_file="$2"
     
-    # Concatenate: rom1 + rom2 + waverom1 + waverom2 + nvram + expansion(if present)
+    # Ensure unscramble tool is built
+    build_unscramble_tool
+    
+    # Unscramble base waveroms (Roland JV-880 address+data bit scrambling)
+    unscramble_waverom "${RESOURCES_DIR}/jv880_waverom1.bin" "${RESOURCES_DIR}/.jv880_waverom1_unscrambled.bin"
+    unscramble_waverom "${RESOURCES_DIR}/jv880_waverom2.bin" "${RESOURCES_DIR}/.jv880_waverom2_unscrambled.bin"
+    
+    # Concatenate: rom1 + rom2 + waverom1(unscrambled) + waverom2(unscrambled) + nvram + expansion(if present)
     cat "${RESOURCES_DIR}/jv880_rom1.bin" \
         "${RESOURCES_DIR}/jv880_rom2.bin" \
-        "${RESOURCES_DIR}/jv880_waverom1.bin" \
-        "${RESOURCES_DIR}/jv880_waverom2.bin" \
+        "${RESOURCES_DIR}/.jv880_waverom1_unscrambled.bin" \
+        "${RESOURCES_DIR}/.jv880_waverom2_unscrambled.bin" \
         "${RESOURCES_DIR}/jv880_nvram.bin" \
         > "$output_file"
     
@@ -56,7 +93,10 @@ create_rom_binary() {
             log_error "Expansion ROM not found: ${expansion_file}"
             return 1
         fi
-        cat "${RESOURCES_DIR}/${expansion_file}" >> "$output_file"
+        # Unscramble expansion ROM too (SR-JV80 series use same scrambling)
+        local exp_unscrambled="${RESOURCES_DIR}/.${expansion_file%.bin}_unscrambled.bin"
+        unscramble_waverom "${RESOURCES_DIR}/${expansion_file}" "$exp_unscrambled"
+        cat "$exp_unscrambled" >> "$output_file"
     fi
 }
 
@@ -150,7 +190,8 @@ build_rom_variant() {
     log_info "  Building via SDK..."
     cd "${REPO_ROOT}"
     export _DRUMPLER_INTERNAL_BUILD=1
-    if ! ./build.sh drumpler build 2>&1 | tail -40; then
+    # Pass through build flags (PERF_MON, __QEMU_ARM__, etc.)
+    if ! ./build.sh drumpler build ${BUILD_FLAGS} 2>&1 | tail -40; then
         log_error "SDK build failed for ${rom_tag}"
         restore_files
         rm -f "$combined_rom" "${SCRIPT_DIR}/rom_data.cc"

@@ -11,9 +11,38 @@
 
 #include "unit.h"   // Note: Include common definitions for all units
 #include "synth.h"  // Note: Include custom synth code
+#include "../common/perf_mon.h"
 
 static Synth s_synth_instance;              // Note: In this case, actual instance of custom synth object.
 static unit_runtime_desc_t s_runtime_desc;  // Note: used to cache runtime descriptor obtained via init callback
+
+#ifdef PERF_MON
+extern "C" {
+__attribute__((used, visibility("default"))) uint8_t perfmon_get_counter_count() {
+  return dsp::PerfMon::GetCounterCount();
+}
+
+__attribute__((used, visibility("default"))) const char * perfmon_get_counter_name(uint8_t id) {
+  return dsp::PerfMon::GetCounterName(id);
+}
+
+__attribute__((used, visibility("default"))) uint32_t perfmon_get_average_cycles(uint8_t id) {
+  return dsp::PerfMon::GetAverageCycles(id);
+}
+
+__attribute__((used, visibility("default"))) uint32_t perfmon_get_peak_cycles(uint8_t id) {
+  return dsp::PerfMon::GetPeakCycles(id);
+}
+
+__attribute__((used, visibility("default"))) uint32_t perfmon_get_min_cycles(uint8_t id) {
+  return dsp::PerfMon::GetMinCycles(id);
+}
+
+__attribute__((used, visibility("default"))) uint32_t perfmon_get_frame_count(uint8_t id) {
+  return dsp::PerfMon::GetFrameCount(id);
+}
+}
+#endif
 
 // ---- Callback entry points from drumlogue runtime ----------------------------------------------
 

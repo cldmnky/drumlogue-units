@@ -46,15 +46,46 @@ cleanup() {
 
 trap cleanup EXIT ERR INT TERM
 
-# Create combined ROM binary
+# Build unscramble tool if needed
+UNSCRAMBLE_TOOL="${RESOURCES_DIR}/unscramble_waverom"
+
+build_unscramble_tool() {
+    if [ ! -f "$UNSCRAMBLE_TOOL" ] || [ "${RESOURCES_DIR}/unscramble_waverom.c" -nt "$UNSCRAMBLE_TOOL" ]; then
+        log_info "Compiling waverom unscramble tool..."
+        cc -O2 -Wall -o "$UNSCRAMBLE_TOOL" "${RESOURCES_DIR}/unscramble_waverom.c"
+    fi
+}
+
+# Unscramble a waverom file (cached: skip if output already exists and is newer than input)
+unscramble_waverom() {
+    local input_file="$1"
+    local output_file="$2"
+
+    if [ -f "$output_file" ] && [ "$output_file" -nt "$input_file" ]; then
+        log_info "  Using cached unscrambled: $(basename "$output_file")"
+        return 0
+    fi
+
+    log_info "  Unscrambling: $(basename "$input_file")..."
+    "$UNSCRAMBLE_TOOL" "$input_file" "$output_file"
+}
+
+# Create combined ROM binary with pre-unscrambled waveroms
 create_rom_binary() {
     local expansion_file="$1"
     local output_file="$2"
     
+    # Ensure unscramble tool is built
+    build_unscramble_tool
+    
+    # Unscramble base waveroms (Roland JV-880 address+data bit scrambling)
+    unscramble_waverom "${RESOURCES_DIR}/jv880_waverom1.bin" "${RESOURCES_DIR}/.jv880_waverom1_unscrambled.bin"
+    unscramble_waverom "${RESOURCES_DIR}/jv880_waverom2.bin" "${RESOURCES_DIR}/.jv880_waverom2_unscrambled.bin"
+    
     cat "${RESOURCES_DIR}/jv880_rom1.bin" \
         "${RESOURCES_DIR}/jv880_rom2.bin" \
-        "${RESOURCES_DIR}/jv880_waverom1.bin" \
-        "${RESOURCES_DIR}/jv880_waverom2.bin" \
+        "${RESOURCES_DIR}/.jv880_waverom1_unscrambled.bin" \
+        "${RESOURCES_DIR}/.jv880_waverom2_unscrambled.bin" \
         "${RESOURCES_DIR}/jv880_nvram.bin" \
         > "$output_file"
     
@@ -63,7 +94,10 @@ create_rom_binary() {
             log_error "Expansion ROM not found: ${expansion_file}"
             return 1
         fi
-        cat "${RESOURCES_DIR}/${expansion_file}" >> "$output_file"
+        # Unscramble expansion ROM too (SR-JV80 series use same scrambling)
+        local exp_unscrambled="${RESOURCES_DIR}/.${expansion_file%.bin}_unscrambled.bin"
+        unscramble_waverom "${RESOURCES_DIR}/${expansion_file}" "$exp_unscrambled"
+        cat "$exp_unscrambled" >> "$output_file"
     fi
 }
 
@@ -142,7 +176,7 @@ build_rom_variant() {
     
     # Build native library
     log_info "  Building native library..."
-    if ! make -f "$MAKEFILE_NATIVE" UNIT=drumpler --no-print-directory 2>&1 | tail -5; then
+    if ! make -C "$EDITOR_DIR" -f "$MAKEFILE_NATIVE" UNIT=drumpler --no-print-directory 2>&1 | tail -5; then
         log_error "Native build failed"
         cleanup
         return 1

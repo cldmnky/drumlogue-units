@@ -37,6 +37,29 @@ fi
 PROJECT="${1:-clouds-revfx}"
 ACTION="${2:-build}"
 
+# Parse additional arguments BEFORE drumpler detection (e.g., PERF_MON=1)
+# This ensures build_all_roms.sh receives these arguments
+shift 2 2>/dev/null || shift $# 2>/dev/null
+MAKE_VARS=""
+ENV_VARS=""
+PERF_MON_ENABLED=0
+for arg in "$@"; do
+    # If arg looks like VAR=value, add it as both env var and make var
+    if [[ "$arg" =~ ^[A-Z_]+=.+$ ]]; then
+        ENV_VARS="$ENV_VARS -e $arg"
+        MAKE_VARS="$MAKE_VARS $arg"
+    fi
+    if [[ "$arg" == "PERF_MON=1" ]]; then
+        PERF_MON_ENABLED=1
+    fi
+done
+
+# PERF_MON needs unstripped symbols for dlsym in QEMU tests.
+if [ "$PERF_MON_ENABLED" -eq 1 ]; then
+    ENV_VARS="$ENV_VARS -e STRIP=:"
+    MAKE_VARS="$MAKE_VARS STRIP=:"
+fi
+
 # Special handling for drumpler: build all ROM variants
 # Skip if _DRUMPLER_INTERNAL_BUILD is set (prevents recursion from build_all_roms.sh)
 if [ "$PROJECT" = "drumpler" ] && [ "$ACTION" = "build" ] && [ -z "$_DRUMPLER_INTERNAL_BUILD" ]; then
@@ -56,29 +79,27 @@ if [ "$PROJECT" = "drumpler" ] && [ "$ACTION" = "build" ] && [ -z "$_DRUMPLER_IN
         exit 1
     fi
     
-    exec "${SCRIPT_DIR}/drumlogue/drumpler/build_all_roms.sh"
+    # Pass through extra arguments (PERF_MON, __QEMU_ARM__, etc.)
+    exec "${SCRIPT_DIR}/drumlogue/drumpler/build_all_roms.sh" $MAKE_VARS
 fi
-
-# Parse additional arguments (e.g., PERF_MON=1)
-shift 2 2>/dev/null || shift $# 2>/dev/null
-MAKE_VARS=""
-ENV_VARS=""
-for arg in "$@"; do
-    # If arg looks like VAR=value, add it as both env var and make var
-    if [[ "$arg" =~ ^[A-Z_]+=.+$ ]]; then
-        ENV_VARS="$ENV_VARS -e $arg"
-        MAKE_VARS="$MAKE_VARS $arg"
-    fi
-done
 
 case "$ACTION" in
     clean)
         CMD="/app/commands/build --clean drumlogue/${PROJECT}"
         ;;
     *)
-        # Pass make variables directly to the SDK build command
-        CMD="/app/commands/build drumlogue/${PROJECT}"
-        # We'll set them as environment variables for make to pick up
+        # Use SDK build command with environment variables exported
+        # Make will automatically pick up exported variables like PERF_MON
+        if [ -n "$MAKE_VARS" ]; then
+            # Export each variable so make can see it
+            EXPORT_CMD=""
+            for var in $MAKE_VARS; do
+                EXPORT_CMD="$EXPORT_CMD export $var;"
+            done
+            CMD="$EXPORT_CMD /app/commands/build drumlogue/${PROJECT}"
+        else
+            CMD="/app/commands/build drumlogue/${PROJECT}"
+        fi
         ;;
 esac
 

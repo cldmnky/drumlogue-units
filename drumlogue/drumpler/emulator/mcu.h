@@ -360,11 +360,15 @@ struct MCU {
     MCU_Timer mcu_timer;
     SubMcu sub_mcu;
 
-    // Resampling removed - handled by wrapper
-    // void* resampleL = 0;
-    // void* resampleR = 0;
+    // Resampling state
+#ifdef USE_LIBRESAMPLE
+    void* resampleL = 0;
+    void* resampleR = 0;
     int savedDestSampleRate = 0;
-    double samplesError = 0;
+    double samplesError = 0;    // Error accumulator for libresample streaming mode
+#else
+    double resample_phase = 0.0; // Persistent fractional phase for linear interp
+#endif
     
     struct MidiEvent {
         uint8_t data[MIDI_EVENT_DATA_SIZE];
@@ -379,6 +383,7 @@ struct MCU {
     int midiQueueCount;
 
     MCU();
+    ~MCU();
 
     void MCU_ErrorTrap(void);
 

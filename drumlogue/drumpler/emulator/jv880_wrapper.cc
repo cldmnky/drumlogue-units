@@ -7,67 +7,11 @@
 #include <stdlib.h>
 #include <math.h>
 #include <new>
+#ifdef PERF_MON
+#include "../../common/perf_mon.h"
+#endif
 
 namespace drumpler {
-
-// ============================================================================
-// LinearResampler Implementation
-// ============================================================================
-
-LinearResampler::LinearResampler()
-    : pos_(0.0f) {
-}
-
-LinearResampler::~LinearResampler() {
-}
-
-void LinearResampler::Reset() {
-    pos_ = 0.0f;
-}
-
-int LinearResampler::Resample(const float* input_l, const float* input_r, int input_frames,
-                                float* output_l, float* output_r, int output_frames) {
-    int out_idx = 0;
-    
-    // Ratio is 64000/48000 = 4/3 = 1.333...
-    // For each output sample, we advance by 4/3 input samples
-    
-    // Reset position if it's beyond the current input buffer
-    if (pos_ >= static_cast<float>(input_frames - 1)) {
-        pos_ = 0.0f;
-    }
-    
-    for (int i = 0; i < output_frames; ++i) {
-        // Current fractional position
-        int idx = static_cast<int>(pos_);
-        float frac = pos_ - static_cast<float>(idx);
-        
-        // Bounds check
-        if (idx + 1 >= input_frames) break;
-        
-        // Linear interpolation
-        float s0_l = input_l[idx];
-        float s0_r = input_r[idx];
-        float s1_l = input_l[idx + 1];
-        float s1_r = input_r[idx + 1];
-        
-        output_l[i] = s0_l + frac * (s1_l - s0_l);
-        output_r[i] = s0_r + frac * (s1_r - s0_r);
-        
-        // Advance position
-        pos_ += kRatio;
-        out_idx++;
-    }
-    
-    // Update state for next call - wrap position relative to buffer
-    if (input_frames > 0) {
-        while (pos_ >= input_frames) {
-            pos_ -= input_frames;  // Wrap position back
-        }
-    }
-    
-    return out_idx;
-}
 
 // ============================================================================
 // JV880Emulator Implementation
@@ -111,16 +55,18 @@ bool JV880Emulator::Init(const uint8_t* rom_data, uint32_t rom_size) {
     
     // Initialize emulator with ROM pointers
     // startSC55(rom1, rom2, waverom1, waverom2, nvram)
+    // Waveroms are already unscrambled at build time by unscramble_waverom tool
     mcu_->startSC55(rom1_, rom2_, waverom1_, waverom2_, nvram_);
     
-    // Unscramble expansion ROM and load into PCM engine
-    // Must be called AFTER startSC55() since it writes to mcu_->pcm.waverom_exp
+    // Load expansion ROM into PCM engine (already unscrambled at build time)
     if (waverom_exp_ != nullptr) {
-        UnscrambleAndLoadExpansionROM();
+        mcu_->pcm.waverom_exp = waverom_exp_;
     }
     
-    // Reset resamplers
-    resampler_.Reset();
+#ifdef PERF_MON
+    // Register performance counters for emulator internals
+    perf_mcu_update_ = PERF_MON_REGISTER("MCU_Update");
+#endif
     
     return true;
 }
@@ -194,13 +140,18 @@ bool JV880Emulator::UnpackROM(const uint8_t* rom_data, uint32_t rom_size) {
     return true;
 }
 
-void JV880Emulator::Render(float* output_l, float* output_r, uint32_t frames) {
-    if (!mcu_ || frames == 0 || frames > kMaxRenderFrames) {
+void JV880Emulator::Render(float* output_l, float* output_r, uint32_t frames, uint32_t sample_rate) {
+    // Default to 48kHz if not specified
+    if (sample_rate == 0) {
+        sample_rate = 48000;
+    }
+    
+    if (!mcu_ || frames == 0) {
 #ifdef DEBUG
         static int error_count = 0;
         if (error_count++ < 3) {
-            fprintf(stderr, "[Drumpler] jv880_wrapper.cc Render ERROR: mcu_=%p frames=%u (max=%d)\n", 
-                    (void*)mcu_, frames, kMaxRenderFrames);
+            fprintf(stderr, "[Drumpler] jv880_wrapper.cc Render ERROR: mcu_=%p frames=%u\n", 
+                    (void*)mcu_, frames);
             fflush(stderr);
         }
 #endif
@@ -212,74 +163,17 @@ void JV880Emulator::Render(float* output_l, float* output_r, uint32_t frames) {
         return;
     }
     
-    // Calculate number of 64kHz frames needed
-    // frames @ 48kHz → (frames * 64000 / 48000) @ 64kHz
-    int internal_frames = (int)ceilf((float)frames * 64000.0f / 48000.0f) + 1;
-    
-    if (internal_frames > kInternalBufferSize) {
-        internal_frames = kInternalBufferSize;
-    }
-    
-#ifdef DEBUG
-    static int render_count = 0;
-    bool should_debug = (render_count < 5) || (render_count >= 750 && render_count < 760);
-    if (should_debug) {
-        render_count++;
-        fprintf(stderr, "[Drumpler] jv880_wrapper.cc Render: frames=%u, internal_frames=%d\n", 
-                frames, internal_frames);
-        fflush(stderr);
-    } else {
-        render_count++;
-    }
+    // MCU handles internal 64kHz rendering and resampling to output rate
+    // This matches the JUCE plugin architecture where resampling happens inside the MCU
+#ifdef PERF_MON
+    PERF_MON_START(perf_mcu_update_);
 #endif
-    
-    // Render at 64kHz into internal buffer
-    mcu_->updateSC55WithSampleRate(internal_buffer_l_, internal_buffer_r_,
-                                   static_cast<unsigned int>(internal_frames),
-                                   64000);
-    
-#ifdef DEBUG
-    if (should_debug) {
-        // Check MCU output
-        float max_internal = 0.0f;
-        for (int i = 0; i < internal_frames; ++i) {
-            float abs_l = fabsf(internal_buffer_l_[i]);
-            float abs_r = fabsf(internal_buffer_r_[i]);
-            if (abs_l > max_internal) max_internal = abs_l;
-            if (abs_r > max_internal) max_internal = abs_r;
-        }
-        fprintf(stderr, "[Drumpler] jv880_wrapper.cc Render: MCU output max=%f\n", max_internal);
-        fflush(stderr);
-    }
+    mcu_->updateSC55WithSampleRate(output_l, output_r,
+                                   static_cast<unsigned int>(frames),
+                                   static_cast<int>(sample_rate));
+#ifdef PERF_MON
+    PERF_MON_END(perf_mcu_update_);
 #endif
-    
-    // Resample to 48kHz
-    int actual_frames = resampler_.Resample(
-        internal_buffer_l_, internal_buffer_r_, internal_frames,
-        output_l, output_r, frames
-    );
-    
-#ifdef DEBUG
-    if (should_debug) {
-        // Check resampler output
-        float max_output = 0.0f;
-        for (int i = 0; i < actual_frames; ++i) {
-            float abs_l = fabsf(output_l[i]);
-            float abs_r = fabsf(output_r[i]);
-            if (abs_l > max_output) max_output = abs_l;
-            if (abs_r > max_output) max_output = abs_r;
-        }
-        fprintf(stderr, "[Drumpler] jv880_wrapper.cc Render: resampled output max=%f (actual_frames=%d)\n", 
-                max_output, actual_frames);
-        fflush(stderr);
-    }
-#endif
-    
-    // Fill remaining with zeros if resampler didn't produce enough
-    for (int i = actual_frames; i < (int)frames; ++i) {
-        output_l[i] = 0.0f;
-        output_r[i] = 0.0f;
-    }
 }
 
 void JV880Emulator::SendMidi(const uint8_t* data, int length) {
@@ -360,59 +254,194 @@ void JV880Emulator::ProgramChange(uint8_t channel, uint8_t program) {
     SendMidi(msg, 2);
 }
 
+bool JV880Emulator::SetCurrentProgram(uint8_t index) {
+    if (!mcu_) return false;
+    
+    static constexpr int kPatchSize = 0x16a;
+    const uint8_t* patch_data = nullptr;
+    
+    if (waverom_exp_ != nullptr) {
+        // Expansion ROM: read patch count and offset from ROM header
+        uint16_t nPatches = (uint16_t)(waverom_exp_[0x66] << 8) | waverom_exp_[0x67];
+        uint32_t patchesOffset = 
+            ((uint32_t)waverom_exp_[0x8c] << 24) |
+            ((uint32_t)waverom_exp_[0x8d] << 16) |
+            ((uint32_t)waverom_exp_[0x8e] << 8) |
+            ((uint32_t)waverom_exp_[0x8f]);
+        
+        if (index < nPatches) {
+            patch_data = &waverom_exp_[patchesOffset + index * kPatchSize];
+        }
+    } else if (rom2_) {
+        // Internal ROM patches
+        if (index < 64) {
+            // Internal A: rom2 + 0x010ce0 + index * 0x16a
+            patch_data = &rom2_[0x010ce0 + index * kPatchSize];
+        } else if (index < 128) {
+            // Internal B: rom2 + 0x018ce0 + (index-64) * 0x16a
+            patch_data = &rom2_[0x018ce0 + (index - 64) * kPatchSize];
+        }
+    }
+    
+    if (!patch_data) {
+#ifdef DEBUG
+        fprintf(stderr, "[Drumpler] SetCurrentProgram: no patch data for index %d\n", index);
+        fflush(stderr);
+#endif
+        return false;
+    }
+    
+#ifdef DEBUG
+    // Print first 12 bytes (patch name) for debugging
+    fprintf(stderr, "[Drumpler] SetCurrentProgram(%d): copying 0x%x bytes to nvram[0x0d70], name='",
+            index, kPatchSize);
+    for (int i = 0; i < 12 && i < kPatchSize; ++i) {
+        char c = static_cast<char>(patch_data[i]);
+        if (c >= 0x20 && c <= 0x7E) fprintf(stderr, "%c", c);
+        else fprintf(stderr, ".");
+    }
+    fprintf(stderr, "'\n");
+    fflush(stderr);
+#endif
+    
+    // Copy full patch data (0x16a bytes) to nvram at offset 0x0d70
+    // This matches JUCE setCurrentProgram() behavior
+    memcpy(&mcu_->nvram[0x0d70], patch_data, kPatchSize);
+    
+    // Check if we need a full reset or just a dummy program change
+    if (mcu_->nvram[0x11] != 1) {
+        // Switch to patch mode (from drum mode) - requires full reset
+        mcu_->nvram[0x11] = 1;
+#ifdef DEBUG
+        fprintf(stderr, "[Drumpler] SetCurrentProgram: switching to patch mode, doing SC55_Reset\n");
+        fflush(stderr);
+#endif
+        mcu_->SC55_Reset();
+    } else {
+        // Already in patch mode - send dummy Program Change to trigger firmware reload
+        uint8_t buffer[2] = {0xC0, 0x00};
+        mcu_->postMidiSC55(buffer, 2);
+    }
+    
+    return true;
+}
+
+void JV880Emulator::SendSysexPatchCommonParam(uint8_t offset, uint8_t value) {
+    if (!mcu_) return;
+    
+    // Roland SysEx DT1 format for JV-880 Patch Common parameters:
+    // F0 41 10 46 12 00 08 20 <offset> <value> <checksum> F7
+    uint8_t buf[12];
+    buf[0]  = 0xF0;   // SysEx start
+    buf[1]  = 0x41;   // Roland manufacturer ID
+    buf[2]  = 0x10;   // Unit number (default 17 = 0x10)
+    buf[3]  = 0x46;   // JV-880 model ID
+    buf[4]  = 0x12;   // DT1 (Data Set 1) command
+    buf[5]  = 0x00;   // Address MSB
+    buf[6]  = 0x08;   // Address
+    buf[7]  = 0x20;   // Address (Patch Common block)
+    buf[8]  = offset & 0x7F;  // Address LSB (parameter offset)
+    buf[9]  = value & 0x7F;   // Data
+    
+    // Roland checksum: 128 - (sum of address+data bytes % 128)
+    uint32_t checksum = 0;
+    for (int i = 5; i <= 9; i++) {
+        checksum += buf[i];
+    }
+    checksum = 128 - (checksum % 128);
+    if (checksum == 128) checksum = 0;
+    
+    buf[10] = static_cast<uint8_t>(checksum);
+    buf[11] = 0xF7;   // SysEx end
+    
+#ifdef DEBUG
+    fprintf(stderr, "[Drumpler] SysEx PatchCommon: offset=0x%02x value=%d checksum=0x%02x\n",
+            offset, value, buf[10]);
+    fflush(stderr);
+#endif
+    
+    SendMidi(buf, 12);
+}
+
+void JV880Emulator::SendSysexPatchToneParam(uint8_t tone, uint8_t offset, uint8_t value) {
+    if (!mcu_ || tone > 3) return;
+    
+    // Roland SysEx DT1 format for JV-880 Patch Tone parameters:
+    // Tone base addresses: 0x28 + toneCount (matching JUCE EditToneTab)
+    // F0 41 10 46 12 00 08 <0x28+tone> <offset> <value> <checksum> F7
+    static const uint8_t tone_base[] = { 0x28, 0x29, 0x2A, 0x2B };
+    
+    uint8_t buf[12];
+    buf[0]  = 0xF0;
+    buf[1]  = 0x41;
+    buf[2]  = 0x10;
+    buf[3]  = 0x46;
+    buf[4]  = 0x12;
+    buf[5]  = 0x00;
+    buf[6]  = 0x08;
+    buf[7]  = tone_base[tone];
+    buf[8]  = offset & 0x7F;
+    buf[9]  = value & 0x7F;
+    
+    uint32_t checksum = 0;
+    for (int i = 5; i <= 9; i++) {
+        checksum += buf[i];
+    }
+    checksum = 128 - (checksum % 128);
+    if (checksum == 128) checksum = 0;
+    
+    buf[10] = static_cast<uint8_t>(checksum);
+    buf[11] = 0xF7;
+    
+#ifdef DEBUG
+    fprintf(stderr, "[Drumpler] SysEx PatchTone: tone=%d offset=0x%02x value=%d\n",
+            tone, offset, value);
+    fflush(stderr);
+#endif
+    
+    SendMidi(buf, 12);
+}
+
+void JV880Emulator::SendSysexSystemParam(uint32_t address, uint8_t value) {
+    if (!mcu_) return;
+    
+    // Roland SysEx DT1 format for JV-880 System parameters:
+    // F0 41 10 46 12 <addr3> <addr2> <addr1> <addr0> <value> <checksum> F7
+    // Matches JUCE VirtualJVProcessor::sendSysexParamChange()
+    uint8_t buf[12];
+    buf[0]  = 0xF0;
+    buf[1]  = 0x41;
+    buf[2]  = 0x10;
+    buf[3]  = 0x46;
+    buf[4]  = 0x12;
+    buf[5]  = (address >> 21) & 0x7F;
+    buf[6]  = (address >> 14) & 0x7F;
+    buf[7]  = (address >> 7) & 0x7F;
+    buf[8]  = (address >> 0) & 0x7F;
+    buf[9]  = value & 0x7F;
+    
+    uint32_t checksum = 0;
+    for (int i = 5; i <= 9; i++) {
+        checksum += buf[i];
+    }
+    checksum = 128 - (checksum % 128);
+    if (checksum == 128) checksum = 0;
+    
+    buf[10] = static_cast<uint8_t>(checksum);
+    buf[11] = 0xF7;
+    
+#ifdef DEBUG
+    fprintf(stderr, "[Drumpler] SysEx System: addr=0x%08x value=%d\n", address, value);
+    fflush(stderr);
+#endif
+    
+    SendMidi(buf, 12);
+}
+
 void JV880Emulator::Reset() {
     if (!mcu_) return;
     
     mcu_->SC55_Reset();
-    
-    resampler_.Reset();
-}
-
-void JV880Emulator::UnscrambleAndLoadExpansionROM() {
-    if (!mcu_ || !waverom_exp_) return;
-    
-    // Roland SR-JV80 expansion ROMs use address + data bit scrambling.
-    // This unscramble algorithm is from mcu.cpp unscramble() / rom.cpp unscrambleRom()
-    // in the jv880_juce project.
-    //
-    // Address bits are permuted using aa[] lookup table (20-bit address space, 1MB blocks)
-    // Data bits are permuted using dd[] lookup table (8-bit)
-    
-    static const int aa[] = {
-        2, 0, 3, 4, 1, 9, 13, 10, 18, 17, 6, 15, 11, 16, 8, 5, 12, 7, 14, 19
-    };
-    static const int dd[] = {
-        2, 0, 4, 5, 7, 6, 3, 1
-    };
-    
-    const int len = 0x800000;  // 8MB expansion ROM
-    uint8_t* dst = mcu_->pcm.waverom_exp;
-    const uint8_t* src = waverom_exp_;
-    
-    for (int i = 0; i < len; i++) {
-        // Address unscramble: permute address bits within 1MB blocks
-        int address = i & ~0xfffff;  // Keep upper bits (block selector)
-        for (int j = 0; j < 20; j++) {
-            if (i & (1 << j))
-                address |= 1 << aa[j];
-        }
-        
-        // Read source byte from scrambled address
-        uint8_t srcdata = src[address];
-        
-        // Data unscramble: permute data bits
-        uint8_t data = 0;
-        for (int j = 0; j < 8; j++) {
-            if (srcdata & (1 << dd[j]))
-                data |= 1 << j;
-        }
-        
-        dst[i] = data;
-    }
-    
-    // Update waverom_exp_ to point to the unscrambled copy in PCM
-    // This ensures GetPatchName() reads unscrambled data
-    waverom_exp_ = dst;
 }
 
 bool JV880Emulator::GetPatchName(uint8_t index, char* name, int max_len) const {

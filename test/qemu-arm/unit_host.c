@@ -21,6 +21,8 @@
 #include <getopt.h>
 #include <time.h>
 #include <math.h>
+#include <sys/resource.h>
+#include <sys/stat.h>
 
 // Global state
 static unit_host_state_t g_state = {0};
@@ -774,13 +776,23 @@ void unit_host_print_perf_mon(unit_host_state_t* state) {
     typedef uint32_t (*get_min_cycles_func)(uint8_t);
     typedef uint32_t (*get_frame_count_func)(uint8_t);
     
-    // Load function pointers (mangled C++ names for dsp::PerfMon static methods)
-    get_counter_count_func get_count = (get_counter_count_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon15GetCounterCountEv");
-    get_counter_name_func get_name = (get_counter_name_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon14GetCounterNameEh");
-    get_average_cycles_func get_avg = (get_average_cycles_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon17GetAverageCyclesEh");
-    get_peak_cycles_func get_peak = (get_peak_cycles_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon14GetPeakCyclesEh");
-    get_min_cycles_func get_min = (get_min_cycles_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon13GetMinCyclesEh");
-    get_frame_count_func get_frames = (get_frame_count_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon13GetFrameCountEh");
+    // Try C wrapper symbols first (if unit exports perfmon_* functions)
+    get_counter_count_func get_count = (get_counter_count_func)dlsym(state->unit_handle, "perfmon_get_counter_count");
+    get_counter_name_func get_name = (get_counter_name_func)dlsym(state->unit_handle, "perfmon_get_counter_name");
+    get_average_cycles_func get_avg = (get_average_cycles_func)dlsym(state->unit_handle, "perfmon_get_average_cycles");
+    get_peak_cycles_func get_peak = (get_peak_cycles_func)dlsym(state->unit_handle, "perfmon_get_peak_cycles");
+    get_min_cycles_func get_min = (get_min_cycles_func)dlsym(state->unit_handle, "perfmon_get_min_cycles");
+    get_frame_count_func get_frames = (get_frame_count_func)dlsym(state->unit_handle, "perfmon_get_frame_count");
+
+    // Fall back to mangled C++ names for dsp::PerfMon static methods
+    if (!get_count || !get_name || !get_avg || !get_peak || !get_min || !get_frames) {
+        get_count = (get_counter_count_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon15GetCounterCountEv");
+        get_name = (get_counter_name_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon14GetCounterNameEh");
+        get_avg = (get_average_cycles_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon17GetAverageCyclesEh");
+        get_peak = (get_peak_cycles_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon14GetPeakCyclesEh");
+        get_min = (get_min_cycles_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon13GetMinCyclesEh");
+        get_frames = (get_frame_count_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon13GetFrameCountEh");
+    }
     
     // Check if PERF_MON symbols exist
     if (!get_count || !get_name || !get_avg || !get_peak || !get_min || !get_frames) {
@@ -863,6 +875,47 @@ void unit_host_print_perf_mon(unit_host_state_t* state) {
     printf("  • Cycle counts are measured using ARM cycle counters\n");
     printf("  • %% of budget assumes %.0f cycles available per sample\n", CYCLES_PER_SAMPLE);
     printf("  • Actual performance depends on CPU frequency and load\n");
+    printf("\n");
+    printf("═══════════════════════════════════════════════════════════════\n");
+}
+
+/**
+ * @brief Print binary size and memory statistics
+ */
+void unit_host_print_memory_stats(const char* unit_path) {
+    printf("\n");
+    printf("Binary & Memory Statistics:\n");
+    
+    // Get binary file size
+    struct stat st;
+    if (stat(unit_path, &st) == 0) {
+        double size_kb = (double)st.st_size / 1024.0;
+        double size_mb = size_kb / 1024.0;
+        printf("  Binary size:        %.2f KB (%.2f MB)\n", size_kb, size_mb);
+    }
+    
+    // Get memory usage from getrusage
+    struct rusage usage;
+    if (getrusage(RUSAGE_SELF, &usage) == 0) {
+        // maxrss is in KB on Linux, bytes on macOS
+#ifdef __linux__
+        long mem_kb = usage.ru_maxrss;
+#else
+        long mem_kb = usage.ru_maxrss / 1024;
+#endif
+        double mem_mb = (double)mem_kb / 1024.0;
+        printf("  Peak memory (RSS):  %.2f KB (%.2f MB)\n", (double)mem_kb, mem_mb);
+        printf("  Page faults:        %ld minor, %ld major\n", 
+               usage.ru_minflt, usage.ru_majflt);
+    }
+    
+    // Note about heap allocations
+    printf("\n");
+    printf("Memory Notes:\n");
+    printf("  • Most data is in Flash ROM (read-only)\n");
+    printf("  • Waveroms use pointers to Flash, not RAM copies\n");
+    printf("  • Only expansion ROM (8MB) allocated on heap if present\n");
+    printf("  • RSS includes QEMU overhead and shared libraries\n");
     printf("\n");
     printf("═══════════════════════════════════════════════════════════════\n");
 }
@@ -1104,6 +1157,11 @@ int unit_host_main(int argc, char* argv[]) {
     // Print PERF_MON data if enabled and unit has performance symbols
     if (config.perf_mon) {
         unit_host_print_perf_mon(&g_state);
+    }
+    
+    // Always print memory statistics
+    if (config.profile || config.perf_mon || config.verbose) {
+        unit_host_print_memory_stats(config.unit_file);
     }
     
     // Cleanup

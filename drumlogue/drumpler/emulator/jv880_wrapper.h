@@ -2,8 +2,10 @@
  * JV-880 Emulator Wrapper for Korg drumlogue
  * 
  * Wraps NukeYKT's Nuked-SC55/JV-880 emulator for drumlogue hardware.
- * Removes JUCE dependencies, handles sample rate conversion, and provides
- * drumlogue-compatible audio/MIDI interface.
+ * Removes JUCE dependencies and provides drumlogue-compatible audio/MIDI interface.
+ * 
+ * Resampling now handled internally by MCU (matches JUCE plugin architecture)
+ * where the MCU renders at 64kHz and resamples to output rate using libresample.
  * 
  * Original emulator: https://github.com/nukeykt/Nuked-SC55
  * JUCE port: https://github.com/giulioz/jv880_juce
@@ -19,38 +21,6 @@
 struct MCU;
 
 namespace drumpler {
-
-/**
- * Simple linear interpolation resampler (64kHz → 48kHz)
- */
-class LinearResampler {
-public:
-    LinearResampler();
-    ~LinearResampler();
-    
-    /**
-     * Resample from 64kHz internal buffer to 48kHz output
-     * @param input_l Left channel input (64kHz float samples)
-     * @param input_r Right channel input (64kHz float samples)
-     * @param input_frames Number of input frames
-     * @param output_l Left channel output (48kHz)
-     * @param output_r Right channel output (48kHz)
-     * @param output_frames Number of output frames requested
-     * @return Actual number of output frames generated
-     */
-    int Resample(const float* input_l, const float* input_r, int input_frames,
-                 float* output_l, float* output_r, int output_frames);
-    
-    void Reset();
-    
-private:
-    // State for fractional sample position
-    float pos_;          // Current fractional position in input buffer
-    
-    static constexpr float kRate64kHz = 64000.0f;
-    static constexpr float kRate48kHz = 48000.0f;
-    static constexpr float kRatio = kRate64kHz / kRate48kHz;  // 4/3
-};
 
 /**
  * Main JV-880 emulator wrapper for drumlogue
@@ -69,12 +39,14 @@ public:
     bool Init(const uint8_t* rom_data, uint32_t rom_size);
     
     /**
-     * Process audio (48kHz float stereo)
+     * Process audio (float stereo at configured sample rate)
+     * MCU handles internal 64kHz→output_rate resampling using libresample
      * @param output_l Left channel output buffer
      * @param output_r Right channel output buffer
      * @param frames Number of frames to render (typically 32-64)
+     * @param sample_rate Output sample rate (e.g., 48000, 44100). If 0, uses 48000.
      */
-    void Render(float* output_l, float* output_r, uint32_t frames);
+    void Render(float* output_l, float* output_r, uint32_t frames, uint32_t sample_rate = 48000);
     
     /**
      * Send MIDI message immediately
@@ -107,11 +79,80 @@ public:
     void ControlChange(uint8_t channel, uint8_t cc, uint8_t value);
     
     /**
-     * Send MIDI program change
+     * Send MIDI program change (low-level MIDI only)
+     * NOTE: For switching patches, use SetCurrentProgram() instead.
+     * Standard MIDI Program Change alone does NOT work for JV-880 patch switching;
+     * the firmware requires patch data to be written directly to nvram.
      * @param channel MIDI channel (0-15)
      * @param program Program number (0-127)
      */
     void ProgramChange(uint8_t channel, uint8_t program);
+    
+    /**
+     * Set current program by copying patch data directly to MCU nvram.
+     * This matches the JUCE plugin's setCurrentProgram() behavior.
+     * The JV-880 firmware reads patch data from nvram, not via MIDI Program Change.
+     *
+     * For Internal ROM:
+     *   - 0-63: Internal A patches (rom2 offset 0x010ce0)
+     *   - 64-127: Internal B patches (rom2 offset 0x018ce0)
+     * For Expansion ROM:
+     *   - Reads patch count and offset from ROM header
+     *
+     * @param index Program number (0-127)
+     * @return true if patch was loaded successfully
+     */
+    bool SetCurrentProgram(uint8_t index);
+    
+    /**
+     * Send Roland SysEx DT1 (Data Set 1) message for a Patch Common parameter.
+     * The JV-880 uses proprietary SysEx for real-time parameter changes.
+     * Address format: F0 41 10 46 12 00 08 20 <offset> <value> <checksum> F7
+     *
+     * Known offsets:
+     *   0x0d: Reverb Type     0x0e: Reverb Level    0x0f: Reverb Time
+     *   0x10: Delay Feedback   0x11: Chorus Type     0x12: Chorus Level
+     *   0x13: Chorus Depth     0x14: Chorus Rate     0x15: Chorus Feedback
+     *   0x16: Chorus Output
+     *
+     * @param offset Parameter offset within Patch Common block
+     * @param value Parameter value (0-127)
+     */
+    void SendSysexPatchCommonParam(uint8_t offset, uint8_t value);
+    
+    /**
+     * Send Roland SysEx DT1 message for a Patch Tone parameter.
+     * Address format: F0 41 10 46 12 00 08 <0x28+tone> <offset> <value> <checksum> F7
+     *
+     * Tone base addresses: 0x28 + toneCount (0x28, 0x29, 0x2A, 0x2B)
+     * Matches JUCE EditToneTab::sendSysexPatchToneChange1Byte()
+     *
+     * Key parameter offsets (from JUCE EditToneTab):
+     *   TVF Cutoff Frequency: 0x4A
+     *   TVF Resonance: 0x4B
+     *   TVA Env Time 1 (Attack): 0x69
+     *   TVA Level: 0x5C
+     *   Dry Send: 0x70, Reverb Send: 0x71, Chorus Send: 0x72
+     *
+     * @param tone Tone number (0-3)
+     * @param offset Parameter offset within Patch Tone block (0-127)
+     * @param value Parameter value (0-127)
+     */
+    void SendSysexPatchToneParam(uint8_t tone, uint8_t offset, uint8_t value);
+    
+    /**
+     * Send Roland SysEx DT1 message for a System parameter.
+     * Address format: F0 41 10 46 12 <addr3> <addr2> <addr1> <addr0> <value> <checksum> F7
+     *
+     * Key system addresses (from JUCE SettingsTab):
+     *   0x04: Reverb Switch (0=off, 1=on)
+     *   0x05: Chorus Switch (0=off, 1=on)
+     *   0x01: Master Tune
+     *
+     * @param address Full 32-bit system address (each byte is 7-bit)
+     * @param value Parameter value (0-127)
+     */
+    void SendSysexSystemParam(uint32_t address, uint8_t value);
     
     /**
      * Reset emulator (GS Reset)
@@ -141,14 +182,9 @@ private:
     // Emulator core (defined in mcu.h)
     MCU* mcu_;
     
-    // Resampling (64kHz → 48kHz)
-    LinearResampler resampler_;
-    
-    // Internal 64kHz render buffer
-    static constexpr int kMaxRenderFrames = 256;  // Max frames per Render() call
-    static constexpr int kInternalBufferSize = (kMaxRenderFrames * 64000) / 48000 + 32;  // ~384 frames
-    float internal_buffer_l_[kInternalBufferSize];
-    float internal_buffer_r_[kInternalBufferSize];
+#ifdef PERF_MON
+    uint8_t perf_mcu_update_ = 0xFF;
+#endif
     
     // ROM storage (persistent pointers for PCM class)
     const uint8_t* rom1_;
@@ -165,13 +201,6 @@ private:
     // ROM validation and unpacking
     bool ValidateROM(const uint8_t* rom_data, uint32_t rom_size);
     bool UnpackROM(const uint8_t* rom_data, uint32_t rom_size);
-    
-    /**
-     * Unscramble expansion ROM and load into PCM engine.
-     * Roland SR-JV80 expansion ROMs use address + data bit scrambling.
-     * Source: mcu.cpp unscramble() / rom.cpp unscrambleRom() from jv880_juce.
-     */
-    void UnscrambleAndLoadExpansionROM();
     
 };
 

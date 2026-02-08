@@ -42,7 +42,74 @@
 #include "pcm.h"
 #include "lcd_stub.h"
 #include "submcu.h"
-// #include "resample/libresample.h"  // Removed - using custom resampler in wrapper
+#ifdef USE_LIBRESAMPLE
+#include "resample/libresample.h"
+#endif
+
+#ifdef USE_NEON
+#include "../../common/simd_utils.h"
+#endif
+
+// ============================================================================
+// Audio Debug Utilities
+// Define AUDIO_DEBUG to enable periodic audio pipeline diagnostics
+// ============================================================================
+#ifdef AUDIO_DEBUG
+#include <float.h>
+
+struct AudioStats {
+    float min_val;
+    float max_val;
+    double sum;
+    double sum_sq;
+    int zero_count;
+    int nan_count;
+    int inf_count;
+    int clip_count;   // |val| > 1.0
+    int total;
+
+    void reset() {
+        min_val = FLT_MAX;
+        max_val = -FLT_MAX;
+        sum = 0.0;
+        sum_sq = 0.0;
+        zero_count = 0;
+        nan_count = 0;
+        inf_count = 0;
+        clip_count = 0;
+        total = 0;
+    }
+
+    void accumulate(float v) {
+        total++;
+        if (std::isnan(v)) { nan_count++; return; }
+        if (std::isinf(v)) { inf_count++; return; }
+        if (v < min_val) min_val = v;
+        if (v > max_val) max_val = v;
+        sum += v;
+        sum_sq += (double)v * v;
+        if (v == 0.0f) zero_count++;
+        if (v > 1.0f || v < -1.0f) clip_count++;
+    }
+
+    void print(const char* label) const {
+        if (total == 0) { fprintf(stderr, "  [%s] no samples\n", label); return; }
+        double mean = sum / total;
+        double rms = std::sqrt(sum_sq / total);
+        double dc_offset = mean;
+        double crest = (rms > 0.0) ? (double)(std::max(std::fabs((double)min_val), std::fabs((double)max_val))) / rms : 0.0;
+        fprintf(stderr, "  [%s] n=%d min=%.6f max=%.6f mean=%.6f rms=%.6f dc=%.6f crest=%.1f\n",
+                label, total, min_val, max_val, mean, rms, dc_offset, crest);
+        if (zero_count > 0)
+            fprintf(stderr, "         zeros=%d (%.1f%%)\n", zero_count, 100.0 * zero_count / total);
+        if (nan_count > 0 || inf_count > 0 || clip_count > 0)
+            fprintf(stderr, "         NaN=%d Inf=%d clip=%d\n", nan_count, inf_count, clip_count);
+    }
+};
+
+static int g_audio_debug_counter = 0;
+static constexpr int AUDIO_DEBUG_INTERVAL = 100; // Print every N calls
+#endif // AUDIO_DEBUG
 
 #if __linux__
 #include <unistd.h>
@@ -1115,25 +1182,36 @@ void unscramble(uint8_t *src, uint8_t *dst, int len)
 
 void MCU::MCU_PostSample(int *sample)
 {
-#ifdef DEBUG
-    static int sample_count = 0;
-    static int non_zero_count = 0;
-    if (sample[0] != 0 || sample[1] != 0) {
-        non_zero_count++;
-        if (non_zero_count < 5) {
-            fprintf(stderr, "[Drumpler] MCU_PostSample: NON-ZERO sample[0]=%d sample[1]=%d\n", 
-                    sample[0], sample[1]);
-            fflush(stderr);
-        }
-    }
-    sample_count++;
-    if (sample_count == 1000) {
-        fprintf(stderr, "[Drumpler] MCU_PostSample: 1000 samples posted, %d non-zero\n", non_zero_count);
+    // JUCE ref: sample[0] / 2147483648.0 (double division)
+    // We use float multiply by reciprocal (identical result for power-of-2)
+    static constexpr float kInt32ToFloat = 1.0f / 2147483648.0f;
+#ifdef AUDIO_DEBUG
+    static int post_sample_count = 0;
+    static int post_nonzero_count = 0;
+    static int32_t post_raw_min = INT32_MAX;
+    static int32_t post_raw_max = INT32_MIN;
+    if (sample[0] != 0 || sample[1] != 0) post_nonzero_count++;
+    if (sample[0] < post_raw_min) post_raw_min = sample[0];
+    if (sample[0] > post_raw_max) post_raw_max = sample[0];
+    if (sample[1] < post_raw_min) post_raw_min = sample[1];
+    if (sample[1] > post_raw_max) post_raw_max = sample[1];
+    post_sample_count++;
+    if (post_sample_count % 64000 == 0) {
+        float fmin = post_raw_min * kInt32ToFloat;
+        float fmax = post_raw_max * kInt32ToFloat;
+        fprintf(stderr, "[AUDIO_DEBUG] MCU_PostSample: %d samples, %d non-zero (%.1f%%), raw=[%d..%d] float=[%.6f..%.6f]\n",
+                post_sample_count, post_nonzero_count,
+                100.0 * post_nonzero_count / post_sample_count,
+                post_raw_min, post_raw_max, fmin, fmax);
         fflush(stderr);
+        // Reset periodic stats
+        post_nonzero_count = 0;
+        post_raw_min = INT32_MAX;
+        post_raw_max = INT32_MIN;
     }
 #endif
-    sample_buffer_l[sample_write_ptr] = sample[0] / 2147483648.0;
-    sample_buffer_r[sample_write_ptr] = sample[1] / 2147483648.0;
+    sample_buffer_l[sample_write_ptr] = sample[0] * kInt32ToFloat;
+    sample_buffer_r[sample_write_ptr] = sample[1] * kInt32ToFloat;
     sample_write_ptr = (sample_write_ptr + 1) % audio_buffer_size;
 }
 
@@ -1159,6 +1237,20 @@ void MCU::MCU_EncoderTrigger(int dir)
 
 MCU::MCU() : pcm(this), lcd(this), mcu_timer(this), sub_mcu(this) {
     midiQueueCount = 0;
+}
+
+MCU::~MCU() {
+#ifdef USE_LIBRESAMPLE
+    // Clean up libresample handles
+    if (resampleL) {
+        resample_close(resampleL);
+        resampleL = 0;
+    }
+    if (resampleR) {
+        resample_close(resampleR);
+        resampleR = 0;
+    }
+#endif
 }
 
 int MCU::startSC55(const uint8_t* s_rom1, const uint8_t* s_rom2, const uint8_t* s_waverom1, const uint8_t* s_waverom2, const uint8_t* s_nvram)
@@ -1211,32 +1303,23 @@ int MCU::startSC55(const uint8_t* s_rom1, const uint8_t* s_rom2, const uint8_t* 
     rom2_mask = ROM2_SIZE_JV880 - 1;
     memcpy(nvram, s_nvram, NVRAM_SIZE);
 
+    // Assign waverom pointers (pre-unscrambled at build time, no const_cast needed)
     if (mcu_mk1)
     {
-        memcpy(pcm.waverom1, s_waverom1, 0x100000);
-        memcpy(pcm.waverom2, s_waverom2, 0x100000);
-        // memcpy(tempbuf, s_waverom3, 0x100000);
-        // unscramble(tempbuf, pcm.waverom3, 0x100000);
+        pcm.waverom1 = s_waverom1;
+        pcm.waverom2 = s_waverom2;
+        // Note: waverom3 not used for mk1
     }
     else if (mcu_jv880)
     {
-        memcpy(pcm.waverom1, s_waverom1, 0x200000);
-        memcpy(pcm.waverom2, s_waverom2, 0x200000);
-
-        // if (s_rf[4] && fread(tempbuf, 1, 0x800000, s_rf[4]))
-        //     unscramble(tempbuf, pcm.waverom_exp, 0x800000);
-        // else
-        //     printf("WaveRom EXP not found, skipping it.\n");
-        
-        // if (s_rf[5] && fread(tempbuf, 1, 0x200000, s_rf[5]))
-        //     unscramble(tempbuf, pcm.waverom_card, 0x200000);
-        // else
-        //     printf("WaveRom PCM not found, skipping it.\n");
+        pcm.waverom1 = s_waverom1;
+        pcm.waverom2 = s_waverom2;
+        // waverom_exp loaded separately in Init() after startSC55()
     }
     else
     {
-        memcpy(pcm.waverom1, s_waverom1, 0x200000);
-        memcpy(pcm.waverom2, s_waverom2, 0x100000);
+        pcm.waverom1 = s_waverom1;
+        pcm.waverom2 = s_waverom2;
     }
 
     SC55_Reset();
@@ -1254,55 +1337,62 @@ int MCU::startSC55(const uint8_t* s_rom1, const uint8_t* s_rom2, const uint8_t* 
 }
 
 void MCU::updateSC55WithSampleRate(float *dataL, float *dataR, unsigned int nFrames, int destSampleRate) {
-#ifdef DEBUG
-    static int render_call_count = 0;
-    if (render_call_count++ < 3) {
-        fprintf(stderr, "[Drumpler] MCU updateSC55: nFrames=%u destSampleRate=%d\n", nFrames, destSampleRate);
-        fflush(stderr);
-    }
-#endif
+    // Resampling architecture:
+    // 1. MCU runs internally at 64kHz, generating samples into sample_buffer_l/r
+    // 2. We resample 64kHz → destSampleRate (e.g., 48kHz) using interpolation
+    //
+    // Two paths:
+    // - USE_LIBRESAMPLE: streaming sinc resampler with error accumulator (JUCE-compatible)
+    // - else: persistent-phase linear interpolation (no malloc, embedded-safe)
+
+    const double step = 64000.0 / static_cast<double>(destSampleRate);  // ~1.333 for 48kHz
+
+#ifdef USE_LIBRESAMPLE
+    // --- libresample path: use JUCE-style error accumulator ---
     double renderBufferFramesFloat = static_cast<double>(nFrames) / destSampleRate * 64000;
     int renderBufferFrames = static_cast<int>(std::ceil(renderBufferFramesFloat));
     double currentError = renderBufferFrames - renderBufferFramesFloat;
 
     int limit = static_cast<int>(nFrames) / 2;
     if (samplesError > limit) {
-        // printf("compensating neg %d\n", limit);
         renderBufferFrames -= limit;
         currentError -= limit;
-    }else if (-samplesError > limit) {
-        // printf("compensating pos %d\n", limit);
+    } else if (-samplesError > limit) {
         renderBufferFrames += limit;
         currentError += limit;
     }
-    
-    if (audio_buffer_size < renderBufferFrames) {
+#else
+    // --- Persistent-phase path: compute exact needed input samples ---
+    // resample_phase is the fractional offset into this call's generated buffer
+    // We need enough input samples so that phase doesn't exceed the buffer
+    double maxPhase = resample_phase + static_cast<double>(nFrames - 1) * step;
+    int renderBufferFrames = static_cast<int>(std::floor(maxPhase)) + 2;  // +2 for interp margin
+#endif
+
+    if (renderBufferFrames > static_cast<int>(audio_buffer_size)) {
         printf("Audio buffer size is too small. (%d requested)\n", renderBufferFrames);
         fflush(stdout);
         return;
     }
 
-    // Track start position and samples generated
-    int start_write_ptr = sample_write_ptr;
-    int samples_generated = 0;
+    // Reset write pointer to 0 each call - linear buffer
+    sample_write_ptr = 0;
 
     int maxCycles = static_cast<int>(nFrames) * 256;
 
-    for (int i = 0; samples_generated < renderBufferFrames; i++) {
+    for (int i = 0; sample_write_ptr < renderBufferFrames; i++) {
         if (i > maxCycles) {
             printf("Not enough samples!\n");
             fflush(stdout);
             break;
         }
 
-        int prev_write_ptr = sample_write_ptr;
-
-       for (int j = 0; j < midiQueueCount; j++) {
-           if (!midiQueue[j].processed && midiQueue[j].samplePos <= samples_generated) {
-               postMidiSC55(midiQueue[j].data, midiQueue[j].length);
-               midiQueue[j].processed = true;
-           }
-       }
+        for (int j = 0; j < midiQueueCount; j++) {
+            if (!midiQueue[j].processed && midiQueue[j].samplePos <= sample_write_ptr) {
+                postMidiSC55(midiQueue[j].data, midiQueue[j].length);
+                midiQueue[j].processed = true;
+            }
+        }
 
         if (!mcu.ex_ignore)
             MCU_Interrupt_Handle(this);
@@ -1327,61 +1417,120 @@ void MCU::updateSC55WithSampleRate(float *dataL, float *dataR, unsigned int nFra
         }
 
         MCU_UpdateAnalog(mcu.cycles);
-        
-        // Count samples generated (MCU_PostSample increments sample_write_ptr)
-        if (sample_write_ptr != prev_write_ptr) {
-            // Handle wraparound
-            if (sample_write_ptr > prev_write_ptr) {
-                samples_generated += (sample_write_ptr - prev_write_ptr);
-            } else {
-                samples_generated += (audio_buffer_size - prev_write_ptr) + sample_write_ptr;
-            }
-        }
     }
 
-    // Copy samples from circular buffer to output, handling wraparound
-    int frames_to_copy = (renderBufferFrames < static_cast<int>(nFrames)) ? renderBufferFrames : static_cast<int>(nFrames);
-    
-#ifdef DEBUG
-    static int copy_debug_count = 0;
-    bool should_debug = (copy_debug_count < 5) || (copy_debug_count >= 750 && copy_debug_count < 760);
-    if (should_debug) {
-        copy_debug_count++;
-        fprintf(stderr, "[Drumpler] MCU updateSC55 COPY: renderBufferFrames=%d nFrames=%u frames_to_copy=%d samples_generated=%d\n",
-                renderBufferFrames, nFrames, frames_to_copy, samples_generated);
-        fprintf(stderr, "[Drumpler] MCU buffer: start_write_ptr=%d current_write_ptr=%d\n",
-                start_write_ptr, sample_write_ptr);
-        fflush(stderr);
-    } else {
-        copy_debug_count++;
-    }
-#endif
-    
-    // Copy from circular buffer, accounting for wraparound
-    int read_ptr = start_write_ptr;
-    for (int i = 0; i < frames_to_copy; ++i) {
-        dataL[i] = sample_buffer_l[read_ptr];
-        dataR[i] = sample_buffer_r[read_ptr];
-        read_ptr = (read_ptr + 1) % audio_buffer_size;
-        
-#ifdef DEBUG
-        if (should_debug && i < 10) {
-            if (fabsf(dataL[i]) > 0.0001f || fabsf(dataR[i]) > 0.0001f) {
-                fprintf(stderr, "[Drumpler] Sample[%d]: L=%f R=%f (from buffer[%d])\n", 
-                        i, dataL[i], dataR[i], (read_ptr - 1 + audio_buffer_size) % audio_buffer_size);
-                fflush(stderr);
-            }
+#ifdef AUDIO_DEBUG
+    g_audio_debug_counter++;
+    if (g_audio_debug_counter % AUDIO_DEBUG_INTERVAL == 1) {
+        AudioStats pre_l, pre_r;
+        pre_l.reset(); pre_r.reset();
+        for (int i = 0; i < sample_write_ptr; i++) {
+            pre_l.accumulate(sample_buffer_l[i]);
+            pre_r.accumulate(sample_buffer_r[i]);
         }
+#ifdef USE_LIBRESAMPLE
+        fprintf(stderr, "\n[AUDIO_DEBUG] === Call #%d === nFrames=%u destRate=%d renderBufFrames=%d written=%d error=%.4f\n",
+                g_audio_debug_counter, nFrames, destSampleRate, renderBufferFrames, sample_write_ptr, samplesError);
+#else
+        fprintf(stderr, "\n[AUDIO_DEBUG] === Call #%d === nFrames=%u destRate=%d renderBufFrames=%d written=%d phase=%.6f\n",
+                g_audio_debug_counter, nFrames, destSampleRate, renderBufferFrames, sample_write_ptr, resample_phase);
 #endif
+        pre_l.print("64kHz_L");
+        pre_r.print("64kHz_R");
+
+        fprintf(stderr, "  [64kHz_L first8]");
+        for (int i = 0; i < 8 && i < sample_write_ptr; i++)
+            fprintf(stderr, " %.6f", sample_buffer_l[i]);
+        fprintf(stderr, "\n");
     }
-    
-    // Fill remaining with silence if needed
-    for (unsigned int i = frames_to_copy; i < nFrames; ++i) {
-        dataL[i] = 0.0f;
-        dataR[i] = 0.0f;
+#endif
+
+    // ===== Resample 64kHz → destSampleRate =====
+
+#ifdef USE_LIBRESAMPLE
+    // Streaming sinc resampler (matches JUCE plugin)
+    const double ratio = static_cast<double>(destSampleRate) / 64000.0;
+    if (savedDestSampleRate != destSampleRate) {
+        savedDestSampleRate = destSampleRate;
+        if (resampleL) resample_close(resampleL);
+        if (resampleR) resample_close(resampleR);
+        resampleL = resample_open(1, ratio, ratio);
+        resampleR = resample_open(1, ratio, ratio);
+        samplesError = 0.0;
     }
+
+    int inUsedL = 0, inUsedR = 0;
+    int outL = resample_process(resampleL, ratio, sample_buffer_l, renderBufferFrames,
+                                0, &inUsedL, dataL, static_cast<int>(nFrames));
+    int outR = resample_process(resampleR, ratio, sample_buffer_r, renderBufferFrames,
+                                0, &inUsedR, dataR, static_cast<int>(nFrames));
 
     samplesError += currentError;
+    if (inUsedL == 0 || inUsedR == 0) {
+        samplesError = 0.0;
+    }
+
+    for (int i = outL; i < static_cast<int>(nFrames); ++i) dataL[i] = 0.0f;
+    for (int i = outR; i < static_cast<int>(nFrames); ++i) dataR[i] = 0.0f;
+
+#else
+    // Persistent-phase linear interpolation resampler
+    // - No malloc, no stack allocation (embedded-safe)
+    // - resample_phase carries fractional position between calls
+    // - No error accumulator needed (phase handles drift naturally)
+    // - No periodic silence dropouts
+    {
+        double phase = resample_phase;
+        const int inputLen = sample_write_ptr;  // actual samples generated
+        const int outputLen = static_cast<int>(nFrames);
+        int outCount = 0;
+
+        for (int i = 0; i < outputLen; ++i) {
+            const int idx = static_cast<int>(phase);
+            if (idx + 1 >= inputLen) {
+                // Should not happen with correct renderBufferFrames calculation
+                break;
+            }
+            const float frac = static_cast<float>(phase - idx);
+            dataL[i] = sample_buffer_l[idx] + frac * (sample_buffer_l[idx + 1] - sample_buffer_l[idx]);
+            dataR[i] = sample_buffer_r[idx] + frac * (sample_buffer_r[idx + 1] - sample_buffer_r[idx]);
+            phase += step;
+            outCount++;
+        }
+
+        // Fill any remaining (shouldn't happen normally)
+        for (int i = outCount; i < outputLen; ++i) {
+            dataL[i] = 0.0f;
+            dataR[i] = 0.0f;
+        }
+
+        // Update persistent phase: subtract consumed integer samples
+        // Next call starts from the fractional remainder
+        int consumed = static_cast<int>(std::floor(phase));
+        resample_phase = phase - static_cast<double>(consumed);
+
+#ifdef AUDIO_DEBUG
+        if (g_audio_debug_counter % AUDIO_DEBUG_INTERVAL == 1) {
+            fprintf(stderr, "  [Resample] step=%.6f outCount=%d/%d phase_in=%.6f phase_out=%.6f consumed=%d\n",
+                    step, outCount, outputLen, resample_phase + consumed - phase + resample_phase, resample_phase, consumed);
+            AudioStats out_l, out_r;
+            out_l.reset(); out_r.reset();
+            for (int j = 0; j < outputLen; j++) {
+                out_l.accumulate(dataL[j]);
+                out_r.accumulate(dataR[j]);
+            }
+            out_l.print("Output_L");
+            out_r.print("Output_R");
+
+            fprintf(stderr, "  [Output_L first8]");
+            for (int j = 0; j < 8 && j < outputLen; j++)
+                fprintf(stderr, " %.6f", dataL[j]);
+            fprintf(stderr, "\n");
+            fflush(stderr);
+        }
+#endif
+    }
+#endif
 
     // Flush the midi buffer
     for (int i = 0; i < midiQueueCount; i++) {
@@ -1426,6 +1575,9 @@ void MCU::SC55_Reset() {
     mcu_timer.TIMER_Reset();
 
     sample_write_ptr = 0;
+#ifndef USE_LIBRESAMPLE
+    resample_phase = 0.0;
+#endif
 }
 
 void MCU::postMidiSC55(const uint8_t* message, int length) {
