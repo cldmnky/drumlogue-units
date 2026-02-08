@@ -47,32 +47,22 @@ __attribute__((used, visibility("default"))) uint32_t perfmon_get_frame_count(ui
 // ---- Callback entry points from drumlogue runtime ----------------------------------------------
 
 __unit_callback int8_t unit_init(const unit_runtime_desc_t * desc) {
+#ifdef DEBUG
   fprintf(stderr, "[Drumpler] unit_init() called\n");
   fflush(stderr);
+#endif
   
-  if (!desc) {
-    fprintf(stderr, "[Drumpler] unit_init: desc is NULL\n");
+  if (!desc)
     return k_unit_err_undef;
-  }
 
-  if (desc->target != unit_header.target) {
-    fprintf(stderr, "[Drumpler] unit_init: target mismatch\n");
+  if (desc->target != unit_header.target)
     return k_unit_err_target;
-  }
-  if (!UNIT_API_IS_COMPAT(desc->api)) {
-    fprintf(stderr, "[Drumpler] unit_init: API version mismatch\n");
+
+  if (!UNIT_API_IS_COMPAT(desc->api))
     return k_unit_err_api_version;
-  }
 
   s_runtime_desc = *desc;
-
-  fprintf(stderr, "[Drumpler] unit_init: calling s_synth_instance.Init()\n");
-  fflush(stderr);
-  int8_t result = s_synth_instance.Init(desc);
-  fprintf(stderr, "[Drumpler] unit_init: Init() returned %d\n", result);
-  fflush(stderr);
-  
-  return result;
+  return s_synth_instance.Init(desc);
 }
 
 __unit_callback void unit_teardown() {

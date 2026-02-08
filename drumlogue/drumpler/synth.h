@@ -87,7 +87,8 @@ class Synth {
         last_note_(60),
         last_velocity_(100),
         silence_frames_(0),
-        is_idle_(true) {}
+        is_idle_(true),
+        warmup_remaining_(0) {}
   ~Synth(void) {}
 
   inline int8_t Init(const unit_runtime_desc_t * desc) {
@@ -100,60 +101,23 @@ class Synth {
       return k_unit_err_geometry;
 
 #ifdef DRUMPLER_ROM_EMBEDDED
+#ifdef DEBUG
     fprintf(stderr, "[Drumpler] Initializing with embedded ROM (%u bytes)\n", g_drumpler_rom_size);
+    fflush(stderr);
+#endif
     // Initialize emulator with embedded ROM
     if (!emulator_.Init(g_drumpler_rom, g_drumpler_rom_size)) {
+#ifdef DEBUG
       fprintf(stderr, "[Drumpler] ERROR: Emulator init failed!\n");
+#endif
       return k_unit_err_memory;  // Failed to initialize emulator
     }
     
-    // Warmup: Let emulator boot by rendering silent frames
-    // The MCU needs ~2 seconds of cycles to fully initialize
-    fprintf(stderr, "[Drumpler] Warming up emulator (this may take a moment)...\n");
-    fflush(stderr);
-    float warmup_l[128];
-    float warmup_r[128];
-    const int warmup_iterations = 500;  // ~1.3 seconds @ 48kHz (500 * 128 frames)
-    
-    // Send a test note halfway through warmup to prime the audio engine
-    bool found_audio = false;
-    for (int i = 0; i < warmup_iterations; ++i) {
-      if (i == warmup_iterations / 2) {
-        fprintf(stderr, "[Drumpler] Sending test note to prime audio engine...\n");
-        fflush(stderr);
-        emulator_.NoteOn(0, 60, 100);   // Test note on channel 0
-      }
-      
-      emulator_.Render(warmup_l, warmup_r, 128);
-      
-      // Check for audio 5 frames after test note
-      if (i == (warmup_iterations / 2) + 5 && !found_audio) {
-        float max_val = 0.0f;
-        for (int j = 0; j < 128; ++j) {
-          float abs_l = fabsf(warmup_l[j]);
-          float abs_r = fabsf(warmup_r[j]);
-          if (abs_l > max_val) max_val = abs_l;
-          if (abs_r > max_val) max_val = abs_r;
-        }
-        fprintf(stderr, "[Drumpler] Audio check (5 frames after note): max=%f\n", max_val);
-        fflush(stderr);
-        if (max_val > 0.0001f) {
-          found_audio = true;
-          fprintf(stderr, "[Drumpler] SUCCESS: Audio engine is producing sound!\n");
-          fflush(stderr);
-        }
-      }
-      
-      if (i == (warmup_iterations / 2) + 10) {
-        emulator_.NoteOff(0, 60);       // Release after 10 frames
-      }
-    }
-    fprintf(stderr, "[Drumpler] Warmup complete\n");
-    fflush(stderr);
-    
+    // Deferred warmup: MCU firmware boots progressively during first Render() calls.
+    // This avoids blocking unit_init() for 10+ seconds which causes drumlogue to hang.
+    // ApplyAllParams() is called automatically when warmup completes in Render().
+    warmup_remaining_ = 64000;  // ~1.3s of 48kHz frames for MCU firmware boot
     initialized_ = true;
-    fprintf(stderr, "[Drumpler] Emulator initialized successfully\n");
-    ApplyAllParams();
   #ifdef PERF_MON
     PERF_MON_INIT();
     perf_render_total_ = PERF_MON_REGISTER("RenderTotal");
@@ -161,7 +125,9 @@ class Synth {
     perf_interleave_ = PERF_MON_REGISTER("Interleave");
   #endif
 #else
+#ifdef DEBUG
     fprintf(stderr, "[Drumpler] ERROR: DRUMPLER_ROM_EMBEDDED not defined!\n");
+#endif
     // Without embedded ROM, unit is non-functional
     initialized_ = false;
 #endif
@@ -198,10 +164,12 @@ class Synth {
   fast_inline void Render(float * out, size_t frames) {
     if (!initialized_ || frames == 0) {
       // Output silence if not initialized
+#ifdef DEBUG
       static int warn_count = 0;
       if (warn_count++ < 5) {
         fprintf(stderr, "[Drumpler] Render: outputting silence (initialized=%d, frames=%zu)\n", initialized_, frames);
       }
+#endif
     #ifdef USE_NEON
       drumpler::neon::ClearBuffer(out, static_cast<uint32_t>(frames * 2));
     #else
@@ -210,6 +178,29 @@ class Synth {
       for (; out_p != out_e; out_p += 2) {
         out_p[0] = 0.0f;
         out_p[1] = 0.0f;
+      }
+    #endif
+      return;
+    }
+
+    // Deferred warmup: boot MCU firmware progressively during first render calls
+    if (warmup_remaining_ > 0) {
+      static float warmup_l[128], warmup_r[128];
+      const uint32_t chunk = (frames < 128) ? static_cast<uint32_t>(frames) : 128;
+      emulator_.Render(warmup_l, warmup_r, chunk);
+      warmup_remaining_ -= static_cast<int32_t>(frames);
+      if (warmup_remaining_ <= 0) {
+        // MCU firmware booted — apply initial parameters
+        ApplyAllParams();
+      }
+    #ifdef USE_NEON
+      drumpler::neon::ClearBuffer(out, static_cast<uint32_t>(frames * 2));
+    #else
+      float * __restrict clr_p = out;
+      const float * clr_e = clr_p + (frames << 1);
+      for (; clr_p != clr_e; clr_p += 2) {
+        clr_p[0] = 0.0f;
+        clr_p[1] = 0.0f;
       }
     #endif
       return;
@@ -606,6 +597,9 @@ class Synth {
   uint8_t last_velocity_;
   mutable char param_str_[16];
   mutable char preset_str_[16];
+  
+  // Deferred warmup state
+  int32_t warmup_remaining_;     // >0: MCU firmware still booting in Render()
   
   // Idle detection to reduce CPU load when silent
   uint32_t silence_frames_;      // Count consecutive silent frames
