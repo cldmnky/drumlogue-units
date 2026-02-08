@@ -34,6 +34,9 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
+#ifdef USE_NEON
+#include <arm_neon.h>
+#endif
 #include "mcu.h"
 #include "mcu_interrupt.h"
 #include "pcm.h"
@@ -312,6 +315,35 @@ inline uint32_t addclip20(uint32_t add1, uint32_t add2, uint32_t cin)
 inline int32_t multi(int32_t val1, int8_t val2)
 {
     return sx20(val1) * val2;
+}
+
+static inline void PCM_PanRcMix(int32_t sample, int pan, int rc,
+                                int* sampl, int* sampr, int* rc0, int* rc1)
+{
+    // Pack the four signed coefficients and multiply in one step when NEON is available.
+    const int8_t pan_l = static_cast<int8_t>((pan >> 8) & 0xff);
+    const int8_t pan_r = static_cast<int8_t>(pan & 0xff);
+    const int8_t rc_l = static_cast<int8_t>((rc >> 8) & 0xff);
+    const int8_t rc_r = static_cast<int8_t>(rc & 0xff);
+#ifdef USE_NEON
+    int8_t coeffs[8] = {pan_l, pan_r, rc_l, rc_r, 0, 0, 0, 0};
+    const int8x8_t coeff8 = vld1_s8(coeffs);
+    const int16x8_t coeff16 = vmovl_s8(coeff8);
+    const int32x4_t coeff32 = vmovl_s16(vget_low_s16(coeff16));
+    const int32x4_t svec = vdupq_n_s32(sx20(sample));
+    const int32x4_t mul = vmulq_s32(svec, coeff32);
+    int32_t out[4];
+    vst1q_s32(out, mul);
+    *sampl = out[0];
+    *sampr = out[1];
+    *rc0 = out[2] >> 5;
+    *rc1 = out[3] >> 5;
+#else
+    *sampl = multi(sample, pan_l);
+    *sampr = multi(sample, pan_r);
+    *rc0 = multi(sample, rc_l) >> 5;
+    *rc1 = multi(sample, rc_r) >> 5;
+#endif
 }
 
 static const int interp_lut[3][128] = {
@@ -1382,11 +1414,11 @@ void Pcm::PCM_Update(uint64_t cycles)
             int pan = active ? ram2[1] : 0;
             int rc = active ? ram2[2] : 0;
 
-            int sampl = multi(sample3, (pan >> 8) & 255);
-            int sampr = multi(sample3, (pan >> 0) & 255);
-
-            int rc0 = multi(sample3, (rc >> 8) & 255) >> 5; // reverb
-            int rc1 = multi(sample3, (rc >> 0) & 255) >> 5; // chorus
+            int sampl = 0;
+            int sampr = 0;
+            int rc0 = 0;
+            int rc1 = 0;
+            PCM_PanRcMix(sample3, pan, rc, &sampl, &sampr, &rc0, &rc1);
             
             // mix reverb/chorus?
             int slot2 = (slot == reg_slots - 1) ? 31 : slot + 1;

@@ -1018,14 +1018,16 @@ void MCU::MCU_Write16(uint32_t address, uint16_t value)
 
 void MCU::MCU_ReadInstruction(void)
 {
-    uint8_t operand = MCU_ReadCodeAdvance();
+    // Tighten the hot instruction loop by avoiding extra helper calls.
+    mcu_t& state = mcu;
+    const uint32_t address = (static_cast<uint32_t>(state.cp) << 16) | state.pc;
+    const uint8_t operand = MCU_Read(address);
+    state.pc++;
 
     MCU_Operand_Table[operand](this, operand);
 
-    if (mcu.sr & STATUS_T)
-    {
+    if (state.sr & STATUS_T)
         MCU_Interrupt_Exception(this, EXCEPTION_SOURCE_TRACE);
-    }
 }
 
 void MCU::MCU_Init(void)

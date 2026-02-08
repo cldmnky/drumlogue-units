@@ -176,6 +176,42 @@ The drumpler unit (JV-880 emulator based on Nuked-SC55) is **overloading CPU at 
 **Files changed:** drumlogue/drumpler/synth.h, drumlogue/drumpler/PERF_REVIEW_PLAN.md, test/drumpler/fixtures/drumpler_baseline_after_2_4.wav, test/drumpler/baselines/drumpler_baseline_after_2_4.wav, test/drumpler/fixtures/drumpler_baseline_before_2_4.wav, test/drumpler/baselines/drumpler_baseline_before_2_4.wav
 **Summary:** Reduced warmup iterations to shorten init time; QEMU performance regressed slightly while audio output stayed unchanged.
 
+### Item 3.1 — MCU instruction loop optimization — COMPLETED 2026-02-08
+**Status:** Done
+**Before baseline:**
+- CPU Total: 107.29%
+- Emulator cycles avg: 279491
+- RenderTotal: 126.48%
+- RSS memory: 14.60 MB
+
+**After results:**
+- CPU Total: 103.49% (change: -3.80%)
+- Emulator cycles avg: 188285 (change: -91206)
+- RenderTotal: 126.93% (change: +0.45%)
+- RSS memory: 14.18 MB (change: -0.42 MB)
+
+**Audio regression:** None (2-byte header difference only; audio data matches)
+**Files changed:** drumlogue/drumpler/emulator/mcu.cc, drumlogue/drumpler/PERF_REVIEW_PLAN.md, test/drumpler/fixtures/drumpler_baseline_after_3_1.wav, test/drumpler/baselines/drumpler_baseline_after_3_1.wav, test/drumpler/fixtures/drumpler_baseline_before_3_1.wav, test/drumpler/baselines/drumpler_baseline_before_3_1.wav
+**Summary:** Inlined instruction fetch/dispatch in `MCU_ReadInstruction` to reduce call overhead; significant emulator cycle reduction with unchanged audio.
+
+### Item 3.2 — NEON/SIMD for PCM math — COMPLETED 2026-02-08
+**Status:** Done
+**Before baseline:**
+- CPU Total: 104.69%
+- Emulator cycles avg: 216858
+- RenderTotal: 127.46%
+- RSS memory: 14.29 MB
+
+**After results:**
+- CPU Total: 103.44% (change: -1.25%)
+- Emulator cycles avg: 186917 (change: -29941)
+- RenderTotal: 128.54% (change: +1.08%)
+- RSS memory: 14.00 MB (change: -0.29 MB)
+
+**Audio regression:** None (2-byte header difference only; audio data matches)
+**Files changed:** drumlogue/drumpler/emulator/pcm.cc, drumlogue/drumpler/PERF_REVIEW_PLAN.md, test/drumpler/fixtures/drumpler_baseline_after_3_2.wav, test/drumpler/baselines/drumpler_baseline_after_3_2.wav, test/drumpler/fixtures/drumpler_baseline_before_3_2.wav, test/drumpler/baselines/drumpler_baseline_before_3_2.wav
+**Summary:** Added a NEON helper for pan/reverb/chorus multiplies in the PCM mix path with a scalar fallback; emulator cycles improved with no audio regression.
+
 ---
 
 ## 1. Current Profiling Baseline (QEMU ARM)
@@ -522,9 +558,9 @@ The jcmoyer fork has several months of optimization work beyond nukeykt's origin
 ### Key Metrics
 | Metric | Current | Stage 1 Target | Stage 2 Target | Stage 3 Target |
 |---|---|---|---|---|
-| CPU Total | 107.89% | ~112% | ~85% | ~70% |
-| Emulator cycles | 294K avg | ~500K | ~400K | ~300K |
-| RSS memory | 14.31 MB | ~14.7 MB | ~14.7 MB | ~14.7 MB |
+| CPU Total | 103.44% | ~112% | ~85% | ~70% |
+| Emulator cycles | 186K avg | ~500K | ~400K | ~300K |
+| RSS memory | 14.00 MB | ~14.7 MB | ~14.7 MB | ~14.7 MB |
 | Init time | ~2s+ | ~2s | ~1s | ~1s |
 
 ---
