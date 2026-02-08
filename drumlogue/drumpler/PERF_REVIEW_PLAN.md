@@ -6,6 +6,106 @@ The drumpler unit (JV-880 emulator based on Nuked-SC55) is **overloading CPU at 
 
 ---
 
+## Progress Log
+
+### Item 1.1 — Remove unconditional -DDEBUG — COMPLETED 2026-02-08
+**Status:** Done
+**Before baseline:**
+- CPU Total: 103.83%
+- Emulator cycles avg: 196767
+- RenderTotal: 122.19%
+- RSS memory: 14.36 MB
+
+**After results:**
+- CPU Total: 104.73% (change: +0.90%)
+- Emulator cycles avg: 218272 (change: +21505)
+- RenderTotal: 123.01% (change: +0.82%)
+- RSS memory: 14.58 MB (change: +0.22 MB)
+
+**Audio regression:** None (byte-level diff only at header; audio data matches)
+**Files changed:** drumlogue/drumpler/config.mk, drumlogue/drumpler/PERF_REVIEW_PLAN.md
+**Summary:** Made DEBUG conditional on build flag; no performance win in QEMU, slight regression in CPU/cycle metrics.
+
+### Item 1.2 — Guard unit_note_on fprintf with DEBUG — COMPLETED 2026-02-08
+**Status:** Done
+**Before baseline:**
+- CPU Total: 104.73%
+- Emulator cycles avg: 218272
+- RenderTotal: 123.01%
+- RSS memory: 14.58 MB
+
+**After results:**
+- CPU Total: 105.89% (change: +1.16%)
+- Emulator cycles avg: 246124 (change: +27852)
+- RenderTotal: 124.42% (change: +1.41%)
+- RSS memory: 14.58 MB (change: +0.00 MB)
+
+**Audio regression:** None (2-byte header difference only; audio data matches)
+**Files changed:** drumlogue/drumpler/unit.cc, drumlogue/drumpler/PERF_REVIEW_PLAN.md
+**Summary:** Guarded note-on logging with DEBUG; no performance improvement in QEMU and slight regression in cycle metrics.
+
+### Item 1.3 — Reduce audio_buffer_size to 1024 — COMPLETED 2026-02-08
+**Status:** Done
+**Before baseline:**
+- CPU Total: 105.89%
+- Emulator cycles avg: 246124
+- RenderTotal: 124.42%
+- RSS memory: 14.58 MB
+
+**After results:**
+- CPU Total: 107.46% (change: +1.57%)
+- Emulator cycles avg: 283898 (change: +37774)
+- RenderTotal: 124.45% (change: +0.03%)
+- RSS memory: 14.85 MB (change: +0.27 MB)
+
+**Audio regression:** None (byte-level header difference only; audio data matches)
+**Files changed:** drumlogue/drumpler/emulator/mcu.h, drumlogue/drumpler/PERF_REVIEW_PLAN.md
+**Summary:** Reduced internal audio buffer size to 1024 frames; QEMU metrics regressed slightly while RSS increased.
+
+### Item 1.4 — Use ROM2_SIZE_JV880 for rom2 array — COMPLETED 2026-02-08
+**Status:** Done
+**Before baseline:**
+- CPU Total: 107.64%
+- Emulator cycles avg: 287995
+- RenderTotal: 124.89%
+- RSS memory: 14.54 MB
+
+**After results:**
+- CPU Total: 108.37% (change: +0.73%)
+- Emulator cycles avg: 305520 (change: +17525)
+- RenderTotal: 125.46% (change: +0.57%)
+- RSS memory: 14.45 MB (change: -0.09 MB)
+
+**Audio regression:** None (byte-level header difference only; audio data matches)
+**Files changed:** drumlogue/drumpler/emulator/mcu.h, drumlogue/drumpler/PERF_REVIEW_PLAN.md
+**Summary:** Shrunk ROM2 buffer to JV-880 size and aligned mask; QEMU CPU/cycles regressed slightly while RSS decreased.
+
+### Item 1.5 — Guard unit_render fprintf with DEBUG — COMPLETED 2026-02-08
+**Status:** Done
+**Before baseline:**
+- CPU Total: 108.37%
+- Emulator cycles avg: 305520
+- RenderTotal: 125.46%
+- RSS memory: 14.45 MB
+
+**After results:**
+- CPU Total: 109.10% (change: +0.73%)
+- Emulator cycles avg: 322478 (change: +16958)
+- RenderTotal: 130.14% (change: +4.68%)
+- RSS memory: 14.67 MB (change: +0.22 MB)
+
+**Audio regression:** None (byte-level header difference only; audio data matches)
+**Files changed:** drumlogue/drumpler/unit.cc, drumlogue/drumpler/PERF_REVIEW_PLAN.md
+**Summary:** Guarded unit_render debug logging with DEBUG; QEMU cycle metrics regressed and RSS increased slightly.
+
+### Stage 1 Summary — COMPLETED 2026-02-08
+**Start baseline (Item 1.1 before):** CPU 103.83%, Emulator 196767, RenderTotal 122.19%, RSS 14.36 MB
+**End result (Item 1.5 after):** CPU 109.10%, Emulator 322478, RenderTotal 130.14%, RSS 14.67 MB
+**Net change:** CPU +5.27%, Emulator +125711, RenderTotal +7.95%, RSS +0.31 MB
+**Notes:** All Stage 1 changes removed blocking debug I/O but regressed QEMU metrics; audio output unchanged.
+
+---
+
 ## 1. Current Profiling Baseline (QEMU ARM)
 
 | Metric | Value |
@@ -350,9 +450,9 @@ The jcmoyer fork has several months of optimization work beyond nukeykt's origin
 ### Key Metrics
 | Metric | Current | Stage 1 Target | Stage 2 Target | Stage 3 Target |
 |---|---|---|---|---|
-| CPU Total | 116.96% | ~112% | ~85% | ~70% |
-| Emulator cycles | 512K avg | ~500K | ~400K | ~300K |
-| RSS memory | 15.25 MB | ~14.7 MB | ~14.7 MB | ~14.7 MB |
+| CPU Total | 109.10% | ~112% | ~85% | ~70% |
+| Emulator cycles | 322K avg | ~500K | ~400K | ~300K |
+| RSS memory | 14.67 MB | ~14.7 MB | ~14.7 MB | ~14.7 MB |
 | Init time | ~2s+ | ~2s | ~1s | ~1s |
 
 ---

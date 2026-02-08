@@ -1,5 +1,5 @@
 ---
-agent: 'agent'
+agent: 'drumlogue-dsp-expert'
 model: Auto
 tools: ['vscode/runCommand', 'vscode/askQuestions', 'execute', 'read', 'agent', 'edit', 'search', 'web', 'tavily/*', 'ms-vscode.vscode-websearchforcopilot/websearch', 'todo']
 description: 'Implement performance enhancements from drumpler PERF_REVIEW_PLAN.md with before/after profiling and regression testing'

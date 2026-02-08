@@ -79,4 +79,7 @@ ifeq ($(PERF_MON),1)
 		UDEFS += -D__QEMU_ARM__
 	endif
 endif
-UDEFS += -DDEBUG
+
+ifeq ($(DEBUG),1)
+	UDEFS += -DDEBUG
+endif

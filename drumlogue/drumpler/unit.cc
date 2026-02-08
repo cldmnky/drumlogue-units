@@ -92,11 +92,14 @@ __unit_callback void unit_suspend() {
 }
 
 __unit_callback void unit_render(const float * in, float * out, uint32_t frames) {
+  // Guard debug logging to avoid blocking I/O on the realtime thread.
+#ifdef DEBUG
   static int render_count = 0;
   if (render_count++ < 3) {
     fprintf(stderr, "[Drumpler] unit_render() called: frames=%u\n", frames);
     fflush(stderr);
   }
+#endif
   (void)in;
   s_synth_instance.Render(out, frames);
 }
@@ -124,8 +127,11 @@ __unit_callback void unit_set_tempo(uint32_t tempo) {
 }
 
 __unit_callback void unit_note_on(uint8_t note, uint8_t velocity) {
+  // Guard debug logging to avoid blocking I/O on the realtime thread.
+#ifdef DEBUG
   fprintf(stderr, "[Drumpler] unit_note_on: note=%u vel=%u\n", note, velocity);
   fflush(stderr);
+#endif
   s_synth_instance.NoteOn(note, velocity);
 }
 

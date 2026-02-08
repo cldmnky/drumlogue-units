@@ -282,7 +282,8 @@ static const int CARDRAM_SIZE = 0x8000; // JV880 only
 static const int ROMSM_SIZE = 0x1000;
 const uint32_t uart_buffer_size = 8192;
 
-static const int audio_buffer_size = 4096 * 8;
+// Keep a tight render buffer to reduce RAM/cache footprint.
+static const int audio_buffer_size = 1024;
 static const int audio_page_size = 512;
 
 static const int ROM_SET_N_FILES = 6;
@@ -307,13 +308,14 @@ struct MCU {
     mcu_t mcu;
 
     uint8_t rom1[ROM1_SIZE];
-    uint8_t rom2[ROM2_SIZE];
+    // JV-880 uses a 256KB ROM2; keep buffer tight for RAM savings.
+    uint8_t rom2[ROM2_SIZE_JV880];
     uint8_t ram[RAM_SIZE];
     uint8_t sram[SRAM_SIZE];
     uint8_t nvram[NVRAM_SIZE];
     uint8_t cardram[CARDRAM_SIZE];
 
-    int rom2_mask = ROM2_SIZE - 1;
+    int rom2_mask = ROM2_SIZE_JV880 - 1;
 
     float sample_buffer_l[audio_buffer_size] = {0};
     float sample_buffer_r[audio_buffer_size] = {0};
