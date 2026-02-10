@@ -16,6 +16,24 @@ The drumpler unit (JV-880 emulator based on Nuked-SC55) was **overloading CPU at
 
 ## Progress Log
 
+### Item 4.1 — PCM_Update cycle increment reciprocal multiply — COMPLETED 2026-02-10
+**Status:** Done
+**Before baseline:**
+- CPU Total: 79.74%
+- Emulator cycles avg: 864453
+- RenderTotal: 95.71%
+- RSS memory: 12.09 MB
+
+**After results:**
+- CPU Total: 74.78% (change: -4.96%)
+- Emulator cycles avg: 726531 (change: -137922)
+- RenderTotal: 98.82% (change: +3.11%)
+- RSS memory: 13.81 MB (change: +1.72 MB)
+
+**Audio regression:** None (1-byte header difference only; audio data matches)
+**Files changed:** drumlogue/drumpler/emulator/pcm.cc, drumlogue/drumpler/PERF_REVIEW_PLAN.md, test/drumpler/fixtures/drumpler_baseline_before_4_1.wav, test/drumpler/fixtures/drumpler_after_4_1.wav, test/drumpler/baselines/drumpler_baseline_before_4_1.wav, test/drumpler/baselines/drumpler_after_4_1.wav
+**Summary:** Replaced the per-iteration divide in PCM_Update cycle accounting with a fixed-point reciprocal multiply; CPU usage and emulator cycles improved while RenderTotal increased slightly.
+
 ### Item 3.5.1 — Branchless status flag update — REVERTED 2026-02-08
 **Status:** Reverted
 **Before baseline:**
@@ -738,6 +756,7 @@ the config-driven approach would:
 18. ⬜ UART/Analog polling frequency reduction — skip when not needed
 19. ⬜ Reduced internal sample rate (3.4) — risky, up to 2× speedup
 20. ⬜ Adaptive quality reduction under CPU overload
+21. ✅ PCM_Update cycle increment reciprocal multiply (4.1)
 
 ---
 
@@ -757,13 +776,13 @@ the config-driven approach would:
 ### Key Metrics
 | Metric | Initial | Post-Stage 1 | Post-Stage 2 | Post-Stage 3 | Current (post-HW fixes) |
 |---|---|---|---|---|---|
-| CPU Total (QEMU) | 116.96% | ~109% | ~108% | ~100% | ~95% |
-| Emulator cycles avg | 512K | 322K | 294K | 103K | ~4680* |
-| RenderTotal | 124.66% | 130% | 126% | 121% | 95.32% |
-| RSS memory | 15.25 MB | 14.67 MB | 14.31 MB | 14.12 MB | ~14 MB |
+| CPU Total (QEMU) | 116.96% | ~109% | ~108% | ~100% | 74.78% |
+| Emulator cycles avg | 512K | 322K | 294K | 103K | 726531 |
+| RenderTotal | 124.66% | 130% | 126% | 121% | 98.82% |
+| RSS memory | 15.25 MB | 14.67 MB | 14.31 MB | 14.12 MB | 13.81 MB |
 | Init time | 10-20s+ | ~2s | ~2s | ~1s | **0s (deferred)** |
 | Note-on hang | Yes | Yes | Yes | Yes | **Fixed** |
-| Binary size | 4.5 MB | 4.5 MB | 4.5 MB | 4.5 MB | 4.4 MB |
+| Binary size | 4.5 MB | 4.5 MB | 4.5 MB | 4.5 MB | 4.38 MB |
 
 \* QEMU Emulator metric changed measurement methodology between stages; not directly comparable across all columns.
 
