@@ -41,9 +41,7 @@ enum ParamId {
   kParamCutoff,
   kParamResonance,
   kParamAttack,
-  kParamReverb,
   kParamChorus,
-  kParamDelay,
   kParamBlank,
 };
 
@@ -79,9 +77,7 @@ class Synth {
         cutoff_(100),
         resonance_(0),
         attack_(0),
-        reverb_(0),
         chorus_(0),
-        delay_(0),
         preset_index_(0),
         channel_(0),
         last_note_(60),
@@ -374,20 +370,10 @@ class Synth {
           }
         }
         break;
-      case kParamReverb:
-        reverb_ = clamp_int(static_cast<int>(value), 0, 100);
-        // Reverb Level via SysEx Patch Common param (offset 0x0E)
-        emulator_.SendSysexPatchCommonParam(0x0E, PercentToMidi(reverb_));
-        break;
       case kParamChorus:
         chorus_ = clamp_int(static_cast<int>(value), 0, 100);
         // Chorus Level via SysEx Patch Common param (offset 0x12)
         emulator_.SendSysexPatchCommonParam(0x12, PercentToMidi(chorus_));
-        break;
-      case kParamDelay:
-        delay_ = clamp_int(static_cast<int>(value), 0, 100);
-        // Delay Feedback via SysEx Patch Common param (offset 0x10)
-        emulator_.SendSysexPatchCommonParam(0x10, PercentToMidi(delay_));
         break;
       default:
         break;
@@ -412,12 +398,8 @@ class Synth {
         return resonance_;
       case kParamAttack:
         return attack_;
-      case kParamReverb:
-        return reverb_;
       case kParamChorus:
         return chorus_;
-      case kParamDelay:
-        return delay_;
       default:
         break;
     }
@@ -592,9 +574,7 @@ class Synth {
   int cutoff_;
   int resonance_;
   int attack_;
-  int reverb_;
   int chorus_;
-  int delay_;
   uint8_t preset_index_;
   uint8_t channel_;
   uint8_t last_note_;
@@ -643,9 +623,10 @@ class Synth {
     SendCc(7, PercentToMidi(level_));
     SendCc(10, static_cast<uint8_t>(pan_ + 64));
     // SysEx for effects (Patch Common parameters)
-    emulator_.SendSysexPatchCommonParam(0x0E, PercentToMidi(reverb_));   // Reverb Level
+    // Reverb and Delay disabled - use drumlogue's own delay/reverb effects instead
+    emulator_.SendSysexPatchCommonParam(0x0E, 0);                        // Reverb Level OFF
+    emulator_.SendSysexPatchCommonParam(0x10, 0);                        // Delay Feedback OFF
     emulator_.SendSysexPatchCommonParam(0x12, PercentToMidi(chorus_));   // Chorus Level
-    emulator_.SendSysexPatchCommonParam(0x10, PercentToMidi(delay_));    // Delay Feedback
     // SysEx for tone parameters (all 4 tones)
     for (uint8_t t = 0; t < 4; ++t) {
       emulator_.SendSysexPatchToneParam(t, 0x4A, PercentToMidi(cutoff_));     // TVF Cutoff Frequency

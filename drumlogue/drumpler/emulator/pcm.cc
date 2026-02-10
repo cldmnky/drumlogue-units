@@ -48,6 +48,13 @@
 static inline void PCM_UpdateConfig(pcm_t& pcm) {
     // Cache derived config to avoid recomputing in the hot update loop.
     pcm.config.reg_slots = static_cast<uint8_t>((pcm.config_reg_3d & 31) + 1);
+    pcm.config.oversampling = (pcm.config_reg_3c & 0x40) != 0;
+}
+
+uint32_t Pcm::PCM_GetOutputFrequency() const {
+    const uint32_t base_freq = (mcu && mcu->mcu_jv880) ? 64000u : 66207u;
+    const bool oversampling = pcm.enable_oversampling && pcm.config.oversampling;
+    return oversampling ? base_freq : (base_freq / 2u);
 }
 
 Pcm::Pcm(MCU *mcu)
@@ -289,6 +296,7 @@ uint8_t Pcm::PCM_Read(uint32_t address)
 void Pcm::PCM_Reset(void)
 {
     memset(&pcm, 0, sizeof(pcm));
+    pcm.enable_oversampling = false;
     // Initialize voice activity tracking
     for (int i = 0; i < 32; ++i) {
         pcm.voice_idle_frames[i] = 0;
@@ -559,8 +567,8 @@ void Pcm::PCM_Update(uint64_t cycles)
             pcm.ram1[30][5] = addclip20(pcm.accum_r,
                 orval | (shifter & noise_mask), 0);
 
-            // if (pcm.config_reg_3c & 0x40) // oversampling
-            if (true) // oversampling
+            // Gate oversampling to cut PCM output rate when disabled.
+            if (pcm.enable_oversampling && pcm.config.oversampling)
             {
                 pcm.ram2[30][10] = shifter;
 
@@ -1512,7 +1520,7 @@ void Pcm::PCM_Update(uint64_t cycles)
         pcm.nfs = 1;
 
         int cycles = (reg_slots + 1) * 25;
-
-        pcm.cycles += (cycles * 25) / 29;
+        constexpr int kCyclesScaleQ16 = 56497; // round((25.0 / 29.0) * 2^16)
+        pcm.cycles += (static_cast<uint64_t>(cycles) * kCyclesScaleQ16) >> 16;
     }
 }

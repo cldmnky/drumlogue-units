@@ -33,10 +33,10 @@ const __unit_header unit_header_t unit_header = {
         {0, 100, 0, 0, k_unit_param_type_percent, 0, 0, 0, {"RESO"}},
         {0, 100, 0, 0, k_unit_param_type_percent, 0, 0, 0, {"ATTACK"}},
 
-        // Page 3: REVERB / CHORUS / DELAY / (blank)
-        {0, 100, 0, 0, k_unit_param_type_percent, 0, 0, 0, {"REVERB"}},
+        // Page 3: CHORUS / (blanks) - reverb/delay removed, use drumlogue effects
         {0, 100, 0, 0, k_unit_param_type_percent, 0, 0, 0, {"CHORUS"}},
-        {0, 100, 0, 0, k_unit_param_type_percent, 0, 0, 0, {"DELAY"}},
+        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
+        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
         {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
 
         // Page 4-6: empty

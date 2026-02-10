@@ -1410,19 +1410,20 @@ static inline void MCU_Step_Sleep(MCU& self, mcu_t& state) {
 static inline void MCU_UpdateSC55WithSampleRate(MCU& self, float *dataL, float *dataR,
                                                unsigned int nFrames, int destSampleRate) {
     // Resampling architecture:
-    // 1. MCU runs internally at 64kHz, generating samples into sample_buffer_l/r
-    // 2. We resample 64kHz -> destSampleRate (e.g., 48kHz) using interpolation
+    // 1. PCM runs at output_freq (64kHz w/ oversampling, 32kHz without)
+    // 2. We resample output_freq -> destSampleRate (e.g., 48kHz) using interpolation
     //
     // Two paths:
     // - USE_LIBRESAMPLE: streaming sinc resampler with error accumulator (JUCE-compatible)
     // - else: persistent-phase linear interpolation (no malloc, embedded-safe)
 
     mcu_t& state = self.mcu;
-    const double step = 64000.0 / static_cast<double>(destSampleRate);  // ~1.333 for 48kHz
+    const double output_freq = static_cast<double>(self.pcm.PCM_GetOutputFrequency());
+    const double step = output_freq / static_cast<double>(destSampleRate);
 
 #ifdef USE_LIBRESAMPLE
     // --- libresample path: use JUCE-style error accumulator ---
-    double renderBufferFramesFloat = static_cast<double>(nFrames) / destSampleRate * 64000;
+    double renderBufferFramesFloat = static_cast<double>(nFrames) / destSampleRate * output_freq;
     int renderBufferFrames = static_cast<int>(std::ceil(renderBufferFramesFloat));
     double currentError = renderBufferFrames - renderBufferFramesFloat;
 
@@ -1513,7 +1514,7 @@ static inline void MCU_UpdateSC55WithSampleRate(MCU& self, float *dataL, float *
 
 #ifdef USE_LIBRESAMPLE
     // Streaming sinc resampler (matches JUCE plugin)
-    const double ratio = static_cast<double>(destSampleRate) / 64000.0;
+    const double ratio = static_cast<double>(destSampleRate) / output_freq;
     if (self.savedDestSampleRate != destSampleRate) {
         self.savedDestSampleRate = destSampleRate;
         if (self.resampleL) resample_close(self.resampleL);

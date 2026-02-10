@@ -36,6 +36,7 @@
 
 struct pcm_config_t {
     uint8_t reg_slots;
+    bool oversampling;
 };
 
 struct pcm_t {
@@ -52,6 +53,7 @@ struct pcm_t {
     uint8_t config_reg_3c; // SC55:c3 JV880:c0
     uint8_t config_reg_3d;
     pcm_config_t config;
+    bool enable_oversampling; // Runtime toggle to disable oversampling.
     uint32_t irq_channel;
     uint32_t irq_assert;
 
@@ -106,4 +108,5 @@ struct Pcm {
     void PCM_Reset(void);
     void PCM_Update(uint64_t cycles);
     uint8_t PCM_ReadROM(uint32_t address);
+    uint32_t PCM_GetOutputFrequency() const;
 };
