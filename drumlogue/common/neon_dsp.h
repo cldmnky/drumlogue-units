@@ -204,6 +204,72 @@ inline void ClampStereoBuffers(float* left, float* right, float limit, uint32_t 
 #endif
 }
 
+/**
+ * @brief Return the maximum absolute value in a buffer, with optional early-exit.
+ *
+ * When @p threshold > 0, the function returns as soon as any sample exceeds the
+ * threshold (returns the value of that sample, which is >= threshold).  This makes
+ * the "audio is playing" case O(1) instead of O(N) for silence detection.
+ *
+ * Uses NEON vabsq_f32 + vmaxq_f32 when available.
+ */
+inline float MaxAbsBuffer(const float* buffer, uint32_t count, float threshold = 0.0f) {
+#ifdef USE_NEON
+    float32x4_t max_vec = vdupq_n_f32(0.0f);
+    uint32_t i = 0;
+
+    if (threshold > 0.0f) {
+        // Early-exit path: check each 4-wide chunk against threshold
+        float32x4_t thresh_vec = vdupq_n_f32(threshold);
+        for (; i + 4 <= count; i += 4) {
+            float32x4_t s = vld1q_f32(&buffer[i]);
+            float32x4_t a = vabsq_f32(s);
+            max_vec = vmaxq_f32(max_vec, a);
+            // If any lane exceeds threshold, bail out early
+            // Use ARMv7-compatible horizontal OR of comparison lanes
+            uint32x4_t cmp = vcgtq_f32(a, thresh_vec);
+            uint32x2_t cmp_or = vorr_u32(vget_low_u32(cmp), vget_high_u32(cmp));
+            if (vget_lane_u32(cmp_or, 0) | vget_lane_u32(cmp_or, 1)) {
+                // Horizontal max of max_vec
+                float32x2_t hi = vget_high_f32(max_vec);
+                float32x2_t lo = vget_low_f32(max_vec);
+                float32x2_t m2 = vpmax_f32(lo, hi);
+                m2 = vpmax_f32(m2, m2);
+                return vget_lane_f32(m2, 0);
+            }
+        }
+    } else {
+        for (; i + 4 <= count; i += 4) {
+            float32x4_t s = vld1q_f32(&buffer[i]);
+            max_vec = vmaxq_f32(max_vec, vabsq_f32(s));
+        }
+    }
+
+    // Horizontal max
+    float32x2_t hi = vget_high_f32(max_vec);
+    float32x2_t lo = vget_low_f32(max_vec);
+    float32x2_t m2 = vpmax_f32(lo, hi);
+    m2 = vpmax_f32(m2, m2);
+    float result = vget_lane_f32(m2, 0);
+    // Scalar tail
+    for (; i < count; ++i) {
+        float a = buffer[i] < 0.0f ? -buffer[i] : buffer[i];
+        if (a > result) result = a;
+    }
+    return result;
+#else
+    float result = 0.0f;
+    for (uint32_t i = 0; i < count; ++i) {
+        float a = buffer[i] < 0.0f ? -buffer[i] : buffer[i];
+        if (a > result) {
+            result = a;
+            if (threshold > 0.0f && result > threshold) return result;
+        }
+    }
+    return result;
+#endif
+}
+
 inline void SanitizeBuffer(float* buffer, uint32_t frames) {
 #ifdef USE_NEON
     uint32_t i = 0;

@@ -38,6 +38,12 @@ fi
 
 # Convert hyphens to underscores for .drmlgunit filename
 UNIT_FILE_NAME="${UNIT_NAME//-/_}"
+
+# Special case for drumpler (multi-ROM project) - default to internal ROM
+if [ "$UNIT_NAME" = "drumpler" ]; then
+    UNIT_FILE_NAME="drumpler_internal"
+fi
+
 UNIT_FILE="../../drumlogue/${UNIT_NAME}/${UNIT_FILE_NAME}.drmlgunit"
 INPUT_WAV="fixtures/sine_440hz.wav"
 OUTPUT_WAV="build/output_${UNIT_NAME}.wav"
