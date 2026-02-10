@@ -70,6 +70,24 @@ This document presents a new round of optimization proposals informed by:
 **Files changed:** drumlogue/drumpler/emulator/pcm.h, drumlogue/drumpler/emulator/pcm.cc
 **Summary:** Expanded pcm_config_t to cache noise_mask, orval, write_mask, dac_mask computed from PCM configuration registers. Eliminates redundant local variable setup in the hot PCM_Update loop. Primarily a correctness fix that also provides better code organization.
 
+### Item 5.3 — calc_tv nfs-Guarded Writes — SKIPPED 2026-02-10
+**Status:** Reverted (caused regression)
+**Before baseline (from Item 5.2 after):**
+- CPU Total: 40.82%
+- Emulator cycles: 1106422
+- RenderTotal: 67.37% (12632 cycles)
+- RSS memory: 11.82 MB
+
+**After results (with nfs guards):**
+- CPU Total: 75.50% (change: **+34.68% REGRESSION**)
+- Emulator cycles: 746938 (change: -359484)
+- RenderTotal: 101.04% (18945 cycles, change: **+6313 REGRESSION**)
+- RSS memory: 14.14 MB (change: **+2.32 MB REGRESSION**)
+
+**Analysis:** Adding `&& pcm->nfs` guards to calc_tv write paths caused massive performance regression instead of improvement. The nfs (new frame start) flag semantics in our codebase may differ from jcmoyer's implementation, or calc_tv writes are more critical than expected. Needs further investigation before attempting again.
+
+**Decision:** Reverted changes. Skipping Item 5.3 for now. Moving to Item 5.4 (bool typing) which has clearer semantics and lower risk.
+
 ### Audio Budget
 
 The drumlogue delivers audio callbacks at 48 kHz with frame sizes of 32–256 samples. At 256 frames:
