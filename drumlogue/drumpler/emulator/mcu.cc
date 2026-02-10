@@ -1240,7 +1240,9 @@ void MCU::MCU_PostSample(int *sample)
 #endif
     sample_buffer_l[sample_write_ptr] = sample[0] * kInt32ToFloat;
     sample_buffer_r[sample_write_ptr] = sample[1] * kInt32ToFloat;
-    sample_write_ptr = (sample_write_ptr + 1) % audio_buffer_size;
+    // Optimization: Use bitmask instead of modulo (audio_buffer_size is power of 2)
+    // Buffer resets to 0 each render, so this is safe and avoids division
+    sample_write_ptr = (sample_write_ptr + 1) & (audio_buffer_size - 1);
 }
 
 void MCU::MCU_GA_SetGAInt(int line, int value)
