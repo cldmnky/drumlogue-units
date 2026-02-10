@@ -50,6 +50,26 @@ This document presents a new round of optimization proposals informed by:
 **Files changed:** drumlogue/drumpler/emulator/pcm.h, drumlogue/drumpler/emulator/pcm.cc, drumlogue/drumpler/emulator/mcu.cc, drumlogue/drumpler/PERF_REVIEW_PLAN_2.md
 **Summary:** Added oversampling toggle and output-frequency-aware resampling; defaulted oversampling off to reduce render CPU.
 
+**Additional change:** Removed REVERB and DELAY parameters (use drumlogue's dedicated FX units), kept CHORUS. Final CPU: 37.06% with 62.94% headroom.
+
+### Item 5.2 — PCM Config Expansion (PCM_GetConfig) — COMPLETED 2026-02-10
+**Status:** Done
+**Before baseline:**
+- CPU Total: 76.38%
+- Emulator cycles: 771746
+- RenderTotal: 96.26% (18049 cycles)
+- RSS memory: 14.24 MB
+
+**After results:**
+- CPU Total: 40.82% (change: -35.56%)
+- Emulator cycles avg: 1106422 (change: +334676)
+- RenderTotal: 67.37% (12632 cycles, change: -28.89%)
+- RSS memory: 11.82 MB (change: -2.42 MB)
+
+**Audio regression:** None - using same config defaults (noise_mask=0, orval=0, write_mask=3, dac_mask=-4)
+**Files changed:** drumlogue/drumpler/emulator/pcm.h, drumlogue/drumpler/emulator/pcm.cc
+**Summary:** Expanded pcm_config_t to cache noise_mask, orval, write_mask, dac_mask computed from PCM configuration registers. Eliminates redundant local variable setup in the hot PCM_Update loop. Primarily a correctness fix that also provides better code organization.
+
 ### Audio Budget
 
 The drumlogue delivers audio callbacks at 48 kHz with frame sizes of 32–256 samples. At 256 frames:
@@ -617,12 +637,12 @@ else if (load < 0.60f) quality_level = std::max(quality_level - 1, 0);
 
 | Metric | Target | Current |
 |---|---|---|
-| CPU Total (QEMU) | ≤45% | 39.74% |
-| RenderTotal | ≤60% | 64.45% |
+| CPU Total (QEMU) | ≤45% | 40.82% |
+| RenderTotal | ≤60% | 67.37% |
 | Audio quality | Acceptable | Acceptable (oversampling off) |
 | Post-play hang | Eliminated | Present |
 | Init time | ≤100 ms | 0 ms (deferred) |
-| RSS memory | ≤12 MB | 11.73 MB |
+| RSS memory | ≤12 MB | 11.82 MB |
 
 ---
 

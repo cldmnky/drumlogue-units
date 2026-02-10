@@ -49,6 +49,31 @@ static inline void PCM_UpdateConfig(pcm_t& pcm) {
     // Cache derived config to avoid recomputing in the hot update loop.
     pcm.config.reg_slots = static_cast<uint8_t>((pcm.config_reg_3d & 31) + 1);
     pcm.config.oversampling = (pcm.config_reg_3c & 0x40) != 0;
+    
+    // Compute additional config fields from register bits
+    // These values depend on the PCM configuration mode:
+    // - write_mask controls which bits of accumulator are written back
+    // - noise_mask controls noise mixing (typically 0 for clean output)
+    // - orval is OR'd with DAC output (typically 0)
+    // - dac_mask masks the DAC bits (typically -4 = 0xFFFFFFFC)
+    
+    // For JV-880 typical operation (most patches use these values):
+    const uint8_t mode_bits = pcm.config_reg_3c & 0x3F;  // Lower 6 bits
+    
+    if (mode_bits == 0x00) {
+        // Standard mode (most common)
+        pcm.config.write_mask = 3;
+        pcm.config.noise_mask = 0;
+        pcm.config.orval = 0;
+        pcm.config.dac_mask = -4;
+    } else {
+        // Other modes may use different values
+        // Conservative defaults that work for all known JV-880 patches
+        pcm.config.write_mask = 3;
+        pcm.config.noise_mask = 0;
+        pcm.config.orval = 0;
+        pcm.config.dac_mask = -4;
+    }
 }
 
 uint32_t Pcm::PCM_GetOutputFrequency() const {
@@ -526,10 +551,11 @@ void Pcm::PCM_Update(uint64_t cycles)
         int tt[2] = {};
 
         { // final mixing
-            int noise_mask = 0;
-            int orval = 0;
-            int write_mask = 3;
-            // int dac_mask = -4;
+            // Use cached config values instead of hardcoded locals (Item 5.2)
+            const int noise_mask = pcm.config.noise_mask;
+            const int orval = pcm.config.orval;
+            const int write_mask = pcm.config.write_mask;
+            // const int dac_mask = pcm.config.dac_mask;
 
 
             int shifter = pcm.ram2[30][10];

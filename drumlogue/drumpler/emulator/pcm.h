@@ -37,6 +37,11 @@
 struct pcm_config_t {
     uint8_t reg_slots;
     bool oversampling;
+    // Cached config derived from config_reg_3c to avoid recomputation in hot path
+    uint32_t orval;        // OR value for DAC output
+    int dac_mask;          // DAC mask for output
+    uint8_t noise_mask;    // Noise mask for noise shift register
+    uint8_t write_mask;    // Write mask for accumulator writeback
 };
 
 struct pcm_t {
