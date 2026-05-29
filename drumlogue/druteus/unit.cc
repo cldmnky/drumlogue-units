@@ -16,6 +16,7 @@
 #include "unit.h"
 #include "logue_fs.h"
 #include "param_format.h"
+#include "voice_allocator.h"
 #include "../common/stereo_widener.h"
 #include "rings/dsp/fx/reverb.h"
 
@@ -61,7 +62,7 @@ enum {
   param_reverb       = 13,
   param_velocity_curve = 14,
   param_unused_15   = 15,
-  param_solo_mode    = 16,
+  param_unused_16    = 16,
   param_unused_17    = 17,
   param_unused_18    = 18,
   param_unused_19    = 19,
@@ -89,7 +90,7 @@ static const int32_t kParamDefaults[param_num] = {
   0,    // REVERB: off
   0,    // V.CURVE: linear
   0,    // unused (was DELAY)
-  0,    // SOLO: polyphonic
+  0,    // unused (was SOLO)
   0,    // unused
   0,    // unused
   0,    // unused
@@ -147,6 +148,9 @@ static float                    fx_buf_l[256];  // de-interleave temp
 static float                    fx_buf_r[256];
 static uint64_t                 sample_count  = 0;
 static uint16_t                 last_pitch_bend = 8192;
+
+// Voice allocator for polyphony management.
+static common::VoiceAllocatorCore voice_allocator;
 
 // ADSR envelope state.
 static bool     env_active           = false;
@@ -245,6 +249,7 @@ static float s_apply_velocity_curve(uint8_t velocity) {
 static void s_trigger_note(uint8_t note, uint8_t velocity) {
   if (soundfont == nullptr)
     return;
+  
   int8_t transpose = (int8_t)Params[param_transpose];
   int adjusted = (int)note + transpose;
   if (adjusted < 0)   adjusted = 0;
@@ -252,16 +257,19 @@ static void s_trigger_note(uint8_t note, uint8_t velocity) {
 
   float vel = s_apply_velocity_curve(velocity);
 
-  if (Params[param_solo_mode]) {
-    tsf_channel_note_off_all(soundfont, 0);
-    active_notes = 1;
-  } else {
-    active_notes++;
+  common::NoteOnResult result = voice_allocator.NoteOn(note, velocity);
+  if (result.voice_index < 0)
+    return;
+
+  // Count active notes from allocator.
+  active_notes = 0;
+  for (uint8_t i = 0; i < voice_allocator.GetMaxVoices(); ++i) {
+    if (voice_allocator.GetVoice(i).active)
+      active_notes++;
   }
 
-  // Only retrigger envelope for the first note in polyphonic mode,
-  // or every note in solo mode.
-  if (active_notes == 1 || Params[param_solo_mode]) {
+  // Only retrigger envelope for the first note.
+  if (active_notes == 1) {
     env_active             = true;
     env_note_on_sample     = sample_count;
     env_note_off_sample    = 0;
@@ -305,6 +313,11 @@ __unit_callback int8_t unit_init(const unit_runtime_desc_t *desc) {
   reverb_dsp.set_time(0.5f);
   reverb_dsp.set_diffusion(0.625f);
   reverb_dsp.set_lp(0.7f);
+
+  // Init voice allocator with default polyphony (16 voices).
+  voice_allocator.Init(16);
+  voice_allocator.SetMode(common::VoiceMode::Polyphonic);
+  voice_allocator.SetAllocationStrategy(common::VoiceAllocationStrategy::OldestNote);
 
   sample_count    = 0;
   last_pitch_bend = 8192;
@@ -658,7 +671,10 @@ __unit_callback void unit_set_param_value(uint8_t index, int32_t value) {
 
     case param_max_voices:
       if (value < 1)  value = 1;
-      if (value > 32) value = 32;
+      if (value > 16) value = 16;  // VoiceAllocatorCore supports max 16
+      voice_allocator.Init((uint8_t)value);
+      voice_allocator.SetMode(common::VoiceMode::Polyphonic);
+      voice_allocator.SetAllocationStrategy(common::VoiceAllocationStrategy::OldestNote);
       if (soundfont != nullptr)
         tsf_set_max_voices(soundfont, value);
       break;
@@ -675,11 +691,6 @@ __unit_callback void unit_set_param_value(uint8_t index, int32_t value) {
       if (value > 127) value = 127;
       if (soundfont != nullptr)
         tsf_channel_set_pan(soundfont, 0, value / 127.0f);
-      break;
-
-    case param_solo_mode:
-      if (value < 0) value = 0;
-      if (value > 1) value = 1;
       break;
 
     case param_velocity_curve:
@@ -822,18 +833,25 @@ __unit_callback void unit_note_on(uint8_t note, uint8_t velocity) {
 }
 
 __unit_callback void unit_note_off(uint8_t note) {
-  if (active_notes > 0) {
-    active_notes--;
-    if (active_notes == 0 && env_active && env_note_off_sample == 0) {
-      env_release_start_level = env_level_at_sample(sample_count,
-          Params[param_env_attack], Params[param_env_decay], Params[param_env_sustain],
-          env_time_to_samples(Params[param_env_attack]),
-          env_time_to_samples(Params[param_env_decay]),
-          Params[param_env_sustain] / 99.0f,
-          env_note_on_sample);
-      env_note_off_sample = sample_count;
-    }
+  common::NoteOffResult result = voice_allocator.NoteOff(note);
+  
+  // Count active notes from allocator.
+  active_notes = 0;
+  for (uint8_t i = 0; i < voice_allocator.GetMaxVoices(); ++i) {
+    if (voice_allocator.GetVoice(i).active)
+      active_notes++;
   }
+  
+  if (active_notes == 0 && env_active && env_note_off_sample == 0) {
+    env_release_start_level = env_level_at_sample(sample_count,
+        Params[param_env_attack], Params[param_env_decay], Params[param_env_sustain],
+        env_time_to_samples(Params[param_env_attack]),
+        env_time_to_samples(Params[param_env_decay]),
+        Params[param_env_sustain] / 99.0f,
+        env_note_on_sample);
+    env_note_off_sample = sample_count;
+  }
+  
   if (soundfont != nullptr) {
     int8_t transpose = (int8_t)Params[param_transpose];
     int adjusted = (int)note + transpose;
@@ -843,22 +861,30 @@ __unit_callback void unit_note_off(uint8_t note) {
 }
 
 __unit_callback void unit_gate_off() {
-  if (active_notes > 0) {
-    active_notes--;
-    if (active_notes == 0 && env_active && env_note_off_sample == 0) {
-      env_release_start_level = env_level_at_sample(sample_count,
-          Params[param_env_attack], Params[param_env_decay], Params[param_env_sustain],
-          env_time_to_samples(Params[param_env_attack]),
-          env_time_to_samples(Params[param_env_decay]),
-          Params[param_env_sustain] / 99.0f,
-          env_note_on_sample);
-      env_note_off_sample = sample_count;
-    }
+  int8_t transpose = (int8_t)Params[param_transpose];
+  int note = 60 + transpose;
+  if (note < 0) note = 0; if (note > 127) note = 127;
+  
+  common::NoteOffResult result = voice_allocator.NoteOff((uint8_t)note);
+  
+  // Count active notes from allocator.
+  active_notes = 0;
+  for (uint8_t i = 0; i < voice_allocator.GetMaxVoices(); ++i) {
+    if (voice_allocator.GetVoice(i).active)
+      active_notes++;
   }
+  
+  if (active_notes == 0 && env_active && env_note_off_sample == 0) {
+    env_release_start_level = env_level_at_sample(sample_count,
+        Params[param_env_attack], Params[param_env_decay], Params[param_env_sustain],
+        env_time_to_samples(Params[param_env_attack]),
+        env_time_to_samples(Params[param_env_decay]),
+        Params[param_env_sustain] / 99.0f,
+        env_note_on_sample);
+    env_note_off_sample = sample_count;
+  }
+  
   if (soundfont != nullptr) {
-    int8_t transpose = (int8_t)Params[param_transpose];
-    int note = 60 + transpose;
-    if (note < 0) note = 0; if (note > 127) note = 127;
     tsf_channel_note_off(soundfont, 0, (uint8_t)note);
   }
 }

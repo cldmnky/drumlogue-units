@@ -19,7 +19,7 @@ const __unit_header unit_header_t unit_header = {
         /* Page 1 — sound source */
         /* 0 SFONT   */ {0, 63,  0, 0,  k_unit_param_type_strings, 0, 0, 0, {"SFONT"}},
         /* 1 PRESET  */ {0, 255, 0, 0,  k_unit_param_type_strings, 0, 0, 0, {"PRESET"}},
-        /* 2 VOICES  */ {1, 32,  1, 16, k_unit_param_type_none,    0, 0, 0, {"VOICES"}},
+        /* 2 VOICES  */ {1, 16,  1, 16, k_unit_param_type_none,    0, 0, 0, {"VOICES"}},
         /* 3 TUNE    */ {-12,12, 0, 0,  k_unit_param_type_none,    0, 0, 0, {"TUNE"}},
 
         /* Page 2 — pitch & mix */
@@ -40,8 +40,8 @@ const __unit_header unit_header_t unit_header = {
         /* 14 V.CURVE*/ {0, 4,   0, 0,  k_unit_param_type_strings, 0, 0, 0, {"V.CURVE"}},
         /* 15        */ {0, 0,   0, 0,  k_unit_param_type_none,    0, 0, 0, {""}},
 
-        /* Page 5 — play mode */
-        /* 16 SOLO   */ {0, 1,   0, 0,  k_unit_param_type_none, 0, 0, 0, {"SOLO"}},
+        /* Page 5 — play mode (all blank now that SOLO is removed) */
+        /* 16        */ {0, 0,   0, 0,  k_unit_param_type_none, 0, 0, 0, {""}},
         /* 17        */ {0, 0,   0, 0,  k_unit_param_type_none, 0, 0, 0, {""}},
         /* 18        */ {0, 0,   0, 0,  k_unit_param_type_none, 0, 0, 0, {""}},
         /* 19        */ {0, 0,   0, 0,  k_unit_param_type_none, 0, 0, 0, {""}},

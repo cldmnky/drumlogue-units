@@ -6,6 +6,7 @@ CSRC = header.c
 
 # C++ sources
 CXXSRC = unit.cc
+CXXSRC += $(COMMON_SRC_PATH)/voice_allocator_core.cc
 
 # Include paths (. ensures tsf.h and logue_fs.h are found in the project dir)
 UINCDIR = .
