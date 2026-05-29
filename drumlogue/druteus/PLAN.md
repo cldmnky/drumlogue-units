@@ -161,10 +161,258 @@ test/presets-editor/app/test_druteus.c — Polyphonic + note-off test
 - **ADSR defaults = pass-through**: ATK=0, DEC=0, SUS=99, REL=99 (SF2's natural envelope plays)
 - **Unit IDs under `0x434C444DU`**: 0x01=clouds-revfx, 0x02=elementish-synth, 0x03=pepege-synth, 0x04=drupiter-synth, 0x05=druteus
 
-## 8. What's Next (Phase 3)
+## 8. Phase 3 — Proteus Preset Voice Engine
 
-- Custom voice engine with Proteus ROM instrument tables
-- Crossfade layers and keyboard splits
-- Per-layer effects (distortion, EQ, filter from Proteus architecture)
-- Multi-channel MIDI support (drum kit on CH10, melodic on 1–9)
-- Preset save/load for user patches
+Phase 3 replaces the current flat SF2 playback with a **preset-aware voice engine** that uses the extracted Proteus/1 patch data (`proteus_patches.h`, 768 presets) to recreate the original dual-layer architecture on top of TinySoundFont. The SF2 files remain the sound source — no raw ROM access needed.
+
+### 8.1 What We Have
+
+| Resource | Content | Status |
+|----------|---------|--------|
+| `proteus_patches.h` | 768 presets: `proteus_patch_t` with layer indices, tuning, volume, pan, chorus, crossfade, LFO shapes | Ready, not yet integrated |
+| `proteus_patches.json` | Full 116-parameter extraction for all 768 presets (envelopes, modulation matrix, key ranges) | Available for tooling |
+| SF2 files | 4.2 MB PCM samples in SoundFont format (samples, loop points, root keys, instrument defs) | In use via TSF |
+| TinySoundFont | Multi-channel SF2 playback (16 MIDI channels, per-channel preset/volume/pan/tuning) | In use |
+
+### 8.2 What TSF Provides
+
+TSF already handles sample playback, looping, root-key pitch shifting, and per-channel control. What's missing is the **preset-level voice routing** that the Proteus/1 did on top of that:
+
+- Dual-layer voices (primary + secondary instrument per preset)
+- Crossfade between layers (velocity or keyboard)
+- Keyboard splits (up to 4 zones via link presets)
+- Per-preset LFO modulation with 5 waveforms and routing matrix
+- Per-preset AHDSR envelopes (currently we use a single global ADSR)
+- Per-layer chorus sends and reverb
+
+### 8.3 Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Preset Selector                        │
+│  (768 patches from proteus_patches.h, selectable via     │
+│   PRESET param — replaces current flat SF2 preset list)  │
+└──────────────────────┬──────────────────────────────────┘
+                       │ proteus_patch_t
+                       ▼
+┌─────────────────────────────────────────────────────────┐
+│                  Voice Router                             │
+│  Reads patch data, configures TSF channels:              │
+│  - CH0: Primary instrument (i1instrument)                │
+│  - CH1: Secondary instrument (i2instrument)              │
+│  - Per-channel: volume, pan, tuning, chorus send         │
+│  - Key range filtering (i1lowkey/highkey, i2lowkey/hk)   │
+│  - Crossfade: velocity or keyboard split                 │
+└──────────────────────┬──────────────────────────────────┘
+                       │ tsf_channel_note_on/off
+                       ▼
+┌─────────────────────────────────────────────────────────┐
+│              TinySoundFont (2 channels)                   │
+│  CH0 + CH1 render interleaved float → mixed to output    │
+└──────────────────────┬──────────────────────────────────┘
+                       │ stereo float
+                       ▼
+┌─────────────────────────────────────────────────────────┐
+│              Post-TSF DSP (unchanged)                     │
+│  ADSR envelope → Chorus → Reverb → output                │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 8.4 Implementation Steps
+
+#### Step 3A: Integrate Patch Data
+
+**Goal:** Make all 768 Proteus presets selectable. Replace the current PRESET param (0–255 flat SF2 presets) with a patch-indexed selector.
+
+**Changes:**
+1. `#include "tools/proteus_patches.h"` in `unit.cc`
+2. Add `param_patch` enum value (replaces or extends current `param_preset`)
+3. PRESET param range: 0–767, string display from `kProteusPatchTable[value].name`
+4. On preset change, load the `proteus_patch_t` and configure voice routing (Step 3B)
+5. Keep SF2 file loaded — patches reference instrument indices within the same SF2
+
+**Instrument index mapping:** The `i1instrument` / `i2instrument` values (0–16383) are Proteus ROM instrument numbers. These need to be mapped to SF2 preset indices. The SF2 files were built from the same ROM, so the mapping is: `sf2_preset = proteus_instrument_index % tsf_get_presetcount(soundfont)`. Verify this mapping with a test preset.
+
+#### Step 3B: Dual-Layer Voice Engine
+
+**Goal:** Play primary and secondary instruments simultaneously using TSF channels 0 and 1.
+
+**Changes:**
+1. On note-on, trigger both channels:
+   ```cpp
+   tsf_channel_note_on(soundfont, 0, note, vel * vol1);  // primary
+   tsf_channel_note_on(soundfont, 1, note, vel * vol2);  // secondary
+   ```
+2. Configure per-channel from patch data:
+   ```cpp
+   tsf_channel_set_presetindex(soundfont, 0, patch.i1instrument % preset_count);
+   tsf_channel_set_presetindex(soundfont, 1, patch.i2instrument % preset_count);
+   tsf_channel_set_volume(soundfont, 0, patch.i1volume / 127.0f);
+   tsf_channel_set_volume(soundfont, 1, patch.i2volume / 127.0f);
+   tsf_channel_set_pan(soundfont, 0, (patch.i1pan + 7) * 9);  // -7..+7 → 0..127
+   tsf_channel_set_pan(soundfont, 1, (patch.i2pan + 7) * 9);
+   ```
+3. Apply per-layer tuning:
+   ```cpp
+   int cents1 = patch.i1tuningcoarse * 100 + patch.i1tuningfine;
+   tsf_channel_set_tuning(soundfont, 0, 440.0f * powf(2.0f, cents1 / 1200.0f));
+   ```
+4. On note-off, release both channels
+5. Skip secondary if `i2instrument == -1` (single-layer patch)
+
+#### Step 3C: Crossfade and Key Range Filtering
+
+**Goal:** Implement velocity crossfade and keyboard splits from patch data.
+
+**Crossfade modes** (from `crossfademode`):
+- `0` = Off: both layers always play
+- `1` = Velocity crossfade: layer volumes scale with velocity relative to `switchpoint`
+- `2` = Keyboard crossfade: layers split at `switchpoint` key
+
+**Implementation:**
+```cpp
+float vel_scale_0 = 1.0f, vel_scale_1 = 1.0f;
+if (patch.crossfademode == 1) {
+    float sp = patch.switchpoint / 127.0f;
+    float v = velocity / 127.0f;
+    vel_scale_0 = (v < sp) ? 1.0f : 1.0f - (v - sp) / (1.0f - sp);
+    vel_scale_1 = (v > sp) ? 1.0f : v / sp;
+}
+```
+
+**Key range filtering:**
+```cpp
+bool play_layer_0 = (note >= patch.i1lowkey && note <= patch.i1highkey);
+bool play_layer_1 = (note >= patch.i2lowkey && note <= patch.i2highkey);
+```
+
+**Keyboard splits (link presets):** If `link1/2/3 != -1`, the preset references other presets for different key zones (`lowkey0-3` / `highkey0-3`). On note-on, check which zone the note falls in and load the linked preset's instrument for that channel. This requires caching up to 4 linked presets.
+
+#### Step 3D: Per-Preset LFO Modulation
+
+**Goal:** Apply the Proteus LFO shapes and modulation routing from patch data instead of the current global LFO.
+
+**From patch data (JSON, not yet in `.h`):**
+- `lfo1shape` (0–4), `lfo1frequency`, `lfo1delay`, `lfo1variation`, `lfo1amount`
+- `lfo2shape` (same), same fields
+- Modulation destinations: pitch, volume, pan, filter cutoff, etc.
+
+**Implementation:**
+1. Extend `proteus_patch_t` in a new header to include LFO frequency/delay/amount fields (regenerate from JSON)
+2. Replace the current global LFO with per-preset LFO state
+3. Apply LFO to TSF channels via `tsf_channel_set_pitchwheel` (pitch) and `tsf_channel_midi_control` CC7 (volume)
+4. LFO delay: ramp amount from 0 to target over `lfo_delay` frames after note-on
+
+**Modulation matrix:** The JSON contains 8 real-time modulation slots (source → destination → amount). Implement the most useful ones:
+- Mod wheel (CC1) → filter cutoff or LFO amount
+- Aftertouch → volume or pitch
+- Pitch bend → pitch (already implemented)
+
+#### Step 3E: Per-Preset Envelopes
+
+**Goal:** Use the Proteus AHDSR envelope data from patches instead of the current global ADSR.
+
+**From patch data (JSON):**
+- `i1attack`, `i1hold`, `i1decay`, `i1sustain`, `i1release` (0–99 each)
+- `i1envelopeon` (enable/disable)
+- Same for layer 2 (`i2*`)
+
+**Implementation:**
+1. Extend `proteus_patch_t` to include envelope fields (or read from JSON at build time into a separate table)
+2. On note-on, initialize per-voice AHDSR state from patch data
+3. The current ADSR code becomes the per-voice envelope engine — parameterized by patch values instead of global params
+4. If `i1envelopeon == 0`, skip envelope for that layer (TSF's SF2 envelope plays naturally)
+
+**Envelope time curve:** The Proteus uses a proprietary curve for 0–99 → milliseconds. Approximation: `ms = powf(value / 99.0f, 1.5f) * 5000.0f` (0→0ms, 99→5000ms). Fine-tune by ear against hardware reference.
+
+#### Step 3F: Per-Layer Chorus Sends
+
+**Goal:** Use per-layer chorus send levels from patch data instead of the current global chorus mix.
+
+**From patch data:** `i1chorus` (0–15), `i2chorus` (0–15)
+
+**Implementation:**
+1. Render each TSF channel to separate buffers (TSF supports per-channel rendering)
+2. Apply chorus to each channel's buffer scaled by its chorus send level
+3. Mix channels to output
+4. This replaces the current single global chorus mix
+
+**Alternative (simpler):** Use the per-layer chorus values to set the global chorus mix as a weighted average: `chorus_mix = (i1chorus * vol1 + i2chorus * vol2) / (vol1 + vol2) / 15.0f`
+
+### 8.5 Parameter Changes
+
+The current 24-param layout needs adjustment for Phase 3:
+
+| Change | Reason |
+|--------|--------|
+| PRESET range: 0–767 | 768 Proteus patches instead of flat SF2 presets |
+| Remove ENV ATK/DEC/SUS/REL (params 8–11) | Replaced by per-patch AHDSR from patch data |
+| Add PATCH param (new) | Select from 768 named Proteus presets |
+| Keep LFO RTE/AMT/DST/WAV (params 20–23) | Override per-patch LFO with user values |
+| Keep CHORUS/REVERB (params 12–13) | Override per-patch effects with user values |
+
+**Revised param layout (proposed):**
+
+| Page | Slot | Name | Notes |
+|------|------|------|-------|
+| 1 | 0 | SFONT | SF2 file selector (unchanged) |
+| 1 | 1 | PATCH | 0–767 Proteus preset selector (replaces PRESET) |
+| 1 | 2 | VOICES | Max polyphony (unchanged) |
+| 1 | 3 | TUNE | Global transpose (unchanged) |
+| 2 | 4 | FINETN | Global fine tune (unchanged) |
+| 2 | 5 | VOLUME | Global volume (unchanged) |
+| 2 | 6 | PAN | Global pan (unchanged) |
+| 2 | 7 | (blank) | |
+| 3 | 8 | XFADE | Crossfade override: OFF, VEL, KEY (replaces ENV ATK) |
+| 3 | 9 | LAYERS | Layer mode: BOTH, PRI, SEC (replaces ENV DEC) |
+| 3 | 10 | (blank) | (replaces ENV SUS) |
+| 3 | 11 | (blank) | (replaces ENV REL) |
+| 4 | 12 | CHORUS | Chorus override (unchanged) |
+| 4 | 13 | REVERB | Reverb override (unchanged) |
+| 4 | 14 | V.CURVE | Velocity curve (unchanged) |
+| 4 | 15 | (blank) | |
+| 5 | 16 | SOLO | Mono/poly mode (unchanged) |
+| 5 | 17–19 | (blank) | |
+| 6 | 20 | LFO RTE | LFO rate override (unchanged) |
+| 6 | 21 | LFO AMT | LFO amount override (unchanged) |
+| 6 | 22 | LFO DST | LFO destination (unchanged) |
+| 6 | 23 | LFO WAV | LFO waveform (unchanged) |
+
+### 8.6 Data Pipeline
+
+To get the full patch data into firmware:
+
+1. **Extend `proteus_patches.h`:** Regenerate from `proteus_patches.json` with additional fields:
+   - Envelope: `i1attack`, `i1hold`, `i1decay`, `i1sustain`, `i1release`, `i1envelopeon`
+   - LFO: `lfo1frequency`, `lfo1delay`, `lfo1amount`, same for LFO2
+   - Key ranges: `i1lowkey`, `i1highkey`, `i2lowkey`, `i2highkey`
+   - Crossfade: `crossfadedirection`, `crossfadebalance`, `crossfadeamount`, `switchpoint`
+   - Links: `link1`, `link2`, `link3`, `lowkey0-3`, `highkey0-3`
+
+2. **Estimate size:** Current `proteus_patch_t` is ~32 bytes × 768 = 24 KB. Extended struct (~64 bytes) × 768 = ~48 KB. Fits comfortably in the binary.
+
+3. **Instrument index mapping:** Build a lookup table mapping Proteus instrument numbers to SF2 preset indices. Generate from the SF2 file's preset names matched against known Proteus instrument names.
+
+### 8.7 Testing Strategy
+
+1. **Desktop test:** Extend `test/druteus/` to load a patch by index, trigger notes, verify dual-channel output
+2. **Preset verification:** Write a script that iterates all 768 patches, triggers a note, and checks for silence/crashes
+3. **A/B comparison:** Compare output of Phase 3 engine against current TSF-only playback for known presets (e.g., "FMstylePiano" = patch 0)
+4. **Hardware test:** Load unit, scroll through patches, verify dual-layer behavior, crossfade, and keyboard splits
+
+### 8.8 Risks and Mitigations
+
+| Risk | Mitigation |
+|------|------------|
+| Instrument index mapping incorrect | Verify with known presets; build mapping table from SF2 preset names |
+| 48 KB patch table too large for binary | Current binary is 31 KB; 48 KB data + code should stay under 128 KB |
+| Per-channel TSF rendering doubles CPU | Profile on hardware; fall back to single-channel if needed |
+| Envelope curves don't match Proteus | Tune by ear; the curves are approximations anyway |
+| Crossfade sounds unnatural | Start with simple linear crossfade; add curved crossfade if needed |
+
+### 8.9 Future (Phase 4)
+
+- **Multi-channel MIDI:** Drum kit on CH10, melodic patches on CH1–9 (TSF supports 16 channels)
+- **Preset save/load:** Store user-modified patches (override values) in drumlogue preset slots
+- **Per-layer DSP:** Distortion, EQ, filter per layer (from Mutable Instruments eurorack modules)
+- **Sample ROM extraction:** If original Proteus sample ROMs become available, extract raw PCM for a fully custom voice engine without TSF dependency
