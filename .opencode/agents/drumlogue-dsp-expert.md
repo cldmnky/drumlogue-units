@@ -1,7 +1,5 @@
 ---
 description: Expert mode for developing C/C++ DSP-based ARM units for Korg drumlogue
-mode: subagent
-model: anthropic/claude-sonnet-4-5
 temperature: 0.2
 permission:
   read: allow
