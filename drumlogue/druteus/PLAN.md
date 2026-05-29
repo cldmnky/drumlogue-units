@@ -1,1157 +1,170 @@
 # DRUTEUS — Implementation Plan
 
-## Purpose of This Document
+## Purpose
 
-This document provides a complete, step-by-step implementation plan for the `druteus` drumlogue synth unit. It is intended to be followed by an agent or developer from a clean slate (current state: stub scaffolding exists, DSP not yet implemented). Every file to create, every line of code to write, every command to run, and every edge case to watch for is documented here.
+This document describes the current state of the `druteus` drumlogue synth unit — a Proteus/1 SF2 soundfont player built on TinySoundFont (TSF) with DSP effects, ADSR envelope control, and LFO modulation. It serves as a reference for what's been built and what next steps remain.
 
 ---
 
-## 1. Context and Goal
+## 1. Identity
 
-`druteus` is a Korg drumlogue custom synth unit that plays back Proteus/1-derived SF2 soundfonts using TinySoundFont (TSF). It follows the architecture established by `dukesrg/logue-sdk` (`tsf` branch, `loguetsf.cc`), adapted for drumlogue-only (no microKORG2 paths).
-
-### Identity
 - **Unit name (display):** `DRUTEUS` (7 chars, 7-bit ASCII)
 - **Developer ID:** `0x434C444DU` ("CLDM")
-- **Unit ID:** `0x00000005U` (0x01–0x04 taken by other units in this repo)
-- **Version:** `0.1.0` → encoded as `0x000100U` (hex format: `0xMMNNPPU`)
+- **Unit ID:** `0x00000005U`
+- **Version:** `0.1.0` → `0x000100U`
 - **Module type:** `synth`
-- **Target platform:** drumlogue (ARM Cortex-A7, Linux, 48 kHz stereo float buffers)
+- **Target platform:** drumlogue (ARM Cortex-A7, Linux, 48 kHz stereo float)
 
-### SF2 Files
-The SF2 files live in `drumlogue/druteus/sfx/` in the repo, but are deployed by copying to the drumlogue's Programs folder via USB (visible on the device as a mass storage volume). At runtime the unit reads them from `/var/lib/drumlogued/userfs/Programs`.
+## 2. SF2 Files
 
-- `Proteus1_Presets.sf2` — 4.2 MB, 129 factory Proteus/1 patches (primary, Phase 1)
-- `Proteus1_Instruments.sf2` — 4.2 MB, 126 raw instrument building blocks (Phase 2 / secondary bank)
+- `Proteus1_Presets.sf2` — 4.2 MB, 129 factory Proteus/1 patches (default)
+- `Proteus1_Instruments.sf2` — 4.2 MB, 126 raw instrument building blocks
+- Deployed to `/var/lib/drumlogued/userfs/Programs` on device
+- Loaded at runtime via chunked async state machine in `unit_render`
 
-Both files share 262 identical PCM 16-bit samples (E-mu variable-rate ROM). The unit loads whichever SF2 file the SFONT parameter selects.
+## 3. Parameter Set (24 slots, 6 pages)
 
-### Key Design Decisions (already made)
-- **No embedded SF2**: the binary stays small (~100–200 KB); SF2 is read from the filesystem at runtime.
-- **TinySoundFont (`tsf.h`)**: single-header MIT-licensed SF2 playback engine; the entire SF2 is read into a `malloc`'d buffer and passed to `tsf_load_memory`.
-- **Asynchronous loading**: SF2 is read in 131,072-byte chunks inside `unit_render()` via a state machine. The unit renders silence while loading.
-- **`logue_fs.h`**: wraps `scandir`/`dirent.h` to list `.sf2` files in the Programs folder. Copied verbatim from dukesrg's `tsf` branch.
-- **`TSF_STEREO_INTERLEAVED`** output mode (drumlogue uses stereo float, not mono).
-- **One TSF instance**: drumlogue needs a single stereo instance (unlike microKORG2 which needs 8 mono instances and NEON interleaving).
+### Page 1 — Sound Source
+| Index | Name   | Type | Range | Default | Notes |
+|-------|--------|------|-------|---------|-------|
+| 0     | SFONT  | strings | 0–63 | 0 | SF2 filename from Programs/ |
+| 1     | PRESET | strings | 0–255 | 0 | Preset name from TSF |
+| 2     | VOICES | none  | 1–32 | 16 | Max polyphony |
+| 3     | TUNE   | none  | 0–24 (-12..+12) | 12 (0) | Semitone transpose applied as `note + (tune-12)` |
 
----
+### Page 2 — Pitch & Mix
+| Index | Name   | Type | Range | Default | Notes |
+|-------|--------|------|-------|---------|-------|
+| 4     | FINETN | none  | 0–126 (-63..+63) | 63 (0) | Cent fine-tune via `tsf_channel_set_tuning` |
+| 5     | VOLUME | none  | 0–127 | 100 | CC7, via `tsf_channel_midi_control` |
+| 6     | PAN    | none  | 0–127 | 64 | CC10, via `tsf_channel_midi_control` |
+| 7     | (blank) | none | — | — | — |
 
-## 2. Phase 1 Parameter Set
+### Page 3 — Envelope (ADSR)
+| Index | Name   | Type | Range | Default | Notes |
+|-------|--------|------|-------|---------|-------|
+| 8     | ENV ATK | none | 0–99 | 0 | Attack time (0→1ms, 99→956ms, exponential) |
+| 9     | ENV DEC | none | 0–99 | 0 | Decay time |
+| 10    | ENV SUS | none | 0–99 | 99 | Sustain level (0=silent..99=full) |
+| 11    | ENV REL | none | 0–99 | 99 | Release time |
 
-The drumlogue unit header supports up to 24 parameter slots (6 pages × 4 params). Blank slots use `k_unit_param_type_none` to control pagination.
+### Page 4 — Effects & Feel
+| Index | Name   | Type | Range | Default | Notes |
+|-------|--------|------|-------|---------|-------|
+| 12    | CHORUS | none | 0–15 | 0 | DSP chorus mix (0=off); `ChorusStereoWidener` |
+| 13    | REVERB | none | 0–127 | 0 | DSP reverb amount (0=off); `rings::Reverb` |
+| 14    | V.CURVE | strings | 0–4 | 0 | Velocity curve: LINEAR, EXP, LOG, COMP, STEEP |
+| 15    | (blank) | none | — | — | — |
 
-| Index | Name    | Type                      | Min | Max | Center | Default | Notes                                         |
-|-------|---------|---------------------------|-----|-----|--------|---------|-----------------------------------------------|
-| 0     | SFONT   | `k_unit_param_type_strings` | 0 | 63  | 0      | 0       | SF2 filename from Programs/; string returned by `soundfont_list.get(value)` |
-| 1     | PRESET  | `k_unit_param_type_strings` | 0 | 255 | 0      | 0       | Preset name; string returned by `tsf_get_presetname` |
-| 2     | VOICES  | `k_unit_param_type_none`  | 1   | 32  | 16     | 16      | Max polyphony passed to `tsf_set_max_voices`  |
-| 3     | SUSTAIN | `k_unit_param_type_none`  | 0   | 1   | 0      | 0       | 0=off, 1=on; passed to `tsf_channel_set_sustain` |
-| 4     | NOTE    | `k_unit_param_type_none`  | 0   | 127 | 60     | 60      | MIDI note fired by the drumlogue gate trigger |
-| 5–23  | (blank) | `k_unit_param_type_none`  | 0   | 0   | 0      | 0       | Empty slots for page padding                  |
+### Page 5 — Play Mode
+| Index | Name | Type | Range | Default | Notes |
+|-------|------|------|-------|---------|-------|
+| 16    | SOLO | none | 0–1 | 0 | 0=poly, 1=mono (monophonic mode) |
+| 17    | (blank) | none | — | — | — |
+| 18    | (blank) | none | — | — | — |
+| 19    | (blank) | none | — | — | — |
 
-**Why these params:** This is the proven parameter set from `loguetsf.cc` (drumlogue path). It covers all essential SF2 playback controls. VOLUME/PAN/TRANSPOSE are deferred to Phase 2 (TSF supports gain via `tsf_set_output`, pan via MIDI CC10, transpose by shifting note values).
+### Page 6 — LFO
+| Index | Name   | Type | Range | Default | Notes |
+|-------|--------|------|-------|---------|-------|
+| 20    | LFO RTE | none | 0–127 | 0 | LFO rate |
+| 21    | LFO AMT | none | 0–127 | 0 | LFO amount |
+| 22    | LFO DST | strings | 0–2 | 0 | LFO destination: PITCH, VOL, BOTH |
+| 23    | LFO WAV | strings | 0–4 | 1 | LFO waveform: SINE, TRI, SQUARE, SAW, S&H |
 
-**Clamping note (important):** The `max` values in the header are static. At runtime, `unit_get_param_str_value` and `unit_set_param_value` must clamp dynamically:
-- SFONT: clamp to `soundfont_list.count - 1`
-- PRESET: clamp to `tsf_get_presetcount(soundfont) - 1`
+## 4. Architecture
 
----
+### TSF Integration
+- Single-header `tsf.h` (v0.9, unmodified), `TSF_STATIC` + `TSF_NO_STDIO`
+- `TSF_STEREO_INTERLEAVED` output mode (48 kHz float)
+- Chunked async load: `fread` 131072 bytes per render frame (~33 frames = ~88 ms for 4.2 MB)
+- `logue_fs.h` wraps `scandir` for `.sf2` file listing in Programs folder
+- File path: `/var/lib/drumlogued/userfs/Programs`
 
-## 3. Repository File Layout
+### ADSR Envelope
+- Post-TSF per-sample volume scaling
+- Triggered on note-on, released when `active_notes` counter reaches 0
+- Exponential time curve: `ms = powf(value / 99.0f, 2.0f) * kMaxMs`
+- Defaults (ATK=0, DEC=0, SUS=99, REL=99) = transparent pass-through
+- Post-release silence hold (10 frames) to suppress TSF release tails
 
-After this implementation, the `drumlogue/druteus/` directory should look like:
+### DSP Effects
+- **Chorus**: `dsp::ChorusStereoWidener` from `drumlogue/common/` — modulated short delay lines
+- **Reverb**: `rings::Reverb` from `eurorack/rings/` — Griesinger topology, 64 KB buffer
+- Both chain through de-interleaved buffers: chorus → reverb → re-interleave
+
+### LFO
+- 5 waveforms: sine, triangle, square, saw, sample-and-hold
+- 3 destinations: pitch, volume, both
+- Phase advances every render frame when active
+- Default shape: SINE
+
+### Velocity Curves
+- LINEAR: `v / 127.0f`
+- EXP: `powf(v / 127.0f, 2.0f)`
+- LOG: `logf(1.0f + v) / logf(128.0f)`
+- COMP: `sqrtf(v / 127.0f)`
+- STEEP: `powf(v / 127.0f, 3.0f)`
+
+### MIDI / Playability
+- `unit_note_on`/`unit_note_off` — full polyphonic via TSF
+- `unit_pitch_bend` — raw value to `tsf_channel_set_pitchwheel` (bend range set via `tsf_channel_set_pitchrange` at load)
+- `unit_channel_pressure` → CC11 expression
+- `unit_gate_on`/`unit_gate_off` — drum trigger style using preset NOTE param
+- SOLO mode: monophonic retrigger; `active_notes` counter tracks polyphony for ADSR release
+- `s_apply_params()` restores volume, pan, tuning, pitchwheel after SF2 reload
+
+## 5. File Layout
 
 ```
 drumlogue/druteus/
-├── Makefile          — SDK Makefile copy (DO NOT MODIFY)
-├── config.mk         — Project configuration (minimal changes needed)
-├── header.c          — Unit metadata with Phase 1 params (REWRITE)
-├── unit.cc           — Full TSF implementation (REWRITE)
-├── tsf.h             — TinySoundFont single-header library (NEW, download)
-├── logue_fs.h        — Filesystem utilities from dukesrg tsf branch (NEW, copy)
+├── Makefile                — SDK Makefile template (DO NOT MODIFY)
+├── config.mk               — Project config (includes /repo/eurorack for Rings)
+├── header.c                — Unit metadata, all 24 param descriptors
+├── unit.cc                 — Full implementation (~924 lines)
+├── tsf.h                   — TinySoundFont v0.9 (unmodified)
+├── logue_fs.h              — scandir-based file listing, DT_LNK support
 ├── sfx/
 │   ├── Proteus1_Presets.sf2
 │   └── Proteus1_Instruments.sf2
-├── build/            — Build artifacts (generated by build.sh)
-│   └── obj/
-│       ├── header.o
-│       └── unit.o
-└── druteus.drmlgunit — Final artifact (generated by build.sh)
-```
+├── tools/
+│   ├── extract_patches.py  — ROM patch extraction script
+│   ├── proteus_patches.h   — Extracted patch data
+│   └── proteus_patches.json
+├── PLAN.md                 — This file
+└── druteus.drmlgunit       — Build artifact (~31 KB)
 
-Desktop test harness (separate directory, not compiled into the unit):
-
-```
 test/druteus/
-├── Makefile          — Desktop test Makefile (no changes needed for Phase 1)
-├── main.cc           — Pass-through test harness (no changes needed for Phase 1)
-├── druteus_test      — Built binary
-└── fixtures/         — Generated WAV files
+├── Makefile                — Desktop test harness
+├── main.cc                 — Test entry point
+├── druteus_test            — Built binary
+└── fixtures/               — WAV test files
+
+test/presets-editor/app/test_druteus.c — Polyphonic + note-off test
 ```
 
----
-
-## 4. Step-by-Step Implementation
-
-### Step 4.1: Download `tsf.h`
-
-**File:** `drumlogue/druteus/tsf.h`
-
-Download from: `https://raw.githubusercontent.com/schellingb/TinySoundFont/master/tsf.h`
+## 6. Build
 
 ```bash
-curl -o drumlogue/druteus/tsf.h \
-  https://raw.githubusercontent.com/schellingb/TinySoundFont/master/tsf.h
+./build.sh druteus           # Hardware build
+./build.sh druteus clean     # Clean
 ```
 
-**Verify:** The file should be ~3,500 lines, starting with:
-```c
-/* TinySoundFont - v0.9 - SoundFont2 synthesizer - https://github.com/schellingb/TinySoundFont */
-```
-
-**Do not modify this file.** The GCC `-Wunused-function` warnings it generates will be suppressed by a `#pragma GCC diagnostic` wrapper in `unit.cc`.
-
----
-
-### Step 4.2: Create `logue_fs.h`
-
-**File:** `drumlogue/druteus/logue_fs.h`
-
-This is a verbatim copy of `https://raw.githubusercontent.com/dukesrg/logue-sdk/blob/tsf/platform/inc/logue_fs.h`. Create the file with exactly this content:
-
-```cpp
-/*
- * File: logue_fs.h
- *
- * logue SDK 2.x file system utils
- *
- * 2025-2026 (c) Oleg Burdaev
- * mailto: dukesrg@gmail.com
- */
-#pragma once
-#include <dirent.h>
-#include <stdlib.h>
-#include <string.h>
-#include <ctype.h>
-
-struct fs_dir {
-  int count;
-  struct dirent **dirlist;
-  const char *path;
-  struct {
-    const char *prefix;
-    const char *suffix;
-  } filter;
-  char *suffix_uc;
-
-  static const fs_dir *&self() {
-    static thread_local const fs_dir *ptr = nullptr;
-    return ptr;
-  }
-
-  static int flt(const struct dirent *entry) {
-    const fs_dir *s = self();
-    return entry->d_type == DT_REG
-      && (s->filter.prefix == nullptr
-          || strncmp(entry->d_name, s->filter.prefix, strlen(s->filter.prefix)) == 0)
-      && (s->filter.suffix == nullptr
-          || strcmp(entry->d_name + strlen(entry->d_name) - strlen(s->filter.suffix),
-                    s->filter.suffix) == 0
-          || strcmp(entry->d_name + strlen(entry->d_name) - strlen(s->suffix_uc),
-                    s->suffix_uc) == 0);
-  }
-
-  void cleanup() {
-    if (dirlist == nullptr)
-      return;
-    free(dirlist);
-    dirlist = nullptr;
-    free(suffix_uc);
-    suffix_uc = nullptr;
-  }
-
-  char *get(int index) {
-    return dirlist[index]->d_name;
-  }
-
-  void remove(int index) {
-    for (; index < count - 1; index++)
-      dirlist[index] = dirlist[index + 1];
-    count--;
-  }
-
-  void refresh() {
-    cleanup();
-    if (filter.suffix != nullptr) {
-      suffix_uc = strdup(filter.suffix);
-      for (char *p = suffix_uc; *p != 0; p++)
-        *p = toupper(*p);
-    }
-    self() = this;
-    count = scandir(path, &dirlist, flt, alphasort);
-    self() = nullptr;
-  }
-
-  void refresh(const char *suffix) {
-    filter.suffix = suffix;
-    refresh();
-  }
-
-  void refresh(const char *prefix, const char *suffix) {
-    filter.prefix = prefix;
-    filter.suffix = suffix;
-    refresh();
-  }
-
-  void init() {
-    dirlist = nullptr;
-    refresh();
-  }
-
-  fs_dir(const char *pth, const char *pfx, const char *sfx)
-      : path(pth), filter({.prefix = pfx, .suffix = sfx}) {
-    init();
-  }
-
-  fs_dir(const char *pth, const char *sfx)
-      : path(pth), filter({.prefix = nullptr, .suffix = sfx}) {
-    init();
-  }
-
-  fs_dir(const char *pth) : path(pth) {
-    init();
-  }
-
-  fs_dir() : dirlist(nullptr), filter({.prefix = nullptr, .suffix = nullptr}) {}
-
-  ~fs_dir() {
-    cleanup();
-  }
-};
-```
-
-**Notes on `logue_fs.h`:**
-- `thread_local` is used for `self()` because `scandir`'s filter callback is a plain C function pointer — it cannot capture `this`. The `thread_local` trick lets the filter access the `fs_dir` instance safely.
-- drumlogue runs Linux on ARM Cortex-A7 and supports `thread_local` in its glibc. This is safe.
-- `scandir` returns the count of matching entries, or `-1` on error (directory doesn't exist). Always guard with `count > 0` before using the list.
-- The filter matches both lowercase `.sf2` and uppercase `.SF2` extensions (via `suffix_uc`).
-- The `dirlist` array is `malloc`'d by `scandir` and must be freed via `cleanup()` in `unit_teardown`.
-
----
-
-### Step 4.3: Rewrite `unit.cc`
-
-**File:** `drumlogue/druteus/unit.cc`
-
-This is a full rewrite. The previous stub content should be completely replaced.
-
-#### 4.3.1 Overall structure
-
-The file is organized as follows (in order):
-1. License / file header comment
-2. System includes
-3. SDK include (`unit.h`)
-4. Project includes (`logue_fs.h`)
-5. TSF defines and include (`tsf.h`)
-6. Constants and macros
-7. Parameter enum
-8. Loading state enum
-9. Static state variables
-10. Unit callback implementations
-
-#### 4.3.2 Complete `unit.cc` content
-
-```cpp
-/**
- * @file unit.cc
- * @brief DRUTEUS drumlogue synth unit — Proteus/1 SF2 playback via TinySoundFont
- *
- * Architecture based on loguetsf.cc by Oleg Burdaev (dukesrg), MIT License.
- * TinySoundFont by Bernhard Schelling, MIT License.
- */
-
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <sys/stat.h>
-#include <sys/param.h>
-
-#include "unit.h"
-#include "logue_fs.h"
-
-// TinySoundFont — single-header SF2 synthesizer.
-// TSF_IMPLEMENTATION must be defined in exactly one translation unit.
-// TSF_NO_STDIO prevents tsf.h from pulling in stdio (we use it ourselves).
-// TSF_STATIC marks all tsf_ functions static to avoid symbol conflicts.
-#define TSF_IMPLEMENTATION
-#define TSF_NO_STDIO
-#define TSF_STATIC
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-function"
-#include "tsf.h"
-#pragma GCC diagnostic pop
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-#define SOUNDFONT_PATH   "/var/lib/drumlogued/userfs/Programs"
-#define CHUNK_SIZE       131072                   // bytes read per render frame during load
-#define VELOCITY_SCALE   (1.f / 127.f)
-#define OUTPUT_MODE      TSF_STEREO_INTERLEAVED   // drumlogue uses stereo interleaved float
-
-// ---------------------------------------------------------------------------
-// Parameter indices — must match header.c descriptor order exactly
-// ---------------------------------------------------------------------------
-
-enum {
-  param_soundfont    = 0,
-  param_preset       = 1,
-  param_max_voices   = 2,
-  param_sustain      = 3,
-  param_note         = 4,
-  param_num,                  // total count of active params
-};
-
-// Default parameter values (applied at init / reset)
-static const int32_t kParamDefaults[param_num] = {
-  0,    // SFONT: first file
-  0,    // PRESET: first preset
-  16,   // VOICES: 16-voice polyphony
-  0,    // SUSTAIN: off
-  60,   // NOTE: middle C (MIDI 60)
-};
-
-// ---------------------------------------------------------------------------
-// Loading state machine
-// ---------------------------------------------------------------------------
-
-enum {
-  load_idle       = 0,
-  load_start,       // open file, advance to load_alloc
-  load_alloc,       // stat file, malloc buffer, advance to load_read
-  load_read,        // fread CHUNK_SIZE bytes; decrement state back to load_read
-                    //   until done, then advance to load_close
-  load_close,       // fclose fp, tsf_close existing instance
-  load_tsf_load,    // tsf_load_memory(buf, size)
-  load_tsf_set,     // tsf_set_output, tsf_set_max_voices, set preset + sustain
-  load_finished,    // one-frame landing; transitions to load_idle next frame
-};
-
-// ---------------------------------------------------------------------------
-// Static state
-// ---------------------------------------------------------------------------
-
-// SF2 file list — populated at static initialisation (before unit_init).
-// count == -1 means scandir failed (directory does not exist).
-// count ==  0 means directory exists but contains no .sf2 files.
-static fs_dir soundfont_list = fs_dir(SOUNDFONT_PATH, "", ".sf2");
-
-// TSF synthesizer instance (one stereo instance for drumlogue).
-static tsf *soundfont = nullptr;
-
-// Buffer used during chunked file loading.
-static char * __attribute__((aligned(32))) soundfont_buf = nullptr;
-
-// Current parameter values. Initialised to kParamDefaults in unit_init.
-static int32_t Params[param_num];
-
-// Loading state.
-static uint32_t state = load_idle;
-
-// Set true during unit_suspend(), false during unit_resume().
-// unit_render() returns immediately when suspended.
-static bool suspended = false;
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-// Apply the current Params to an already-loaded TSF instance.
-// Called after load_tsf_set and after param changes.
-static void s_apply_params() {
-  if (soundfont == nullptr)
-    return;
-  tsf_set_max_voices(soundfont, Params[param_max_voices]);
-  tsf_channel_set_presetindex(soundfont, 0, Params[param_preset]);
-  tsf_channel_set_sustain(soundfont, 0, Params[param_sustain]);
-}
-
-// ---------------------------------------------------------------------------
-// unit_init
-// ---------------------------------------------------------------------------
-
-__unit_callback int8_t unit_init(const unit_runtime_desc_t *desc) {
-  if (!desc)
-    return k_unit_err_undef;
-  if (desc->target != unit_header.target)
-    return k_unit_err_target;
-  if (!UNIT_API_IS_COMPAT(desc->api))
-    return k_unit_err_api_version;
-  if (desc->samplerate != 48000)
-    return k_unit_err_samplerate;
-  if (desc->output_channels != 2)
-    return k_unit_err_geometry;
-
-  // Initialise params to defaults.
-  for (int i = 0; i < param_num; i++)
-    Params[i] = kParamDefaults[i];
-
-  // Kick off loading if any SF2 files are present.
-  if (soundfont_list.count > 0)
-    state = load_start;
-
-  return k_unit_err_none;
-}
-
-// ---------------------------------------------------------------------------
-// unit_teardown
-// ---------------------------------------------------------------------------
-
-__unit_callback void unit_teardown() {
-  soundfont_list.cleanup();
-  tsf_close(soundfont);
-  soundfont = nullptr;
-  free(soundfont_buf);
-  soundfont_buf = nullptr;
-}
-
-// ---------------------------------------------------------------------------
-// unit_reset
-// ---------------------------------------------------------------------------
-
-__unit_callback void unit_reset() {
-  if (soundfont != nullptr)
-    tsf_reset(soundfont);
-}
-
-// ---------------------------------------------------------------------------
-// unit_suspend / unit_resume
-// ---------------------------------------------------------------------------
-
-__unit_callback void unit_suspend() {
-  suspended = true;
-}
-
-__unit_callback void unit_resume() {
-  suspended = false;
-}
-
-// ---------------------------------------------------------------------------
-// unit_render — the heart of the unit
-//
-// State machine executes one transition per render call, advancing `state`
-// at the end. The render callback returns early (silence) while loading.
-// Once load_idle is reached and soundfont != nullptr, TSF renders audio.
-//
-// Loading timeline (approximate at 48 kHz / 128-frame buffer = ~2.67 ms/frame):
-//   load_start:      1 frame  — fopen
-//   load_alloc:      1 frame  — fstat + malloc
-//   load_read:       N frames — ceil(filesize / CHUNK_SIZE) frames
-//                               4.2 MB / 131072 = ~33 frames = ~88 ms silence
-//   load_close:      1 frame  — fclose + tsf_close old instance
-//   load_tsf_load:   1 frame  — tsf_load_memory (parses SF2; may be slow, ~5–20 ms)
-//   load_tsf_set:    1 frame  — configure output, polyphony, preset, sustain
-//   load_finished:   1 frame  — no-op landing state
-//   → load_idle:     next frame starts rendering audio
-// ---------------------------------------------------------------------------
-
-__unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
-  (void)in;
-
-  static FILE    *fp       = nullptr;
-  static size_t   buf_size = 0;
-  static size_t   buf_pos  = 0;
-
-  if (suspended) {
-    // Fill with silence and return — do not advance state machine.
-    memset(out, 0, frames * 2 * sizeof(float));
-    return;
-  }
-
-  switch (state) {
-    // -----------------------------------------------------------------------
-    case load_start: {
-      // Build full path: SOUNDFONT_PATH + "/" + filename
-      char *path = (char *)malloc(MAXNAMLEN + 1);
-      if (path == nullptr) {
-        // Allocation failed — stall in idle (no audio).
-        state = load_idle;
-        break;
-      }
-      snprintf(path, MAXNAMLEN + 1, "%s/%s",
-               SOUNDFONT_PATH,
-               soundfont_list.get(Params[param_soundfont]));
-      if (fp != nullptr)
-        fclose(fp);
-      fp = fopen(path, "rb");
-      free(path);
-      if (fp == nullptr) {
-        // File not found — bail out.
-        state = load_idle;
-        break;
-      }
-      break;  // advance to load_alloc next frame
-    }
-
-    // -----------------------------------------------------------------------
-    case load_alloc: {
-      struct stat st;
-      if (fstat(fileno(fp), &st) != 0) {
-        fclose(fp);
-        fp = nullptr;
-        state = load_idle;
-        break;
-      }
-      buf_size = (size_t)st.st_size;
-      free(soundfont_buf);
-      soundfont_buf = (char *)malloc(buf_size);
-      if (soundfont_buf == nullptr) {
-        fclose(fp);
-        fp = nullptr;
-        state = load_idle;
-        break;
-      }
-      buf_pos = 0;
-      break;  // advance to load_read next frame
-    }
-
-    // -----------------------------------------------------------------------
-    case load_read: {
-      // Read one chunk. If we get a short read, we're done (or hit EOF / error).
-      size_t n = fread(soundfont_buf + buf_pos, 1, CHUNK_SIZE, fp);
-      buf_pos += n;
-      if (n < CHUNK_SIZE) {
-        // Reached end of file — advance past load_read to load_close.
-        // (state++ will be called at the bottom of this function, bringing
-        // us to load_close.)
-        break;
-      }
-      // More data to read — stay in load_read by decrementing state so the
-      // state++ at the bottom brings us back here.
-      state--;
-      break;
-    }
-
-    // -----------------------------------------------------------------------
-    case load_close: {
-      if (fp != nullptr) {
-        fclose(fp);
-        fp = nullptr;
-      }
-      // Close and free any previously loaded instance.
-      tsf_close(soundfont);
-      soundfont = nullptr;
-      break;  // advance to load_tsf_load next frame
-    }
-
-    // -----------------------------------------------------------------------
-    case load_tsf_load: {
-      soundfont = tsf_load_memory(soundfont_buf, (int)buf_size);
-      if (soundfont == nullptr) {
-        // TSF failed to parse the SF2 — bad file?
-        state = load_idle;
-        break;
-      }
-      // Clamp preset to valid range now that we know the preset count.
-      int max_preset = tsf_get_presetcount(soundfont) - 1;
-      if (Params[param_preset] > max_preset)
-        Params[param_preset] = max_preset;
-      break;  // advance to load_tsf_set next frame
-    }
-
-    // -----------------------------------------------------------------------
-    case load_tsf_set: {
-      // Configure output: stereo interleaved, 48 kHz, 0 dB gain.
-      tsf_set_output(soundfont, OUTPUT_MODE, 48000, 0.f);
-      s_apply_params();
-      break;  // advance to load_finished next frame
-    }
-
-    // -----------------------------------------------------------------------
-    case load_finished: {
-      // One-frame no-op landing — transitions to load_idle via state++ below.
-      break;
-    }
-
-    // -----------------------------------------------------------------------
-    default:
-      // load_idle or any unexpected state: render audio (or silence if no SF2).
-      state = load_idle;
-  }
-
-  if (state != load_idle) {
-    // Still loading — advance state machine and render silence.
-    state++;
-    memset(out, 0, frames * 2 * sizeof(float));
-    return;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Normal rendering
-  // ---------------------------------------------------------------------------
-  if (soundfont == nullptr) {
-    // No SF2 loaded (directory empty, file missing, etc.) — output silence.
-    memset(out, 0, frames * 2 * sizeof(float));
-    return;
-  }
-
-  tsf_render_float(soundfont, out, (int)frames, TSF_FALSE);
-}
-
-// ---------------------------------------------------------------------------
-// unit_set_param_value
-// ---------------------------------------------------------------------------
-
-__unit_callback void unit_set_param_value(uint8_t index, int32_t value) {
-  if (index >= param_num)
-    return;
-
-  switch (index) {
-    case param_soundfont:
-      // Clamp to actual file count.
-      if (soundfont_list.count <= 0)
-        break;
-      if (value >= soundfont_list.count)
-        value = soundfont_list.count - 1;
-      if (value < 0)
-        value = 0;
-      if (value == Params[index])
-        break;
-      // Silence current SF2 and reload.
-      if (soundfont != nullptr)
-        tsf_channel_sounds_off_all(soundfont, 0);
-      state = load_start;
-      break;
-
-    case param_preset:
-      if (soundfont == nullptr)
-        break;
-      {
-        int max_preset = tsf_get_presetcount(soundfont) - 1;
-        if (value > max_preset)
-          value = max_preset;
-        if (value < 0)
-          value = 0;
-      }
-      if (value != Params[index]) {
-        tsf_channel_note_off_all(soundfont, 0);
-        tsf_channel_set_presetindex(soundfont, 0, value);
-      }
-      break;
-
-    case param_max_voices:
-      if (value < 1)  value = 1;
-      if (value > 32) value = 32;
-      if (soundfont != nullptr)
-        tsf_set_max_voices(soundfont, value);
-      break;
-
-    case param_sustain:
-      if (value < 0) value = 0;
-      if (value > 1) value = 1;
-      if (soundfont != nullptr)
-        tsf_channel_set_sustain(soundfont, 0, value);
-      break;
-
-    case param_note:
-      if (value < 0)   value = 0;
-      if (value > 127) value = 127;
-      break;
-
-    default:
-      break;
-  }
-
-  Params[index] = value;
-}
-
-// ---------------------------------------------------------------------------
-// unit_get_param_value
-// ---------------------------------------------------------------------------
-
-__unit_callback int32_t unit_get_param_value(uint8_t index) {
-  if (index < param_num)
-    return Params[index];
-  return 0;
-}
-
-// ---------------------------------------------------------------------------
-// unit_get_param_str_value
-// Returns a human-readable string for string-type parameters.
-// The returned pointer must remain valid until the next call.
-// ---------------------------------------------------------------------------
-
-__unit_callback const char *unit_get_param_str_value(uint8_t index, int32_t value) {
-  // value comes in as int32_t but may be stored as int16_t in firmware — cast.
-  value = (int16_t)value;
-
-  switch (index) {
-    case param_soundfont:
-      if (soundfont_list.count <= 0)
-        return "NO SF2";
-      if (value < 0)
-        value = 0;
-      if (value >= soundfont_list.count)
-        value = soundfont_list.count - 1;
-      return soundfont_list.get(value);
-
-    case param_preset:
-      if (soundfont == nullptr)
-        return "LOADING";
-      {
-        int max_preset = tsf_get_presetcount(soundfont) - 1;
-        if (value < 0)
-          value = 0;
-        if (value > max_preset)
-          value = max_preset;
-      }
-      return tsf_get_presetname(soundfont, value);
-
-    default:
-      return nullptr;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// unit_get_param_bmp_value
-// Not used in Phase 1.
-// ---------------------------------------------------------------------------
-
-__unit_callback const uint8_t *unit_get_param_bmp_value(uint8_t index, int32_t value) {
-  (void)index;
-  (void)value;
-  return nullptr;
-}
-
-// ---------------------------------------------------------------------------
-// MIDI note handlers
-// ---------------------------------------------------------------------------
-
-__unit_callback void unit_note_on(uint8_t note, uint8_t velocity) {
-  if (soundfont != nullptr)
-    tsf_channel_note_on(soundfont, 0, note, velocity * VELOCITY_SCALE);
-}
-
-__unit_callback void unit_note_off(uint8_t note) {
-  if (soundfont != nullptr)
-    tsf_channel_note_off(soundfont, 0, note);
-}
-
-__unit_callback void unit_all_note_off() {
-  if (soundfont != nullptr)
-    tsf_channel_note_off_all(soundfont, 0);
-}
-
-__unit_callback void unit_pitch_bend(uint16_t pitch_bend) {
-  if (soundfont != nullptr)
-    tsf_channel_set_pitchwheel(soundfont, 0, (int)pitch_bend);
-}
-
-__unit_callback void unit_channel_pressure(uint8_t pressure) {
-  // Map channel pressure to expression (MIDI CC11).
-  if (soundfont != nullptr)
-    tsf_channel_midi_control(soundfont, 0, 11, pressure);
-}
-
-__unit_callback void unit_aftertouch(uint8_t note, uint8_t aftertouch) {
-  // Polyphonic aftertouch — not supported by TSF channel API; ignore.
-  (void)note;
-  (void)aftertouch;
-}
-
-// ---------------------------------------------------------------------------
-// Drumlogue gate handlers (drum-trigger-style note without MIDI)
-// ---------------------------------------------------------------------------
-
-__unit_callback void unit_gate_on(uint8_t velocity) {
-  if (soundfont != nullptr)
-    tsf_channel_note_on(soundfont, 0, Params[param_note], velocity * VELOCITY_SCALE);
-}
-
-__unit_callback void unit_gate_off() {
-  if (soundfont != nullptr)
-    tsf_channel_note_off(soundfont, 0, Params[param_note]);
-}
-
-// ---------------------------------------------------------------------------
-// Tempo / transport
-// ---------------------------------------------------------------------------
-
-__unit_callback void unit_set_tempo(uint32_t tempo) {
-  (void)tempo;
-}
-
-__unit_callback void unit_tempo_4ppqn_tick(uint32_t counter) {
-  (void)counter;
-}
-
-// ---------------------------------------------------------------------------
-// Preset save/load (not used in Phase 1)
-// ---------------------------------------------------------------------------
-
-__unit_callback void unit_load_preset(uint8_t idx) {
-  (void)idx;
-}
-
-__unit_callback uint8_t unit_get_preset_index() {
-  return 0;
-}
-
-__unit_callback const char *unit_get_preset_name(uint8_t idx) {
-  (void)idx;
-  return nullptr;
-}
-```
-
-#### 4.3.3 Critical details in `unit_render()`
-
-**The `load_read` state machine trick (important):**
-
-The TSF file is potentially 4.2 MB. At `CHUNK_SIZE = 131072` bytes per render frame, that is `ceil(4,200,000 / 131,072) ≈ 33 frames` = ~88 ms of silence at 128 frames/buffer / 48 kHz.
-
-The trick from `loguetsf.cc`:
-```cpp
-case load_read:
-  n = fread(buf + pos, 1, CHUNK_SIZE, fp);
-  pos += n;
-  if (n < CHUNK_SIZE)
-    break;          // short read = EOF → state++ → load_close
-  state--;          // more to read → state-- and state++ = stay in load_read
-  break;
-```
-
-At the bottom of the switch, `state++` always runs (when state != load_idle). So:
-- If read was partial (EOF): `state` is `load_read`, then `+1` → `load_close`. Correct.
-- If read was full: `state--` brings it back to `load_read - 1`, then `+1` brings it back to `load_read`. Correct.
-
-**The `load_finished` state:**
-
-After `load_tsf_set` completes, `state++` produces `load_finished`. On the next frame, the `switch` falls through the `load_finished` case (no-op), `state++` produces `load_idle`... but wait: `load_finished = load_idle + something`. Let's count the enum:
-
-```
-load_idle     = 0
-load_start    = 1
-load_alloc    = 2
-load_read     = 3
-load_close    = 4
-load_tsf_load = 5
-load_tsf_set  = 6
-load_finished = 7
-```
-
-After `load_tsf_set` runs, `state++` = 7 (`load_finished`). On the next render call, the switch hits `case load_finished:` (no-op), then `state != load_idle` is true (7 != 0), so `state++` = 8. The `default:` case on the *next* frame catches this and resets `state = load_idle`. 
-
-Wait — this is slightly different from `loguetsf.cc`. In that reference, the states are sequential and `load_finished` is the last one before `load_idle` would be reached. Let me verify the logic is correct:
-
-Frame N: `state = load_tsf_set (6)`, executes, `state++ = 7 (load_finished)`, returns silence.
-Frame N+1: `state = load_finished (7)`, `case load_finished:` no-op, `state++ = 8`, returns silence.
-Frame N+2: `state = 8`, hits `default:` case, sets `state = load_idle (0)`, fall-through to render audio.
-
-This is correct. Audio starts 2 frames after `load_tsf_set` completes. Acceptable.
-
-**Alternative (simpler):** Set `state = load_idle` explicitly inside `case load_finished:` and return early before the `state++`. Either approach works. The plan above uses the approach above (letting `default` catch the overflow).
-
-**The `suspended` flag and state machine:**
-
-When `unit_suspend()` is called, `suspended = true`. The render callback returns immediately with silence but does NOT advance the state machine. This is intentional — a suspended unit should not be loading files or consuming CPU. When `unit_resume()` is called, loading resumes from wherever it left off. This matches `loguetsf.cc` behaviour.
-
----
-
-### Step 4.4: Rewrite `header.c`
-
-**File:** `drumlogue/druteus/header.c`
-
-Replace the existing stub content with the Phase 1 parameter set:
-
-```c
-/**
- * @file header.c
- * @brief drumlogue SDK unit header for DRUTEUS — Proteus/1 SF2 synth
- */
-
-#include "unit.h"
-
-const __unit_header unit_header_t unit_header = {
-    .header_size = sizeof(unit_header_t),
-    .target      = UNIT_TARGET_PLATFORM | k_unit_module_synth,
-    .api         = UNIT_API_VERSION,
-    .dev_id      = 0x434C444DU,   /* "CLDM" */
-    .unit_id     = 0x00000005U,
-    .version     = 0x000100U,     /* 0.1.0 */
-    .name        = "DRUTEUS",
-    .num_presets = 0,
-    .num_params  = 24,
-    .params = {
-        /* Page 1 */
-        /* 0 */ {0, 63,  0, 0,  k_unit_param_type_strings, 0, 0, 0, {"SFONT"}},
-        /* 1 */ {0, 255, 0, 0,  k_unit_param_type_strings, 0, 0, 0, {"PRESET"}},
-        /* 2 */ {1, 32,  1, 16, k_unit_param_type_none,    0, 0, 0, {"VOICES"}},
-        /* 3 */ {0, 1,   0, 0,  k_unit_param_type_none,    0, 0, 0, {"SUSTAIN"}},
-
-        /* Page 2 */
-        /* 4 */ {0, 127, 0, 60, k_unit_param_type_none,    0, 0, 0, {"NOTE"}},
-        /* 5 */ {0, 0,   0, 0,  k_unit_param_type_none,    0, 0, 0, {""}},
-        /* 6 */ {0, 0,   0, 0,  k_unit_param_type_none,    0, 0, 0, {""}},
-        /* 7 */ {0, 0,   0, 0,  k_unit_param_type_none,    0, 0, 0, {""}},
-
-        /* Pages 3–6: blanks */
-        /* 8  */ {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        /* 9  */ {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        /* 10 */ {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        /* 11 */ {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        /* 12 */ {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        /* 13 */ {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        /* 14 */ {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        /* 15 */ {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        /* 16 */ {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        /* 17 */ {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        /* 18 */ {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        /* 19 */ {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        /* 20 */ {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        /* 21 */ {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        /* 22 */ {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-        /* 23 */ {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
-    },
-};
-```
-
-**Parameter descriptor field order (from `unit.h`):**
-`{min, max, center, init, type, frac, frac_mode, reserved, name}`
-
-- `init`: the default value the firmware writes on first load (should match `kParamDefaults` in `unit.cc`).
-- `center`: the "center" knob position (used for bipolar params). For SFONT/PRESET/VOICES/SUSTAIN set to the min or a sensible default; for NOTE set to 60 (middle C).
-- `frac` and `frac_mode`: both 0 for integer params.
-- `reserved`: always 0.
-
-**Verify:** `DRUTEUS` is exactly 7 chars, all 7-bit ASCII. `dev_id = 0x434C444DU` matches hex for "CLDM". `unit_id = 0x00000005U` is not taken (check `drumlogue/*/header.c` in the repo).
-
----
-
-### Step 4.5: Verify `config.mk` (no changes expected)
-
-Review `drumlogue/druteus/config.mk`. No changes should be needed because:
-
-1. `tsf.h` and `logue_fs.h` are header-only and do not add entries to `CXXSRC`.
-2. `TSF_IMPLEMENTATION`, `TSF_NO_STDIO`, `TSF_STATIC` are defined in `unit.cc` as `#define`s, not as compiler flags.
-3. `ULIBS = -lm` is already present (TSF uses `sinf`, `cosf`, `sqrtf`, etc.).
-4. `COMMON_INC_PATH` and `COMMON_SRC_PATH` are already set.
-
-The only thing to verify is that the include path for `tsf.h` and `logue_fs.h` is satisfied. Since both files live in the same directory as `unit.cc` (`drumlogue/druteus/`), the SDK Makefile should include that directory automatically (it typically adds the project source directory to the include path). If the build fails with "tsf.h: No such file", add `UINCDIR = .` to `config.mk`.
-
-```makefile
-# If needed (usually not):
-UINCDIR = .
-```
-
----
-
-### Step 4.6: Build
-
-From the repo root:
-
-```bash
-# Clean any previous build artifacts first
-./build.sh druteus clean
-
-# Build
-./build.sh druteus
-```
-
-**Expected output:** The build script copies sources into the container, compiles with ARM GCC, and copies `druteus.drmlgunit` back to `drumlogue/druteus/`. Expect:
-- No linker errors (no undefined symbols except standard libc/GCC runtime)
-- Warnings from TSF about `__attribute__((packed))` and unused functions — acceptable (the GCC pragma suppresses `unused-function`; `packed` warnings are informational)
-- Binary size: ~150–300 KB (TSF code + Proteus SF2 decoder tables are substantial; the SF2 data itself is NOT embedded)
-
-**If `UINCDIR` error occurs** (tsf.h or logue_fs.h not found):
-```makefile
-# Add to config.mk:
-UINCDIR = .
-```
-
-**If `thread_local` fails** (unlikely on drumlogue's glibc):
-The `self()` function in `logue_fs.h` uses `static thread_local`. If the ARM toolchain does not support it, replace `thread_local` with just `static` (single-threaded environment, thread safety not needed):
-```cpp
-static int flt(const struct dirent *entry) {
-  static const fs_dir *ptr = nullptr;
-  // ...
-}
-```
-But do not change this unless the build fails — `thread_local` is correct and preferred.
-
----
-
-### Step 4.7: Verify the built binary
-
-```bash
-# Check the binary was created and has a reasonable size
-ls -lh drumlogue/druteus/druteus.drmlgunit
-
-# Check for unexpected undefined symbols (should only be libc/GCC runtime)
-objdump -T drumlogue/druteus/druteus.drmlgunit | grep "UND"
-```
-
-**Acceptable undefined symbols** (provided by drumlogue runtime):
-- `GLIBC_*`: `sinf`, `cosf`, `sqrtf`, `malloc`, `free`, `fopen`, `fread`, `fclose`, `fstat`, `scandir`, `alphasort`, `strdup`, `snprintf`, `memset`, etc.
-- `GCC_*`: division helpers, stack unwind
-- `CXXABI_*`: `atexit`, `__cxa_throw`
-- `GLIBCXX_*`: new/delete
-
-**Unacceptable undefined symbols:** any symbol from your own code (e.g., `_ZN...` mangled C++ names that come from missing object files). If these appear, check that `unit.cc` compiled and is in `build/obj/`.
-
----
-
-### Step 4.8: Deploy and test on hardware
-
-1. Build the unit (Step 4.6 above).
-2. Connect the drumlogue via USB. It appears as a mass storage device.
-3. Copy the SF2 files to the `Programs` folder:
-   ```bash
-   cp drumlogue/druteus/sfx/Proteus1_Presets.sf2 /Volumes/DRUMLOGUE/Programs/
-   cp drumlogue/druteus/sfx/Proteus1_Instruments.sf2 /Volumes/DRUMLOGUE/Programs/
-   ```
-   (Path varies by OS; on macOS it appears under `/Volumes/DRUMLOGUE/`.)
-4. Copy the unit:
-   ```bash
-   cp drumlogue/druteus/druteus.drmlgunit /Volumes/DRUMLOGUE/Units/Synth/
-   ```
-5. Eject the volume and power-cycle the drumlogue.
-6. Navigate to the SYNTH section and select DRUTEUS.
-
-**Hardware test checklist:**
-- [ ] Unit loads without error
-- [ ] After ~2 seconds of silence, audio starts rendering (loading 4.2 MB at 131 KB/frame = ~33 frames ≈ 88 ms, plus 6 overhead frames ≈ 105 ms total)
-- [ ] Page 1 shows: SFONT, PRESET, VOICES, SUSTAIN
-- [ ] Page 2 shows: NOTE (then 3 blanks)
-- [ ] SFONT knob shows SF2 filenames (alphabetical order from Programs/)
-- [ ] PRESET knob shows Proteus/1 preset names
-- [ ] MIDI note-on plays the selected preset
-- [ ] Gate trigger plays NOTE on gate-on, off on gate-off
-- [ ] Changing SFONT causes a reload (brief silence, then new SF2 plays)
-- [ ] Changing PRESET switches to new Proteus/1 patch mid-note
-- [ ] VOICES knob limits polyphony (test with rapid chord playing)
-- [ ] SUSTAIN=1 holds notes after note-off
-- [ ] Pitch bend works (slides pitch)
-- [ ] No crashes or device resets after extended play (10+ minutes)
-
----
-
-## 5. Architecture Notes for Phase 2
-
-Phase 2 additions (for future reference):
-
-### 5.1 VOLUME parameter
-
-TSF supports output gain via the 4th argument to `tsf_set_output`:
-```cpp
-tsf_set_output(soundfont, OUTPUT_MODE, 48000, gain_db);
-```
-Add a VOLUME param (e.g., -40 to 0 dB, or 0–100% mapped to 0 dB). Call `tsf_set_output` again on param change without reloading the SF2.
-
-### 5.2 PAN parameter
-
-TSF MIDI CC10 controls pan per channel:
-```cpp
-tsf_channel_midi_control(soundfont, 0, 10, pan_value); // 0–127, 64=center
-```
-Map a -50 to +50 param to 0–127 range.
-
-### 5.3 TRANSPOSE parameter
-
-There is no TSF API for global transpose. Implement in `unit_note_on`:
-```cpp
-int transposed = (int)note + Params[param_transpose];
-transposed = std::clamp(transposed, 0, 127);
-tsf_channel_note_on(soundfont, 0, transposed, velocity * VELOCITY_SCALE);
-```
-Store the original note for `unit_note_off` to correctly release:
-```cpp
-// Keep a map of original note -> transposed note for release
-```
-Or, simpler: apply transpose only to the stored gate NOTE param.
-
-### 5.4 Multiple SF2 files — Instruments bank
-
-Currently `Proteus1_Presets.sf2` and `Proteus1_Instruments.sf2` both appear in the Programs/ folder. The SFONT param lets the user select between them. No code changes needed — it works automatically via the file listing.
-
-### 5.5 Per-channel preset control
-
-Proteus/1 supports up to 16 MIDI channels, each with its own patch. TSF supports multiple channels via `tsf_channel_set_presetindex(sf, channel, preset)`. This would allow drum kits on channel 10 and melodic patches on channels 1–9. Phase 2 addition.
-
----
-
-## 6. Known Issues and Edge Cases
-
-### 6.1 `soundfont_list` initialized before `unit_init`
-
-The `static fs_dir soundfont_list = fs_dir(SOUNDFONT_PATH, "", ".sf2")` is initialized at static construction time (when the shared library is `dlopen`'d by the drumlogue). If the Programs directory does not exist at that time, `scandir` returns -1 and `count` will be -1 (not 0). The code correctly guards with `count > 0` in both `unit_init` and `unit_set_param_value`.
-
-If the user adds SF2 files after the unit has loaded (while the unit is already running), the file list will not update. A future improvement: call `soundfont_list.refresh()` when SFONT is changed to a value that previously had no files.
-
-### 6.2 TSF memory usage
-
-`tsf_load_memory` parses the SF2 and allocates internal state, samples, and voices. For a 4.2 MB SF2 with 262 samples and 16 max voices, expect ~10–15 MB of heap usage. The drumlogue has ~256 MB RAM and runs Linux with a heap, so this is fine. However, if the heap is fragmented (many prior allocations/frees), `malloc` may fail. The `unit_render` state machine handles this by checking for nullptr returns and falling back to silence.
-
-### 6.3 `tsf_get_presetname` pointer lifetime
-
-`tsf_get_presetname` returns a pointer into the tsf's internal memory. This pointer is valid as long as the tsf instance is not closed. Since `unit_get_param_str_value` is called from the UI thread and `unit_render` runs on the audio thread (and may close/reopen tsf), there is a theoretical race condition. In practice, drumlogue likely serializes these calls or the window is too small to matter. A Phase 2 fix would be to cache the preset name string locally.
-
-### 6.4 File path casing
-
-The `logue_fs.h` filter matches both `.sf2` and `.SF2` extensions. Filenames are sorted alphabetically by `alphasort`. `Proteus1_Instruments.sf2` will sort before `Proteus1_Presets.sf2` alphabetically, so SFONT=0 will select Instruments and SFONT=1 will select Presets. This is fine; the display shows the filename.
-
-### 6.5 TSF preset index vs. MIDI bank/program
-
-TSF uses a flat preset index (0 to N-1). `tsf_channel_set_presetindex` takes this flat index, not a MIDI bank+program pair. The preset names shown by `tsf_get_presetname` correspond to these indices. For Proteus/1, index 0–128 maps to the 129 factory patches in order.
-
-### 6.6 `TSF_NO_STDIO`
-
-With `TSF_NO_STDIO`, the `tsf_load_filename` and `tsf_load_FILE` functions are unavailable. We use `tsf_load_memory` which requires the entire file in a buffer. This is intentional — chunked loading via `unit_render` requires manual file I/O.
-
-### 6.7 `MAXNAMLEN` availability
-
-`MAXNAMLEN` is defined in `<sys/param.h>` on Linux and macOS. It is the maximum filename length (typically 255). If the build fails with `MAXNAMLEN undeclared`, replace with `255` or `NAME_MAX` from `<limits.h>`.
-
----
-
-## 7. Files Modified / Created Summary
-
-| File | Action | Notes |
-|------|--------|-------|
-| `drumlogue/druteus/tsf.h` | CREATE | Download from TinySoundFont GitHub; do not modify |
-| `drumlogue/druteus/logue_fs.h` | CREATE | Copy from dukesrg tsf branch; verbatim |
-| `drumlogue/druteus/unit.cc` | REWRITE | Full TSF state machine implementation |
-| `drumlogue/druteus/header.c` | REWRITE | Phase 1 params: SFONT, PRESET, VOICES, SUSTAIN, NOTE |
-| `drumlogue/druteus/config.mk` | VERIFY | No changes expected; add `UINCDIR = .` if needed |
-| `drumlogue/druteus/Makefile` | NO CHANGE | SDK template copy; never modify |
-| `test/druteus/main.cc` | NO CHANGE | Pass-through stub; real testing is on hardware |
-| `test/druteus/Makefile` | NO CHANGE | Desktop test harness; Phase 1 does not test TSF on desktop |
-
----
-
-## 8. Quick Reference Commands
-
-```bash
-# Build
-./build.sh druteus
-
-# Clean and rebuild
-./build.sh druteus clean && ./build.sh druteus
-
-# Check binary size
-ls -lh drumlogue/druteus/druteus.drmlgunit
-
-# Check undefined symbols
-objdump -T drumlogue/druteus/druteus.drmlgunit | grep "UND"
-
-# Desktop test (pass-through only, does not test TSF)
-cd test/druteus && make test
-
-# Release management
-make version UNIT=druteus VERSION=0.1.0
-make build UNIT=druteus
-make tag UNIT=druteus VERSION=0.1.0
-
-# List all units
-make list-units
-```
+- ~30,868 bytes final `.drmlgunit`, zero unexpected undefined symbols
+- Desktop native build (for `test/presets-editor`): `./build-system/build-native.sh druteus`
+
+## 7. Known Design Decisions
+
+- **Not modifying `tsf.h`** — ADSR, LFO, chorus/reverb are post-TSF DSP shaders
+- **TSF_STATIC** — all TSF symbols static, avoids linker conflicts
+- **No ROM instrument decoding** — SF2 approach was simpler; Proteus ROM analysis abandoned
+- **ADSR defaults = pass-through**: ATK=0, DEC=0, SUS=99, REL=99 (SF2's natural envelope plays)
+- **Unit IDs under `0x434C444DU`**: 0x01=clouds-revfx, 0x02=elementish-synth, 0x03=pepege-synth, 0x04=drupiter-synth, 0x05=druteus
+
+## 8. What's Next (Phase 3)
+
+- Custom voice engine with Proteus ROM instrument tables
+- Crossfade layers and keyboard splits
+- Per-layer effects (distortion, EQ, filter from Proteus architecture)
+- Multi-channel MIDI support (drum kit on CH10, melodic on 1–9)
+- Preset save/load for user patches
