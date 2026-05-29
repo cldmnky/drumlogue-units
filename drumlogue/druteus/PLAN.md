@@ -29,7 +29,7 @@ This document describes the current state of the `druteus` drumlogue synth unit 
 |-------|--------|------|-------|---------|-------|
 | 0     | SFONT  | strings | 0–63 | 0 | SF2 filename from Programs/ |
 | 1     | PRESET | strings | 0–255 | 0 | Preset name from TSF |
-| 2     | VOICES | none  | 1–32 | 16 | Max polyphony |
+| 2     | VOICES | none  | 1–16 | 16 | Max polyphony (voice stealing via VoiceAllocatorCore) |
 | 3     | TUNE   | none  | 0–24 (-12..+12) | 12 (0) | Semitone transpose applied as `note + (tune-12)` |
 
 ### Page 2 — Pitch & Mix
@@ -59,7 +59,7 @@ This document describes the current state of the `druteus` drumlogue synth unit 
 ### Page 5 — Play Mode
 | Index | Name | Type | Range | Default | Notes |
 |-------|------|------|-------|---------|-------|
-| 16    | SOLO | none | 0–1 | 0 | 0=poly, 1=mono (monophonic mode) |
+| 16    | (blank) | none | — | — | — |
 | 17    | (blank) | none | — | — | — |
 | 18    | (blank) | none | — | — | — |
 | 19    | (blank) | none | — | — | — |
@@ -80,6 +80,14 @@ This document describes the current state of the `druteus` drumlogue synth unit 
 - Chunked async load: `fread` 131072 bytes per render frame (~33 frames = ~88 ms for 4.2 MB)
 - `logue_fs.h` wraps `scandir` for `.sf2` file listing in Programs folder
 - File path: `/var/lib/drumlogued/userfs/Programs`
+
+### Voice Allocator
+- `common::VoiceAllocatorCore` from `drumlogue/common/`
+- Manages polyphony limiting and voice stealing
+- Oldest-note stealing strategy (steals the voice that was triggered earliest)
+- Polyphonic mode with configurable max voices (1–16)
+- Tracks active notes for ADSR envelope release triggering
+- VOICES param dynamically reinitializes allocator via `voice_allocator.Init(value)`
 
 ### ADSR Envelope
 - Post-TSF per-sample volume scaling
