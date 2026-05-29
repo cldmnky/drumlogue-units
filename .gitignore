@@ -67,7 +67,7 @@ build/
 *.drmlgunit
 
 .mcp-debug-tools/
-
+drumlogue/druteus/tmp
 .DS_Store
 Thumbs.db
 test/elements-synth/elements_synth_test
