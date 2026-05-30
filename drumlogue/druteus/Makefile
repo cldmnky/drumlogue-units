@@ -169,7 +169,7 @@ CXXOPT := $(USE_CXXOPT)
 ifeq ($(USE_LINK_GC),yes)
   COPT    += -ffunction-sections -fdata-sections -fno-common
   CXXOPT  += -ffunction-sections -fdata-sections -fno-common
-  LDOPT   := --gc-sections
+  LDOPT   := ,--gc-sections
 else
   LDOPT :=
 endif

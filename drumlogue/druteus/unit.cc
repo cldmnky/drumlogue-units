@@ -354,6 +354,8 @@ static void s_apply_params() {
   tsf_set_max_voices(soundfont, Params[param_max_voices]);
   s_load_patch(Params[param_preset]);
   tsf_channel_set_pitchwheel(soundfont, 0, (int)last_pitch_bend);
+  if (patch_has_secondary)
+    tsf_channel_set_pitchwheel(soundfont, 1, (int)last_pitch_bend);
 }
 
 // ---------------------------------------------------------------------------
@@ -645,9 +647,13 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
 
     // -----------------------------------------------------------------------
     case load_read: {
-      size_t n = fread(soundfont_buf + buf_pos, 1, CHUNK_SIZE, fp);
+      if (buf_pos >= buf_size)
+        break;
+      size_t remaining = buf_size - buf_pos;
+      size_t chunk_size = remaining < CHUNK_SIZE ? remaining : CHUNK_SIZE;
+      size_t n = fread(soundfont_buf + buf_pos, 1, chunk_size, fp);
       buf_pos += n;
-      if (n < CHUNK_SIZE) {
+      if (n < chunk_size || buf_pos >= buf_size) {
         // Short read = EOF (or error) — advance to load_close.
         break;
       }
@@ -928,6 +934,11 @@ __unit_callback void unit_set_param_value(uint8_t index, int32_t value) {
         tsf_set_max_voices(soundfont, value);
       break;
 
+    case param_transpose:
+      if (value < -12) value = -12;
+      if (value > 12)  value = 12;
+      break;
+
     case param_volume:
       if (value < 0)   value = 0;
       if (value > 127) value = 127;
@@ -1000,6 +1011,11 @@ __unit_callback void unit_set_param_value(uint8_t index, int32_t value) {
     case param_lfo_dest:
       if (value < 0) value = 0;
       if (value > 2) value = 2;
+      break;
+
+    case param_lfo_wave:
+      if (value < 0) value = 0;
+      if (value > 4) value = 4;
       break;
 
     default:

@@ -29,21 +29,27 @@ struct fs_dir {
 
   static int flt(const struct dirent *entry) {
     const fs_dir *s = self();
+    const size_t name_len = strlen(entry->d_name);
+    const size_t suffix_len = s->filter.suffix ? strlen(s->filter.suffix) : 0;
+    const size_t suffix_uc_len = s->suffix_uc ? strlen(s->suffix_uc) : 0;
     return (entry->d_type == DT_REG || entry->d_type == DT_LNK)
       && (s->filter.prefix == nullptr
           || strncmp(entry->d_name, s->filter.prefix, strlen(s->filter.prefix)) == 0)
       && (s->filter.suffix == nullptr
-          || strcmp(entry->d_name + strlen(entry->d_name) - strlen(s->filter.suffix),
-                    s->filter.suffix) == 0
-          || strcmp(entry->d_name + strlen(entry->d_name) - strlen(s->suffix_uc),
-                    s->suffix_uc) == 0);
+          || (name_len >= suffix_len
+              && strcmp(entry->d_name + name_len - suffix_len, s->filter.suffix) == 0)
+          || (name_len >= suffix_uc_len
+              && strcmp(entry->d_name + name_len - suffix_uc_len, s->suffix_uc) == 0));
   }
 
   void cleanup() {
-    if (dirlist == nullptr)
-      return;
-    free(dirlist);
-    dirlist = nullptr;
+    if (dirlist != nullptr) {
+      for (int i = 0; i < count; ++i)
+        free(dirlist[i]);
+      free(dirlist);
+      dirlist = nullptr;
+    }
+    count = 0;
     free(suffix_uc);
     suffix_uc = nullptr;
   }
@@ -82,25 +88,33 @@ struct fs_dir {
   }
 
   void init() {
+    count = 0;
     dirlist = nullptr;
+    suffix_uc = nullptr;
     refresh();
   }
 
   fs_dir(const char *pth, const char *pfx, const char *sfx)
-      : path(pth), filter({.prefix = pfx, .suffix = sfx}) {
+      : count(0), dirlist(nullptr), path(pth),
+        filter({.prefix = pfx, .suffix = sfx}), suffix_uc(nullptr) {
     init();
   }
 
   fs_dir(const char *pth, const char *sfx)
-      : path(pth), filter({.prefix = nullptr, .suffix = sfx}) {
+      : count(0), dirlist(nullptr), path(pth),
+        filter({.prefix = nullptr, .suffix = sfx}), suffix_uc(nullptr) {
     init();
   }
 
-  fs_dir(const char *pth) : path(pth) {
+  fs_dir(const char *pth)
+      : count(0), dirlist(nullptr), path(pth),
+        filter({.prefix = nullptr, .suffix = nullptr}), suffix_uc(nullptr) {
     init();
   }
 
-  fs_dir() : dirlist(nullptr), filter({.prefix = nullptr, .suffix = nullptr}) {}
+  fs_dir()
+      : count(0), dirlist(nullptr), path(nullptr),
+        filter({.prefix = nullptr, .suffix = nullptr}), suffix_uc(nullptr) {}
 
   ~fs_dir() {
     cleanup();
