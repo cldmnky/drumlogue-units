@@ -368,6 +368,21 @@ static float s_apply_velocity_curve(uint8_t velocity) {
 }
 
 // ---------------------------------------------------------------------------
+// Internal helper: immediately kill all TSF voices matching channel+preset+key
+// ---------------------------------------------------------------------------
+
+static void tsf_kill_note(tsf* f, int channel, int preset, int key) {
+  for (int i = 0; i < (int)f->voiceNum; i++) {
+    tsf_voice* v = &f->voices[i];
+    if (v->playingPreset == preset && v->playingKey == key &&
+        v->playingChannel == channel) {
+      v->ampGain = 0.0f;
+      tsf_voice_kill(v);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Internal helper: trigger a note with all transforms applied
 // ---------------------------------------------------------------------------
 
@@ -396,12 +411,9 @@ static void s_trigger_note(uint8_t note, uint8_t velocity) {
   if (result.voice_index >= 0 && result.voice_index < 16) {
     if (voice_env[result.voice_index].active) {
       uint8_t old_note = voice_env[result.voice_index].note;
-      tsf_channel_note_off(soundfont, 0, old_note);
+      tsf_kill_note(soundfont, 0, voice_preset_primary, old_note);
       if (patch_has_secondary)
-        tsf_channel_note_off(soundfont, 1, old_note);
-      tsf_note_set_amp_gain(soundfont, voice_preset_primary, old_note, 0.0f);
-      if (patch_has_secondary)
-        tsf_note_set_amp_gain(soundfont, voice_preset_secondary, old_note, 0.0f);
+        tsf_kill_note(soundfont, 1, voice_preset_secondary, old_note);
     }
     voice_env[result.voice_index].active             = true;
     voice_env[result.voice_index].note               = (uint8_t)adjusted;
@@ -752,13 +764,15 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
       tsf_channel_set_tuning(soundfont, 1, tuned);
   }
 
-  // Per-voice AHDSR — applied via TSF ampGain before rendering.
+  // Per-voice AHDSR — compute per-note gain then apply in single TSF voice pass.
   if (cached_env_enabled) {
     float atk_samples  = env_time_to_samples_attack(cached_env_atk);
     float hold_samples = env_time_to_samples_hold(cached_env_hold);
     float dec_samples  = env_time_to_samples_decay(cached_env_dec);
     float rel_samples  = env_time_to_samples_release(cached_env_rel);
     float sus_level    = cached_env_sus / 99.0f;
+    float note_gain_pri[128] = {};
+    float note_gain_sec[128] = {};
 
     for (int vi = 0; vi < 16; vi++) {
       if (!voice_env[vi].active) continue;
@@ -777,17 +791,24 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
         } else {
           level = 0.0f;
           voice_env[vi].active = false;
-          tsf_channel_sounds_off_all(soundfont, 0);
+          tsf_kill_note(soundfont, 0, voice_preset_primary, voice_env[vi].note);
           if (patch_has_secondary)
-            tsf_channel_sounds_off_all(soundfont, 1);
+            tsf_kill_note(soundfont, 1, voice_preset_secondary, voice_env[vi].note);
         }
       }
 
-      tsf_note_set_amp_gain(soundfont, voice_preset_primary,
-                            voice_env[vi].note, level);
+      note_gain_pri[voice_env[vi].note] = level;
       if (patch_has_secondary)
-        tsf_note_set_amp_gain(soundfont, voice_preset_secondary,
-                              voice_env[vi].note, level);
+        note_gain_sec[voice_env[vi].note] = level;
+    }
+
+    for (int i = 0; i < (int)soundfont->voiceNum; i++) {
+      tsf_voice* v = &soundfont->voices[i];
+      if (v->playingPreset == -1) continue;
+      if (v->playingChannel == 0 && v->playingPreset == voice_preset_primary)
+        v->ampGain = note_gain_pri[v->playingKey];
+      else if (v->playingChannel == 1 && v->playingPreset == voice_preset_secondary)
+        v->ampGain = note_gain_sec[v->playingKey];
     }
   }
 
