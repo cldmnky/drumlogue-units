@@ -482,7 +482,26 @@ struct tsf_channels
 static double tsf_timecents2Secsd(double timecents) { return TSF_POW(2.0, timecents / 1200.0); }
 static float tsf_timecents2Secsf(float timecents) { return TSF_POWF(2.0f, timecents / 1200.0f); }
 static float tsf_cents2Hertz(float cents) { return 8.176f * TSF_POWF(2.0f, cents / 1200.0f); }
-static float tsf_decibelsToGain(float db) { return (db > -100.f ? TSF_POWF(10.0f, db * 0.05f) : 0); }
+static float tsf_db_to_gain_table[1024];
+static int tsf_db_table_built = 0;
+
+static void tsf_build_db_gain_table() {
+	for (int i = 0; i < 1024; i++) {
+		float db = -100.0f + (i * 100.0f / 1023.0f);
+		tsf_db_to_gain_table[i] = (db > -100.0f) ? TSF_POWF(10.0f, db * 0.05f) : 0.0f;
+	}
+	tsf_db_table_built = 1;
+}
+
+static float tsf_decibelsToGain(float db) {
+	if (!tsf_db_table_built) tsf_build_db_gain_table();
+	if (db <= -100.0f) return 0.0f;
+	if (db >= 0.0f) return 1.0f;
+	float fi = (db + 100.0f) * (1023.0f / 100.0f);
+	int i = (int)fi;
+	float frac = fi - (float)i;
+	return tsf_db_to_gain_table[i] + frac * (tsf_db_to_gain_table[i + 1] - tsf_db_to_gain_table[i]);
+}
 static float tsf_gainToDecibels(float gain) { return (gain <= .00001f ? -100.f : (float)(20.0 * TSF_LOG10(gain))); }
 
 static TSF_BOOL tsf_riffchunk_read(struct tsf_riffchunk* parent, struct tsf_riffchunk* chunk, struct tsf_stream* stream)
@@ -1292,6 +1311,31 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 		{
 			case TSF_STEREO_INTERLEAVED:
 				gainLeft = gainMono * v->panFactorLeft, gainRight = gainMono * v->panFactorRight;
+#ifdef __ARM_NEON
+				// NEON batched accumulation — process 4 samples per iteration.
+				while (blockSamples >= 4 && (tmpSourceSamplePosition + pitchRatio * 3.0) < tmpSampleEndDbl)
+				{
+					float val[4];
+					double pp = tmpSourceSamplePosition;
+					for (int k = 0; k < 4; k++)
+					{
+						unsigned int pos = (unsigned int)pp, nextPos = (pos >= tmpLoopEnd && isLooping ? tmpLoopStart : pos + 1);
+						float alpha = (float)(pp - pos);
+						val[k] = (input[pos] * (1.0f - alpha) + input[nextPos] * alpha);
+						if (tmpLowpass.active) val[k] = tsf_voice_lowpass_process(&tmpLowpass, val[k]);
+						pp += pitchRatio;
+						if (pp >= tmpLoopEndDbl && isLooping) pp -= (tmpLoopEnd - tmpLoopStart + 1.0);
+					}
+					tmpSourceSamplePosition = pp;
+float32x4_t vals = vld1q_f32(val);
+float32x4_t out_l = vmlaq_f32(vld1q_f32(outL),     vals, vdupq_n_f32(gainLeft));
+float32x4_t out_r = vmlaq_f32(vld1q_f32(outL + 4), vals, vdupq_n_f32(gainRight));
+vst1q_f32(outL,     out_l);
+vst1q_f32(outL + 4, out_r);
+					outL += 8;
+					blockSamples -= 4;
+				}
+#endif
 				while (blockSamples-- && tmpSourceSamplePosition < tmpSampleEndDbl)
 				{
 					unsigned int pos = (unsigned int)tmpSourceSamplePosition, nextPos = (pos >= tmpLoopEnd && isLooping ? tmpLoopStart : pos + 1);
