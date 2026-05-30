@@ -19,6 +19,7 @@
 #include "voice_allocator.h"
 #include "../common/stereo_widener.h"
 #include "rings/dsp/fx/reverb.h"
+#include "filter.h"
 
 // NEON SIMD utilities (requires -DUSE_NEON, -mfpu=neon, -mfloat-abi=hard).
 #define NEON_DSP_NS druteus
@@ -70,8 +71,8 @@ enum {
   param_reverb       = 13,
   param_velocity_curve = 14,
   param_unused_15   = 15,
-  param_unused_16    = 16,
-  param_unused_17    = 17,
+  param_cutoff       = 16,
+  param_resonance    = 17,
   param_unused_18    = 18,
   param_unused_19    = 19,
   param_lfo_rate     = 20,
@@ -97,9 +98,9 @@ static const int32_t kParamDefaults[param_num] = {
   0,    // CHORUS: off
   0,    // REVERB: off
   0,    // V.CURVE: linear
-  0,    // unused (was DELAY)
-  0,    // unused (was SOLO)
   0,    // unused
+  127,  // CUTOFF: fully open
+  0,    // RES: no resonance
   0,    // unused
   0,    // unused
   0,    // LFO RTE: off
@@ -152,6 +153,10 @@ static bool suspended = false;
 static common::ChorusStereoWidener chorus_dsp;
 static rings::Reverb            reverb_dsp;
 static uint16_t                 reverb_buffer[32768];
+
+// SVFilter — stereo state variable filter (LP12, from pepege-synth).
+static SVFilter filter_l;
+static SVFilter filter_r;
 static float                    fx_buf_l[256];  // de-interleave temp
 static float                    fx_buf_r[256];
 static uint64_t                 sample_count  = 0;
@@ -502,6 +507,8 @@ __unit_callback int8_t unit_init(const unit_runtime_desc_t *desc) {
   reverb_dsp.set_time(0.5f);
   reverb_dsp.set_diffusion(0.625f);
   reverb_dsp.set_lp(0.7f);
+  filter_l.Init(48000.0f);
+  filter_r.Init(48000.0f);
 
   // Init voice allocator with default polyphony (16 voices).
   voice_allocator.Init(16);
@@ -830,6 +837,27 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
     ndsp::ApplyGain(out, vol_mod, frames * 2);
   }
 
+  // State variable filter (stereo, interleaved).
+  // Bypass when fully open (cutoff=127, res=0) to avoid attenuation.
+  {
+    int cutoff_param = Params[param_cutoff];
+    int res_param    = Params[param_resonance];
+    if (cutoff_param < 127 || res_param > 0) {
+      float cutoff = cutoff_param / 127.0f;
+      float res    = res_param / 127.0f;
+      filter_l.SetCutoff(cutoff);
+      filter_l.SetResonance(res);
+      filter_r.SetCutoff(cutoff);
+      filter_r.SetResonance(res);
+      for (uint32_t i = 0; i < frames; i++) {
+        float l = out[i * 2];
+        float r = out[i * 2 + 1];
+        out[i * 2]     = filter_l.Process(l);
+        out[i * 2 + 1] = filter_r.Process(r);
+      }
+    }
+  }
+
   // Apply DSP effects post-TSF.
   {
     float global_chorus = Params[param_chorus] / 15.0f;
@@ -947,6 +975,16 @@ __unit_callback void unit_set_param_value(uint8_t index, int32_t value) {
 
     case param_unused_10:
     case param_unused_11:
+      break;
+
+    case param_cutoff:
+      if (value < 0)   value = 0;
+      if (value > 127) value = 127;
+      break;
+
+    case param_resonance:
+      if (value < 0)   value = 0;
+      if (value > 127) value = 127;
       break;
 
     case param_lfo_rate:
