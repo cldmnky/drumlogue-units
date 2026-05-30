@@ -20,6 +20,14 @@
 #include "../common/stereo_widener.h"
 #include "rings/dsp/fx/reverb.h"
 
+// NEON SIMD utilities (requires -DUSE_NEON, -mfpu=neon, -mfloat-abi=hard).
+#define NEON_DSP_NS druteus
+#include "../common/neon_dsp.h"
+#include "../common/simd_utils.h"
+namespace ndsp = druteus::neon;
+
+#include "tools/proteus_patches.h"
+
 // TinySoundFont — single-header SF2 synthesizer.
 // TSF_IMPLEMENTATION must be defined in exactly one translation unit.
 // TSF_NO_STDIO prevents tsf.h from pulling in stdio (we use it ourselves).
@@ -54,10 +62,10 @@ enum {
   param_volume       = 5,
   param_pan          = 6,
   param_unused_7     = 7,
-  param_env_attack   = 8,  // Page 3 — envelope
-  param_env_decay    = 9,
-  param_env_sustain  = 10,
-  param_env_release  = 11,
+  param_xfade        = 8,  // Page 3 — layer control
+  param_layers       = 9,
+  param_unused_10    = 10,
+  param_unused_11    = 11,
   param_chorus       = 12, // Page 4 — effects & feel
   param_reverb       = 13,
   param_velocity_curve = 14,
@@ -82,10 +90,10 @@ static const int32_t kParamDefaults[param_num] = {
   100,  // VOLUME
   64,   // PAN: center
   0,    // unused
-  0,    // ENV ATK: instant
-  0,    // ENV DEC: none
-  99,   // ENV SUS: full
-  99,   // ENV REL: transparent
+  0,    // XFADE: off
+  0,    // LAYERS: both
+  0,    // unused
+  0,    // unused
   0,    // CHORUS: off
   0,    // REVERB: off
   0,    // V.CURVE: linear
@@ -152,16 +160,35 @@ static uint16_t                 last_pitch_bend = 8192;
 // Voice allocator for polyphony management.
 static common::VoiceAllocatorCore voice_allocator;
 
-// ADSR envelope state.
-static bool     env_active           = false;
-static uint64_t env_note_on_sample   = 0;
-static uint64_t env_note_off_sample  = 0;
-static float    env_release_start_level = 1.0f;
-static int      env_post_release_frames = 0;  // silence hold after release
-static int      active_notes           = 0;  // polyphonic note count
+// Current Proteus patch and dual-layer state.
+static proteus_patch_t current_patch;
+static bool patch_has_secondary = false;
+static int  voice_preset_primary   = 1;  // TSF preset index for CH0
+static int  voice_preset_secondary = 1;  // TSF preset index for CH1
+
+// Cached patch envelope values (read in render loop, set by s_load_patch).
+static uint32_t cached_env_atk = 0;
+static uint32_t cached_env_hold = 0;
+static uint32_t cached_env_dec = 0;
+static uint32_t cached_env_sus = 99;
+static uint32_t cached_env_rel = 99;
+static bool     cached_env_enabled = false;
+
+// Per-voice AHDSR envelope state (indexed by voice allocator voice_index).
+struct VoiceEnv {
+  bool     active;
+  uint8_t  note;
+  uint64_t note_on_sample;
+  uint64_t note_off_sample;
+  float    release_start_level;
+};
+static VoiceEnv voice_env[16];
+static int      active_notes = 0;  // polyphonic note count
 
 // LFO state.
 static float    lfo_phase            = 0.0f;
+static float    lfo2_phase           = 0.0f;
+static float    lfo_delay_completed  = 0.0f;  // frames since note-on for delay ramp
 
 // LFO wave shape: uses phase [0, 1) → output [-1, 1].
 static float lfo_wave_shape(float phase, uint8_t shape) {
@@ -189,27 +216,128 @@ static float lfo_wave_shape(float phase, uint8_t shape) {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-// Map Proteus-style envelope time (0-99) to samples at 48kHz.
-// Exponential curve: 0→1ms, 50→32ms, 99→956ms.
-static float env_time_to_samples(uint32_t value) {
-  return 48.0f * powf(2.0f, value / 10.0f);
+// Proteus envelope time curves — piecewise-linear from the owner's manual.
+// Each function maps a 0-99 param value to time in samples at 48 kHz.
+
+typedef struct { uint32_t knob; float seconds; } env_point_t;
+
+static float env_lookup_seconds(uint32_t value, const env_point_t *table, int n) {
+  if (value <= table[0].knob)    return table[0].seconds;
+  if (value >= table[n - 1].knob) return table[n - 1].seconds;
+  for (int i = 1; i < n; i++) {
+    if (value <= table[i].knob) {
+      float frac = (float)(value - table[i - 1].knob) /
+                   (float)(table[i].knob - table[i - 1].knob);
+      return table[i - 1].seconds +
+             frac * (table[i].seconds - table[i - 1].seconds);
+    }
+  }
+  return table[n - 1].seconds;
 }
 
-// Compute the envelope level at a given absolute sample time.
+static const env_point_t kReleasePts[] = {
+  {0, 0.0f}, {5, 0.125f}, {10, 0.25f}, {15, 0.4f}, {20, 0.6f},
+  {30, 1.2f}, {40, 2.2f}, {50, 4.0f}, {60, 9.0f}, {75, 15.0f},
+  {80, 20.0f}, {99, 60.0f},
+};
+
+static const env_point_t kDecayPts[] = {
+  {0, 0.0f}, {5, 0.125f}, {10, 0.25f}, {20, 0.4f}, {30, 0.75f},
+  {40, 1.5f}, {50, 3.0f}, {60, 5.0f}, {70, 9.0f}, {75, 12.0f},
+  {80, 18.0f}, {99, 40.0f},
+};
+
+static const env_point_t kHoldPts[] = {
+  {0, 0.0f}, {5, 0.125f}, {10, 0.25f}, {20, 0.4f}, {30, 0.8f},
+  {40, 1.3f}, {50, 1.75f}, {60, 2.3f}, {70, 3.2f}, {75, 3.5f},
+  {80, 4.2f}, {99, 6.5f},
+};
+
+static float env_time_to_samples_attack(uint32_t v)  { return env_lookup_seconds(v, kReleasePts, 12) * 48000.0f; }
+static float env_time_to_samples_hold(uint32_t v)     { return env_lookup_seconds(v, kHoldPts,    12) * 48000.0f; }
+static float env_time_to_samples_decay(uint32_t v)     { return env_lookup_seconds(v, kDecayPts,   12) * 48000.0f; }
+static float env_time_to_samples_release(uint32_t v)   { return env_lookup_seconds(v, kReleasePts, 12) * 48000.0f; }
+
+// LFO delay time curve from owner's manual (0-127 → 0 to 13 seconds).
+static const env_point_t kDelayPts[] = {
+  {0, 0.0f}, {5, 0.125f}, {10, 0.25f}, {20, 0.6f}, {32, 1.0f},
+  {40, 1.5f}, {64, 2.5f}, {75, 3.5f}, {80, 4.2f}, {96, 6.2f},
+  {100, 7.0f}, {127, 13.0f},
+};
+
+static float lfo_delay_to_samples(uint32_t v) { return env_lookup_seconds(v, kDelayPts, 12) * 48000.0f; }
+
+// Compute the envelope level at a given absolute sample time (AHDSR).
 static float env_level_at_sample(uint64_t sample,
     uint32_t atk, uint32_t dec, uint32_t sus,
-    float atk_samples, float dec_samples, float sus_level,
+    float atk_samples, float hold_samples, float dec_samples, float sus_level,
     uint64_t note_on) {
   uint64_t elapsed = sample - note_on;
   if (elapsed < atk_samples)
     return (float)elapsed / atk_samples;
-  if (elapsed < atk_samples + dec_samples) {
-    float dec_t = (float)(elapsed - atk_samples) / dec_samples;
+  if (elapsed < atk_samples + hold_samples)
+    return 1.0f;
+  if (elapsed < atk_samples + hold_samples + dec_samples) {
+    float dec_t = (float)(elapsed - atk_samples - hold_samples) / dec_samples;
     return 1.0f - dec_t * (1.0f - sus_level);
   }
   return sus_level;
 }
 
+
+// ---------------------------------------------------------------------------
+// Internal helper: load a Proteus patch onto TSF channels 0 (primary) and 1 (secondary)
+// ---------------------------------------------------------------------------
+
+static void s_load_patch(uint16_t patch_idx) {
+  if (patch_idx >= PROTEUS_PATCH_COUNT)
+    return;
+
+  current_patch = kProteusPatchTable[patch_idx];
+  patch_has_secondary = (current_patch.i2volume > 0);
+
+  cached_env_atk     = current_patch.i1attack;
+  cached_env_hold    = current_patch.i1hold;
+  cached_env_dec     = current_patch.i1decay;
+  cached_env_sus     = current_patch.i1sustain;
+  cached_env_rel     = current_patch.i1release;
+  cached_env_enabled = (current_patch.i1envelopeon != 0);
+
+  if (soundfont == nullptr)
+    return;
+
+  int max_preset = tsf_get_presetcount(soundfont);
+  if (max_preset <= 0)
+    return;
+
+  int idx0 = (int)current_patch.i1instrument;
+  if (idx0 <= 0) idx0 = 1;
+  if (idx0 >= max_preset) idx0 = max_preset - 1;
+  voice_preset_primary = idx0;
+
+  tsf_channel_set_presetindex(soundfont, 0, idx0);
+  tsf_channel_midi_control(soundfont, 0, 7, current_patch.i1volume);
+  tsf_channel_set_pan(soundfont, 0,
+      ((int)current_patch.i1pan + 7) * 9 / 127.0f);
+  float tune1 = (float)(current_patch.i1tuningcoarse * 100 +
+                        current_patch.i1tuningfine) / 100.0f;
+  tsf_channel_set_tuning(soundfont, 0, tune1);
+
+  if (patch_has_secondary) {
+    int idx1 = (int)current_patch.i2instrument;
+    if (idx1 <= 0) idx1 = 1;
+    if (idx1 >= max_preset) idx1 = max_preset - 1;
+    voice_preset_secondary = idx1;
+
+    tsf_channel_set_presetindex(soundfont, 1, idx1);
+    tsf_channel_midi_control(soundfont, 1, 7, current_patch.i2volume);
+    tsf_channel_set_pan(soundfont, 1,
+        ((int)current_patch.i2pan + 7) * 9 / 127.0f);
+    float tune2 = (float)(current_patch.i2tuningcoarse * 100 +
+                          current_patch.i2tuningfine) / 100.0f;
+    tsf_channel_set_tuning(soundfont, 1, tune2);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Internal helper: apply current Params to a loaded TSF instance
@@ -219,10 +347,7 @@ static void s_apply_params() {
   if (soundfont == nullptr)
     return;
   tsf_set_max_voices(soundfont, Params[param_max_voices]);
-  tsf_channel_set_presetindex(soundfont, 0, Params[param_preset]);
-  tsf_channel_midi_control(soundfont, 0, 7, Params[param_volume]);
-  tsf_channel_set_pan(soundfont, 0, Params[param_pan] / 127.0f);
-  tsf_channel_set_tuning(soundfont, 0, Params[param_fine_tune] / 64.0f);
+  s_load_patch(Params[param_preset]);
   tsf_channel_set_pitchwheel(soundfont, 0, (int)last_pitch_bend);
 }
 
@@ -268,15 +393,59 @@ static void s_trigger_note(uint8_t note, uint8_t velocity) {
       active_notes++;
   }
 
-  // Only retrigger envelope for the first note.
-  if (active_notes == 1) {
-    env_active             = true;
-    env_note_on_sample     = sample_count;
-    env_note_off_sample    = 0;
-    env_post_release_frames = 0;
+  if (result.voice_index >= 0 && result.voice_index < 16) {
+    if (voice_env[result.voice_index].active) {
+      uint8_t old_note = voice_env[result.voice_index].note;
+      tsf_channel_note_off(soundfont, 0, old_note);
+      if (patch_has_secondary)
+        tsf_channel_note_off(soundfont, 1, old_note);
+      tsf_note_set_amp_gain(soundfont, voice_preset_primary, old_note, 0.0f);
+      if (patch_has_secondary)
+        tsf_note_set_amp_gain(soundfont, voice_preset_secondary, old_note, 0.0f);
+    }
+    voice_env[result.voice_index].active             = true;
+    voice_env[result.voice_index].note               = (uint8_t)adjusted;
+    voice_env[result.voice_index].note_on_sample     = sample_count;
+    voice_env[result.voice_index].note_off_sample    = 0;
+    voice_env[result.voice_index].release_start_level = 1.0f;
+    lfo_delay_completed = 0.0f;
   }
 
-  tsf_channel_note_on(soundfont, 0, (uint8_t)adjusted, vel);
+  float vel0 = vel, vel1 = vel;
+
+  if (current_patch.crossfademode == 1) {
+    float sp     = current_patch.switchpoint / 127.0f;
+    sp += (current_patch.crossfadebalance - 64.0f) * 0.0039f;  // ±25%
+    if (sp < 0.0f) sp = 0.0f;
+    if (sp > 1.0f) sp = 1.0f;
+    float xfade  = current_patch.crossfadeamount / 255.0f;
+    float v      = velocity / 127.0f;
+    if (v < sp) {
+      vel0 *= 1.0f;
+      vel1 *= 1.0f - (1.0f - v / sp) * xfade;
+    } else {
+      vel0 *= 1.0f - (v - sp) / (1.0f - sp) * xfade;
+      vel1 *= 1.0f;
+    }
+  } else if (current_patch.crossfademode == 2) {
+    if (adjusted < 64) vel1 = 0.0f;
+    else               vel0 = 0.0f;
+  }
+
+  bool play_primary = true, play_secondary = true;
+  if (current_patch.i1lowkey > 0 || current_patch.i1highkey < 127) {
+    play_primary = ((uint8_t)adjusted >= current_patch.i1lowkey &&
+                    (uint8_t)adjusted <= current_patch.i1highkey);
+  }
+  if (patch_has_secondary && (current_patch.i2lowkey > 0 || current_patch.i2highkey < 127)) {
+    play_secondary = ((uint8_t)adjusted >= current_patch.i2lowkey &&
+                      (uint8_t)adjusted <= current_patch.i2highkey);
+  }
+
+  if (play_primary && vel0 > 0.0f)
+    tsf_channel_note_on(soundfont, 0, (uint8_t)adjusted, vel0);
+  if (patch_has_secondary && play_secondary && vel1 > 0.0f)
+    tsf_channel_note_on(soundfont, 1, (uint8_t)adjusted, vel1);
 }
 
 // ---------------------------------------------------------------------------
@@ -321,10 +490,11 @@ __unit_callback int8_t unit_init(const unit_runtime_desc_t *desc) {
 
   sample_count    = 0;
   last_pitch_bend = 8192;
-  env_active      = false;
   lfo_phase       = 0.0f;
-  env_post_release_frames = 0;
+  lfo2_phase      = 0.0f;
+  lfo_delay_completed = 0.0f;
   active_notes    = 0;
+  memset(voice_env, 0, sizeof(voice_env));
 
   if (soundfont_list.count > 0)
     state = load_start;
@@ -354,9 +524,8 @@ __unit_callback void unit_reset() {
   chorus_dsp.Reset();
   reverb_dsp.Clear();
   sample_count  = 0;
-  env_active    = false;
   lfo_phase     = 0.0f;
-  env_post_release_frames = 0;
+  memset(voice_env, 0, sizeof(voice_env));
   active_notes  = 0;
 }
 
@@ -518,7 +687,9 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
 
   sample_count += frames;
 
-  // Apply LFO — advance phase when active.
+  // Apply LFO — user overrides if AMT > 0, else patch LFO1+LFO2.
+  float lfo_pitch_offset = 0.0f;
+
   if (Params[param_lfo_amount] > 0) {
     float rate   = 0.05f + Params[param_lfo_rate] * (24.95f / 127.0f);
     float amt    = Params[param_lfo_amount] / 127.0f;
@@ -527,87 +698,118 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
     lfo_phase += rate * (float)frames / 48000.0f;
     if (lfo_phase >= 1.0f) lfo_phase -= 1.0f;
     float lfo_val = lfo_wave_shape(lfo_phase, wave);
-
-    // Pitch modulation (pre-TSF).
-    if (dest == 0 || dest == 2) {
-      float base_tune = Params[param_fine_tune] / 64.0f;
-      tsf_channel_set_tuning(soundfont, 0, base_tune + lfo_val * amt * 0.5f);
-    } else {
-      float base_tune = Params[param_fine_tune] / 64.0f;
-      tsf_channel_set_tuning(soundfont, 0, base_tune);
-    }
+    if (dest == 0 || dest == 2)
+      lfo_pitch_offset = lfo_val * amt * 0.5f;
   } else {
+    float lfo_delay_scale = 1.0f;
+    uint32_t delay_param  = (current_patch.lfo1amount != 0 || current_patch.lfo2amount != 0)
+                           ? current_patch.lfo1delay : 0;
+    if (delay_param > 0) {
+      float delay_samples = lfo_delay_to_samples(delay_param);
+      lfo_delay_completed += (float)frames;
+      if (lfo_delay_completed < delay_samples)
+        lfo_delay_scale = lfo_delay_completed / delay_samples;
+    }
+
+    if (current_patch.lfo1amount != 0) {
+      float rate = 0.05f + current_patch.lfo1frequency * (24.95f / 127.0f);
+      float amt  = (float)current_patch.lfo1amount / 127.0f * lfo_delay_scale;
+      uint8_t w  = current_patch.lfo1shape;
+      if (current_patch.lfo1variation > 0) {
+        float var = (float)current_patch.lfo1variation / 127.0f;
+        float rnd = ((float)((sample_count / 64) * 2654435761u & 0x7FFFFFFF)
+                     / 2147483648.0f) - 1.0f;
+        rate *= 1.0f + rnd * var * 0.5f;
+        if (rate < 0.01f) rate = 0.01f;
+      }
+      lfo_phase += rate * (float)frames / 48000.0f;
+      if (lfo_phase >= 1.0f) lfo_phase -= 1.0f;
+      lfo_pitch_offset += lfo_wave_shape(lfo_phase, w) * amt * 0.5f;
+    }
+
+    if (current_patch.lfo2amount != 0) {
+      float rate = 0.05f + current_patch.lfo2frequency * (24.95f / 127.0f);
+      float amt  = (float)current_patch.lfo2amount / 127.0f * lfo_delay_scale;
+      uint8_t w  = current_patch.lfo2shape;
+      if (current_patch.lfo2variation > 0) {
+        float var = (float)current_patch.lfo2variation / 127.0f;
+        float rnd = ((float)(((sample_count / 64) + 1) * 2654435761u & 0x7FFFFFFF)
+                     / 2147483648.0f) - 1.0f;
+        rate *= 1.0f + rnd * var * 0.5f;
+        if (rate < 0.01f) rate = 0.01f;
+      }
+      lfo2_phase += rate * (float)frames / 48000.0f;
+      if (lfo2_phase >= 1.0f) lfo2_phase -= 1.0f;
+      lfo_pitch_offset += lfo_wave_shape(lfo2_phase, w) * amt * 0.5f;
+    }
+  }
+
+  {
     float base_tune = Params[param_fine_tune] / 64.0f;
-    tsf_channel_set_tuning(soundfont, 0, base_tune);
+    float tuned = base_tune + lfo_pitch_offset;
+    tsf_channel_set_tuning(soundfont, 0, tuned);
+    if (patch_has_secondary)
+      tsf_channel_set_tuning(soundfont, 1, tuned);
+  }
+
+  // Per-voice AHDSR — applied via TSF ampGain before rendering.
+  if (cached_env_enabled) {
+    float atk_samples  = env_time_to_samples_attack(cached_env_atk);
+    float hold_samples = env_time_to_samples_hold(cached_env_hold);
+    float dec_samples  = env_time_to_samples_decay(cached_env_dec);
+    float rel_samples  = env_time_to_samples_release(cached_env_rel);
+    float sus_level    = cached_env_sus / 99.0f;
+
+    for (int vi = 0; vi < 16; vi++) {
+      if (!voice_env[vi].active) continue;
+      float level;
+      uint64_t note_on  = voice_env[vi].note_on_sample;
+      uint64_t note_off = voice_env[vi].note_off_sample;
+
+      if (note_off == 0 || sample_count < note_off) {
+        level = env_level_at_sample(sample_count, 0, 0, 0,
+            atk_samples, hold_samples, dec_samples, sus_level, note_on);
+      } else {
+        uint64_t rel_elapsed = sample_count - note_off;
+        if (rel_elapsed < (uint64_t)rel_samples) {
+          float rel_t = (float)rel_elapsed / rel_samples;
+          level = voice_env[vi].release_start_level * (1.0f - rel_t);
+        } else {
+          level = 0.0f;
+          voice_env[vi].active = false;
+          tsf_channel_sounds_off_all(soundfont, 0);
+          if (patch_has_secondary)
+            tsf_channel_sounds_off_all(soundfont, 1);
+        }
+      }
+
+      tsf_note_set_amp_gain(soundfont, voice_preset_primary,
+                            voice_env[vi].note, level);
+      if (patch_has_secondary)
+        tsf_note_set_amp_gain(soundfont, voice_preset_secondary,
+                              voice_env[vi].note, level);
+    }
   }
 
   tsf_render_float(soundfont, out, (int)frames, TSF_FALSE);
 
-  // Apply ADSR envelope (per-sample volume scaling).
-  if (env_active) {
-    uint32_t atk = Params[param_env_attack];
-    uint32_t dec = Params[param_env_decay];
-    uint32_t sus = Params[param_env_sustain];
-    uint32_t rel = Params[param_env_release];
-    float atk_samples = env_time_to_samples(atk);
-    float dec_samples = env_time_to_samples(dec);
-    float rel_samples = env_time_to_samples(rel);
-    float sus_level   = sus / 99.0f;
-
-    for (uint32_t i = 0; i < frames; i++) {
-      uint64_t t = sample_count + i;
-      float level;
-
-      if (env_note_off_sample == 0 || t < env_note_off_sample) {
-        // Attack / Decay / Sustain.
-        level = env_level_at_sample(t, atk, dec, sus,
-            atk_samples, dec_samples, sus_level, env_note_on_sample);
-      } else {
-        // Release.
-        uint64_t elapsed = t - env_note_off_sample;
-        if (elapsed < rel_samples) {
-          float rel_t = (float)elapsed / rel_samples;
-          level = env_release_start_level * (1.0f - rel_t);
-        } else {
-          level = 0.0f;
-          env_active = false;
-          env_post_release_frames = 10;
-          tsf_channel_sounds_off_all(soundfont, 0);
-        }
-      }
-
-      out[i * 2]     *= level;
-      out[i * 2 + 1] *= level;
-    }
-  }
-
-  // Post-release silence hold — suppress TSF fast-release tail.
-  if (env_post_release_frames > 0) {
-    memset(out, 0, frames * 2 * sizeof(float));
-    env_post_release_frames--;
-  }
-
-  // Apply LFO volume modulation (per-frame, phase updated by pitch LFO above).
   if (Params[param_lfo_amount] > 0 && Params[param_lfo_dest] != 0) {
     float amt  = Params[param_lfo_amount] / 127.0f;
     float lfo_val = lfo_wave_shape(lfo_phase, Params[param_lfo_wave]);
     float vol_mod = 1.0f + lfo_val * amt;
     if (vol_mod < 0.0f) vol_mod = 0.0f;
-    for (uint32_t i = 0; i < frames * 2; i++)
-      out[i] *= vol_mod;
+    ndsp::ApplyGain(out, vol_mod, frames * 2);
   }
 
   // Apply DSP effects post-TSF.
   {
-    float chorus_mix = Params[param_chorus] / 15.0f;
+    float global_chorus = Params[param_chorus] / 15.0f;
+    float patch_chorus  = (current_patch.i1chorus + current_patch.i2chorus) / 30.0f;
+    float chorus_mix    = global_chorus * 0.5f + patch_chorus * 0.5f;
     float reverb_amount = Params[param_reverb] / 127.0f;
 
     if (chorus_mix > 0.0f || reverb_amount > 0.0f) {
-      // De-interleave once.
-      for (uint32_t i = 0; i < frames; i++) {
-        fx_buf_l[i] = out[i * 2];
-        fx_buf_r[i] = out[i * 2 + 1];
-      }
+      simd_deinterleave_stereo(out, fx_buf_l, fx_buf_r, frames);
 
       // Chorus on de-interleaved.
       if (chorus_mix > 0.0f) {
@@ -621,11 +823,7 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
         reverb_dsp.Process(fx_buf_l, fx_buf_r, frames);
       }
 
-      // Re-interleave.
-      for (uint32_t i = 0; i < frames; i++) {
-        out[i * 2]     = fx_buf_l[i];
-        out[i * 2 + 1] = fx_buf_r[i];
-      }
+      simd_interleave_stereo(fx_buf_l, fx_buf_r, out, frames);
     }
   }
 }
@@ -654,18 +852,12 @@ __unit_callback void unit_set_param_value(uint8_t index, int32_t value) {
       break;
 
     case param_preset:
-      if (soundfont == nullptr)
-        break;
-      {
-        int max_preset = tsf_get_presetcount(soundfont) - 1;
-        if (value > max_preset)
-          value = max_preset;
-        if (value < 0)
-          value = 0;
-      }
+      if (value < 0)  value = 0;
+      if (value >= PROTEUS_PATCH_COUNT)
+        value = PROTEUS_PATCH_COUNT - 1;
       if (value != Params[index]) {
-        tsf_channel_note_off_all(soundfont, 0);
-        tsf_channel_set_presetindex(soundfont, 0, value);
+        Params[index] = value;
+        s_load_patch((uint16_t)value);
       }
       break;
 
@@ -682,15 +874,21 @@ __unit_callback void unit_set_param_value(uint8_t index, int32_t value) {
     case param_volume:
       if (value < 0)   value = 0;
       if (value > 127) value = 127;
-      if (soundfont != nullptr)
+      if (soundfont != nullptr) {
         tsf_channel_midi_control(soundfont, 0, 7, value);
+        if (patch_has_secondary)
+          tsf_channel_midi_control(soundfont, 1, 7, value);
+      }
       break;
 
     case param_pan:
       if (value < 0)   value = 0;
       if (value > 127) value = 127;
-      if (soundfont != nullptr)
+      if (soundfont != nullptr) {
         tsf_channel_set_pan(soundfont, 0, value / 127.0f);
+        if (patch_has_secondary)
+          tsf_channel_set_pan(soundfont, 1, value / 127.0f);
+      }
       break;
 
     case param_velocity_curve:
@@ -701,28 +899,25 @@ __unit_callback void unit_set_param_value(uint8_t index, int32_t value) {
     case param_fine_tune:
       if (value < -63) value = -63;
       if (value > 63)  value = 63;
-      if (soundfont != nullptr)
+      if (soundfont != nullptr) {
         tsf_channel_set_tuning(soundfont, 0, value / 64.0f);
+        if (patch_has_secondary)
+          tsf_channel_set_tuning(soundfont, 1, value / 64.0f);
+      }
       break;
 
-    case param_env_attack:
-      if (value < 0)  value = 0;
-      if (value > 99) value = 99;
+    case param_xfade:
+      if (value < 0) value = 0;
+      if (value > 2) value = 2;
       break;
 
-    case param_env_decay:
-      if (value < 0)  value = 0;
-      if (value > 99) value = 99;
+    case param_layers:
+      if (value < 0) value = 0;
+      if (value > 2) value = 2;
       break;
 
-    case param_env_sustain:
-      if (value < 0)  value = 0;
-      if (value > 99) value = 99;
-      break;
-
-    case param_env_release:
-      if (value < 0)  value = 0;
-      if (value > 99) value = 99;
+    case param_unused_10:
+    case param_unused_11:
       break;
 
     case param_lfo_rate:
@@ -775,16 +970,24 @@ __unit_callback const char *unit_get_param_str_value(uint8_t index, int32_t valu
       return soundfont_list.get(value);
 
     case param_preset:
-      if (soundfont == nullptr)
-        return "LOADING";
-      {
-        int max_preset = tsf_get_presetcount(soundfont) - 1;
-        if (value < 0)
-          value = 0;
-        if (value > max_preset)
-          value = max_preset;
-      }
-      return tsf_get_presetname(soundfont, value);
+      if (value < 0) value = 0;
+      if (value >= PROTEUS_PATCH_COUNT)
+        value = PROTEUS_PATCH_COUNT - 1;
+      return kProteusPatchTable[value].name;
+
+    case param_xfade: {
+      static const char *xfade_names[] = { "OFF", "VEL", "KEY" };
+      if (value < 0) value = 0;
+      if (value > 2) value = 2;
+      return xfade_names[value];
+    }
+
+    case param_layers: {
+      static const char *layer_names[] = { "BOTH", "PRI", "SEC" };
+      if (value < 0) value = 0;
+      if (value > 2) value = 2;
+      return layer_names[value];
+    }
 
     case param_velocity_curve: {
       static const char *curve_names[] = {
@@ -833,7 +1036,13 @@ __unit_callback void unit_note_on(uint8_t note, uint8_t velocity) {
 }
 
 __unit_callback void unit_note_off(uint8_t note) {
-  common::NoteOffResult result = voice_allocator.NoteOff(note);
+  voice_allocator.NoteOff(note);
+  
+  // Deactivate matching voice slots (NoteOff doesn't do this in polyphonic mode).
+  for (uint8_t i = 0; i < voice_allocator.GetMaxVoices(); ++i) {
+    if (voice_allocator.GetVoice(i).active && voice_allocator.GetVoice(i).midi_note == note)
+      voice_allocator.SetVoiceActive(i, false);
+  }
   
   // Count active notes from allocator.
   active_notes = 0;
@@ -842,21 +1051,30 @@ __unit_callback void unit_note_off(uint8_t note) {
       active_notes++;
   }
   
-  if (active_notes == 0 && env_active && env_note_off_sample == 0) {
-    env_release_start_level = env_level_at_sample(sample_count,
-        Params[param_env_attack], Params[param_env_decay], Params[param_env_sustain],
-        env_time_to_samples(Params[param_env_attack]),
-        env_time_to_samples(Params[param_env_decay]),
-        Params[param_env_sustain] / 99.0f,
-        env_note_on_sample);
-    env_note_off_sample = sample_count;
+  int8_t trans = (int8_t)Params[param_transpose];
+  int adj = (int)note + trans;
+  if (adj < 0) adj = 0; if (adj > 127) adj = 127;
+
+  if (cached_env_enabled) {
+    float atk_s = env_time_to_samples_attack(cached_env_atk);
+    float hld_s = env_time_to_samples_hold(cached_env_hold);
+    float dec_s = env_time_to_samples_decay(cached_env_dec);
+    float sus_l = cached_env_sus / 99.0f;
+    for (int i = 0; i < 16; i++) {
+      if (voice_env[i].active && voice_env[i].note == (uint8_t)adj &&
+          voice_env[i].note_off_sample == 0) {
+        voice_env[i].release_start_level = env_level_at_sample(
+            sample_count, 0, 0, 0, atk_s, hld_s, dec_s, sus_l,
+            voice_env[i].note_on_sample);
+        voice_env[i].note_off_sample = sample_count;
+      }
+    }
   }
-  
+
   if (soundfont != nullptr) {
-    int8_t transpose = (int8_t)Params[param_transpose];
-    int adjusted = (int)note + transpose;
-    if (adjusted < 0) adjusted = 0; if (adjusted > 127) adjusted = 127;
-    tsf_channel_note_off(soundfont, 0, (uint8_t)adjusted);
+    tsf_channel_note_off(soundfont, 0, (uint8_t)adj);
+    if (patch_has_secondary)
+      tsf_channel_note_off(soundfont, 1, (uint8_t)adj);
   }
 }
 
@@ -865,7 +1083,13 @@ __unit_callback void unit_gate_off() {
   int note = 60 + transpose;
   if (note < 0) note = 0; if (note > 127) note = 127;
   
-  common::NoteOffResult result = voice_allocator.NoteOff((uint8_t)note);
+  voice_allocator.NoteOff((uint8_t)note);
+  
+  // Deactivate matching voice slots (NoteOff doesn't do this in polyphonic mode).
+  for (uint8_t i = 0; i < voice_allocator.GetMaxVoices(); ++i) {
+    if (voice_allocator.GetVoice(i).active && voice_allocator.GetVoice(i).midi_note == note)
+      voice_allocator.SetVoiceActive(i, false);
+  }
   
   // Count active notes from allocator.
   active_notes = 0;
@@ -874,33 +1098,48 @@ __unit_callback void unit_gate_off() {
       active_notes++;
   }
   
-  if (active_notes == 0 && env_active && env_note_off_sample == 0) {
-    env_release_start_level = env_level_at_sample(sample_count,
-        Params[param_env_attack], Params[param_env_decay], Params[param_env_sustain],
-        env_time_to_samples(Params[param_env_attack]),
-        env_time_to_samples(Params[param_env_decay]),
-        Params[param_env_sustain] / 99.0f,
-        env_note_on_sample);
-    env_note_off_sample = sample_count;
+  if (cached_env_enabled) {
+    float atk_s = env_time_to_samples_attack(cached_env_atk);
+    float hld_s = env_time_to_samples_hold(cached_env_hold);
+    float dec_s = env_time_to_samples_decay(cached_env_dec);
+    float sus_l = cached_env_sus / 99.0f;
+    for (int i = 0; i < 16; i++) {
+      if (voice_env[i].active && voice_env[i].note == (uint8_t)note &&
+          voice_env[i].note_off_sample == 0) {
+        voice_env[i].release_start_level = env_level_at_sample(
+            sample_count, 0, 0, 0, atk_s, hld_s, dec_s, sus_l,
+            voice_env[i].note_on_sample);
+        voice_env[i].note_off_sample = sample_count;
+      }
+    }
   }
   
   if (soundfont != nullptr) {
     tsf_channel_note_off(soundfont, 0, (uint8_t)note);
+    if (patch_has_secondary)
+      tsf_channel_note_off(soundfont, 1, (uint8_t)note);
   }
 }
 
 __unit_callback void unit_all_note_off() {
-  env_active    = false;
-  env_post_release_frames = 0;
+  voice_allocator.AllNotesOff();
+  for (uint8_t i = 0; i < voice_allocator.GetMaxVoices(); ++i)
+    voice_allocator.SetVoiceActive(i, false);
+  memset(voice_env, 0, sizeof(voice_env));
   active_notes  = 0;
-  if (soundfont != nullptr)
+  if (soundfont != nullptr) {
     tsf_channel_sounds_off_all(soundfont, 0);
+    tsf_channel_sounds_off_all(soundfont, 1);
+  }
 }
 
 __unit_callback void unit_pitch_bend(uint16_t pitch_bend) {
   last_pitch_bend = pitch_bend;
-  if (soundfont != nullptr)
+  if (soundfont != nullptr) {
     tsf_channel_set_pitchwheel(soundfont, 0, (int)pitch_bend);
+    if (patch_has_secondary)
+      tsf_channel_set_pitchwheel(soundfont, 1, (int)pitch_bend);
+  }
 }
 
 __unit_callback void unit_channel_pressure(uint8_t pressure) {

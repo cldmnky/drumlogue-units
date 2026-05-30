@@ -18,7 +18,7 @@ const __unit_header unit_header_t unit_header = {
     .params = {
         /* Page 1 — sound source */
         /* 0 SFONT   */ {0, 63,  0, 0,  k_unit_param_type_strings, 0, 0, 0, {"SFONT"}},
-        /* 1 PRESET  */ {0, 255, 0, 0,  k_unit_param_type_strings, 0, 0, 0, {"PRESET"}},
+        /* 1 PATCH   */ {0, 767, 0, 0,  k_unit_param_type_strings, 0, 0, 0, {"PATCH"}},
         /* 2 VOICES  */ {1, 16,  1, 16, k_unit_param_type_none,    0, 0, 0, {"VOICES"}},
         /* 3 TUNE    */ {-12,12, 0, 0,  k_unit_param_type_none,    0, 0, 0, {"TUNE"}},
 
@@ -28,11 +28,11 @@ const __unit_header unit_header_t unit_header = {
         /* 6 PAN     */ {0, 127,64, 64, k_unit_param_type_none, 0, 0, 0, {"PAN"}},
         /* 7         */ {0, 0,   0, 0,  k_unit_param_type_none, 0, 0, 0, {""}},
 
-        /* Page 3 — envelope */
-        /* 8 ENV ATK */ {0, 99,  0, 0,  k_unit_param_type_none, 0, 0, 0, {"ENV ATK"}},
-        /* 9 ENV DEC */ {0, 99,  0, 0,  k_unit_param_type_none, 0, 0, 0, {"ENV DEC"}},
-        /* 10 ENV SUS*/ {0, 99,  0, 99, k_unit_param_type_none, 0, 0, 0, {"ENV SUS"}},
-        /* 11 ENV REL*/ {0, 99,  0, 99, k_unit_param_type_none, 0, 0, 0, {"ENV REL"}},
+        /* Page 3 — layer control */
+        /* 8 XFADE   */ {0, 2,   0, 0,  k_unit_param_type_strings, 0, 0, 0, {"XFADE"}},
+        /* 9 LAYERS  */ {0, 2,   0, 0,  k_unit_param_type_strings, 0, 0, 0, {"LAYERS"}},
+        /* 10        */ {0, 0,   0, 0,  k_unit_param_type_none,    0, 0, 0, {""}},
+        /* 11        */ {0, 0,   0, 0,  k_unit_param_type_none,    0, 0, 0, {""}},
 
         /* Page 4 — effects & feel */
         /* 12 CHORUS */ {0, 15,  0, 0,  k_unit_param_type_none,    0, 0, 0, {"CHORUS"}},

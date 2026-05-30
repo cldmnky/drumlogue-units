@@ -24,6 +24,7 @@ if [[ ! -d "$UNIT_DIR" ]]; then
 fi
 
 echo "Building unit '$UNIT_NAME' for native host..."
+cd "$EDITOR_DIR"
 make -f "$MAKEFILE" UNIT="$UNIT_NAME" DEBUG="$DEBUG" --no-print-directory
 
 LIB_EXT="$(uname -s | grep -qi darwin && echo dylib || echo so)"
