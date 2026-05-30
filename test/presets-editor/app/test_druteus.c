@@ -1,9 +1,16 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "../core/unit_loader.h"
 #include "../sdk/runtime_stubs.h"
+
+#if defined(__APPLE__)
+#define UNIT_LIB_EXT ".dylib"
+#else
+#define UNIT_LIB_EXT ".so"
+#endif
 
 static float peak(const float *out, int frames, int ch) {
     float m = 0;
@@ -29,8 +36,24 @@ int main() {
 
     runtime_stub_state_t stub;
     runtime_stubs_init(&stub, 48000, frames, ch);
-    unit_loader_t loader;
-    unit_loader_open("units/druteus.dylib", &loader);
+    unit_loader_t loader = {0};
+    const char *unit_paths[] = {
+        "units/druteus" UNIT_LIB_EXT,
+        "test/presets-editor/units/druteus" UNIT_LIB_EXT,
+    };
+    int load_result = -1;
+    for (size_t i = 0; i < sizeof(unit_paths) / sizeof(unit_paths[0]); ++i) {
+        load_result = unit_loader_open(unit_paths[i], &loader);
+        if (load_result == 0) {
+            break;
+        }
+    }
+    if (load_result != 0) {
+        fprintf(stderr, "Failed to load druteus shared library\n");
+        free(out);
+        runtime_stubs_teardown(&stub);
+        return 1;
+    }
     if (loader.header && stub.runtime_desc)
         stub.runtime_desc->target = loader.header->target;
     unit_loader_init(&loader, stub.runtime_desc);
@@ -40,8 +63,6 @@ int main() {
         unit_loader_render(&loader, NULL, out, frames);
         if (peak(out, frames, ch) > 0.001f) break;
     }
-    loader.unit_set_param_value(11, 80);  // ENV REL = 80 for visibility
-
     // === Test: polyphonic — 2nd note doesn't kill 1st ===
     printf("=== Polyphonic: A+B → release B → A still plays ===\n");
 
@@ -67,11 +88,11 @@ int main() {
            p_sil, p_sil < 0.001f ? "PASS" : "FAIL");
     if (p_sil >= 0.001f) failures++;
 
-    // === Test: solo mode — each note kills previous ===
-    printf("\n=== Solo: A → B kills A ===\n");
+    // === Test: single-voice mode — each note kills previous ===
+    printf("\n=== 1-voice mode: A → B kills A ===\n");
     loader.unit_all_note_off();
     render_n(&loader, out, 50, frames, ch);
-    loader.unit_set_param_value(16, 1);  // SOLO=on
+    loader.unit_set_param_value(2, 1);  // VOICES=1
 
     loader.unit_note_on(60, 100);  // A
     render_n(&loader, out, 10, frames, ch);
@@ -85,7 +106,7 @@ int main() {
     printf("\n%s (%d failures)\n",
            failures == 0 ? "ALL PASSED" : "FAILURES", failures);
 
-    loader.unit_set_param_value(16, 0);  // reset solo
+    loader.unit_set_param_value(2, 16);  // reset voices
 
     free(out);
     unit_loader_close(&loader);
