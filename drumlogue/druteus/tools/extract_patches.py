@@ -338,6 +338,37 @@ typedef struct {{
     uint8_t  crossfademode;
     uint8_t  lfo1shape;
     uint8_t  lfo2shape;
+    /* —– Phase 3C: key ranges & crossfade —– */
+    uint8_t  i1lowkey;
+    uint8_t  i1highkey;
+    uint8_t  i2lowkey;
+    uint8_t  i2highkey;
+    uint8_t  switchpoint;
+    uint8_t  crossfadedirection;
+    uint8_t  crossfadebalance;
+    uint8_t  crossfadeamount;
+    /* —– Phase 3D: per-preset LFO —– */
+    uint8_t  lfo1frequency;
+    uint8_t  lfo1delay;
+    uint8_t  lfo1variation;
+    int8_t   lfo1amount;
+    uint8_t  lfo2frequency;
+    uint8_t  lfo2delay;
+    uint8_t  lfo2variation;
+    int8_t   lfo2amount;
+    /* —– Phase 3E: per-layer envelopes —– */
+    uint8_t  i1attack;
+    uint8_t  i1hold;
+    uint8_t  i1decay;
+    uint8_t  i1sustain;
+    uint8_t  i1release;
+    uint8_t  i1envelopeon;
+    uint8_t  i2attack;
+    uint8_t  i2hold;
+    uint8_t  i2decay;
+    uint8_t  i2sustain;
+    uint8_t  i2release;
+    uint8_t  i2envelopeon;
 }} proteus_patch_t;
 
 /* Preset table */
@@ -382,7 +413,35 @@ def generate_c_header(presets: list[dict], source_files: list[str]) -> str:
             f'{pr["i2chorus"]}, '
             f'{pr["crossfademode"]}, '
             f'{pr["lfo1shape"]}, '
-            f'{pr["lfo2shape"]} '
+            f'{pr["lfo2shape"]}, '
+            f'{pr["i1lowkey"]}, '
+            f'{pr["i1highkey"]}, '
+            f'{pr["i2lowkey"]}, '
+            f'{pr["i2highkey"]}, '
+            f'{pr["switchpoint"]}, '
+            f'{pr["crossfadedirection"]}, '
+            f'{pr["crossfadebalance"]}, '
+            f'{pr["crossfadeamount"]}, '
+            f'{pr["lfo1frequency"]}, '
+            f'{pr["lfo1delay"]}, '
+            f'{pr["lfo1variation"]}, '
+            f'{pr["lfo1amount"]}, '
+            f'{pr["lfo2frequency"]}, '
+            f'{pr["lfo2delay"]}, '
+            f'{pr["lfo2variation"]}, '
+            f'{pr["lfo2amount"]}, '
+            f'{pr["i1attack"]}, '
+            f'{pr["i1hold"]}, '
+            f'{pr["i1decay"]}, '
+            f'{pr["i1sustain"]}, '
+            f'{pr["i1release"]}, '
+            f'{pr["i1envelopeon"]}, '
+            f'{pr["i2attack"]}, '
+            f'{pr["i2hold"]}, '
+            f'{pr["i2decay"]}, '
+            f'{pr["i2sustain"]}, '
+            f'{pr["i2release"]}, '
+            f'{pr["i2envelopeon"]} '
             f'}},  /* {p["source_file"]} */'
         )
         rows.append(row)

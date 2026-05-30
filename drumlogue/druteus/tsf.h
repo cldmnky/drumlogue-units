@@ -183,6 +183,10 @@ TSFDEF int  tsf_bank_note_off(tsf* f, int bank, int preset_number, int key);
 // Stop playing all notes (end with sustain and release)
 TSFDEF void tsf_note_off_all(tsf* f);
 
+// Set user-controlled amplitude gain for all voices playing a note on a preset.
+// gain is a linear multiplier (1.0 = full, 0.0 = silent).
+TSFDEF void tsf_note_set_amp_gain(tsf* f, int preset_index, int key, float gain);
+
 // Returns the number of active voices
 TSFDEF int tsf_active_voice_count(tsf* f);
 
@@ -455,6 +459,7 @@ struct tsf_voice
 	double pitchInputTimecents, pitchOutputFactor;
 	double sourceSamplePosition;
 	float  noteGainDB, panFactorLeft, panFactorRight;
+	float  ampGain;
 	unsigned int playIndex, loopStart, loopEnd;
 	struct tsf_voice_envelope ampenv, modenv;
 	struct tsf_voice_lowpass lowpass;
@@ -1273,7 +1278,7 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 		if (dynamicGain)
 			noteGain = tsf_decibelsToGain(v->noteGainDB + (v->modlfo.level * tmpModLfoToVolume));
 
-		gainMono = noteGain * v->ampenv.level;
+		gainMono = noteGain * v->ampenv.level * v->ampGain;
 
 		// Update EG.
 		tsf_voice_envelope_process(&v->ampenv, blockSamples, tmpSampleRate);
@@ -1699,6 +1704,13 @@ TSFDEF void tsf_note_off_all(tsf* f)
 		tsf_voice_end(f, v);
 }
 
+TSFDEF void tsf_note_set_amp_gain(tsf* f, int preset_index, int key, float gain)
+{
+	struct tsf_voice *v = f->voices, *vEnd = v + f->voiceNum;
+	for (; v != vEnd; v++) if (v->playingPreset == preset_index && v->playingKey == key)
+		v->ampGain = gain;
+}
+
 TSFDEF int tsf_active_voice_count(tsf* f)
 {
 	int count = 0;
@@ -1749,6 +1761,7 @@ static void tsf_channel_setup_voice(tsf* f, struct tsf_voice* v)
 	struct tsf_channel* c = &f->channels->channels[f->channels->activeChannel];
 	float newpan = v->region->pan + c->panOffset;
 	v->playingChannel = f->channels->activeChannel;
+	v->ampGain = 1.0f;
 	v->noteGainDB += c->gainDB;
 	tsf_voice_calcpitchratio(v, (c->pitchWheel == 8192 ? c->tuning : ((c->pitchWheel / 16383.0f * c->pitchRange * 2.0f) - c->pitchRange + c->tuning)), f->outSampleRate);
 	if      (newpan <= -0.5f) { v->panFactorLeft = 1.0f; v->panFactorRight = 0.0f; }

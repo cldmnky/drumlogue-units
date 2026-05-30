@@ -21,4 +21,7 @@ ULIBDIR =
 ULIBS   = -lm
 
 # Preprocessor defines
-UDEFS =
+UDEFS = -DUSE_NEON
+UDEFS += -mfpu=neon
+UDEFS += -mfloat-abi=hard
+UDEFS += -ffast-math
