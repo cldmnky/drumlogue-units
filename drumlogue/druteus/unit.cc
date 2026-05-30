@@ -425,32 +425,40 @@ static void s_trigger_note(uint8_t note, uint8_t velocity) {
 
   float vel0 = vel, vel1 = vel;
 
-  if (current_patch.crossfademode == 1) {
+  uint8_t xfade  = Params[param_xfade];
+  uint8_t layers = Params[param_layers];
+
+  uint8_t crossfade_mode = (xfade > 0) ? xfade : current_patch.crossfademode;
+  if (crossfade_mode == 1) {
     float sp     = current_patch.switchpoint / 127.0f;
-    sp += (current_patch.crossfadebalance - 64.0f) * 0.0039f;  // ±25%
+    sp += (current_patch.crossfadebalance - 64.0f) * 0.0039f;
     if (sp < 0.0f) sp = 0.0f;
     if (sp > 1.0f) sp = 1.0f;
-    float xfade  = current_patch.crossfadeamount / 255.0f;
+    float xfade_amt = current_patch.crossfadeamount / 255.0f;
     float v      = velocity / 127.0f;
     if (v < sp) {
       vel0 *= 1.0f;
-      vel1 *= 1.0f - (1.0f - v / sp) * xfade;
+      vel1 *= 1.0f - (1.0f - v / sp) * xfade_amt;
     } else {
-      vel0 *= 1.0f - (v - sp) / (1.0f - sp) * xfade;
+      vel0 *= 1.0f - (v - sp) / (1.0f - sp) * xfade_amt;
       vel1 *= 1.0f;
     }
-  } else if (current_patch.crossfademode == 2) {
+  } else if (crossfade_mode == 2) {
     if (adjusted < 64) vel1 = 0.0f;
     else               vel0 = 0.0f;
   }
 
   bool play_primary = true, play_secondary = true;
+  if (layers == 1)       play_secondary = false;
+  else if (layers == 2)  play_primary = false;
   if (current_patch.i1lowkey > 0 || current_patch.i1highkey < 127) {
-    play_primary = ((uint8_t)adjusted >= current_patch.i1lowkey &&
+    play_primary = play_primary &&
+                   ((uint8_t)adjusted >= current_patch.i1lowkey &&
                     (uint8_t)adjusted <= current_patch.i1highkey);
   }
   if (patch_has_secondary && (current_patch.i2lowkey > 0 || current_patch.i2highkey < 127)) {
-    play_secondary = ((uint8_t)adjusted >= current_patch.i2lowkey &&
+    play_secondary = play_secondary &&
+                     ((uint8_t)adjusted >= current_patch.i2lowkey &&
                       (uint8_t)adjusted <= current_patch.i2highkey);
   }
 
