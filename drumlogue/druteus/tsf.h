@@ -487,7 +487,7 @@ static int tsf_db_table_built = 0;
 
 static void tsf_build_db_gain_table() {
 	for (int i = 0; i < 1024; i++) {
-		float db = -100.0f + (i * 100.0f / 1023.0f);
+		float db = -100.0f + (i * 124.0f / 1023.0f);
 		tsf_db_to_gain_table[i] = (db > -100.0f) ? TSF_POWF(10.0f, db * 0.05f) : 0.0f;
 	}
 	tsf_db_table_built = 1;
@@ -496,8 +496,8 @@ static void tsf_build_db_gain_table() {
 static float tsf_decibelsToGain(float db) {
 	if (!tsf_db_table_built) tsf_build_db_gain_table();
 	if (db <= -100.0f) return 0.0f;
-	if (db >= 0.0f) return 1.0f;
-	float fi = (db + 100.0f) * (1023.0f / 100.0f);
+	if (db >= 24.0f) return TSF_POWF(10.0f, db * 0.05f);
+	float fi = (db + 100.0f) * (1023.0f / 124.0f);
 	int i = (int)fi;
 	float frac = fi - (float)i;
 	return tsf_db_to_gain_table[i] + frac * (tsf_db_to_gain_table[i + 1] - tsf_db_to_gain_table[i]);
@@ -1312,7 +1312,7 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 			case TSF_STEREO_INTERLEAVED:
 				gainLeft = gainMono * v->panFactorLeft, gainRight = gainMono * v->panFactorRight;
 #ifdef __ARM_NEON
-				// NEON batched accumulation — process 4 samples per iteration.
+				// NEON batched accumulation — process 4 stereo samples per iteration.
 				while (blockSamples >= 4 && (tmpSourceSamplePosition + pitchRatio * 3.0) < tmpSampleEndDbl)
 				{
 					float val[4];
@@ -1327,11 +1327,11 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 						if (pp >= tmpLoopEndDbl && isLooping) pp -= (tmpLoopEnd - tmpLoopStart + 1.0);
 					}
 					tmpSourceSamplePosition = pp;
-float32x4_t vals = vld1q_f32(val);
-float32x4_t out_l = vmlaq_f32(vld1q_f32(outL),     vals, vdupq_n_f32(gainLeft));
-float32x4_t out_r = vmlaq_f32(vld1q_f32(outL + 4), vals, vdupq_n_f32(gainRight));
-vst1q_f32(outL,     out_l);
-vst1q_f32(outL + 4, out_r);
+					float32x4_t vals = vld1q_f32(val);
+					float32x4x2_t loaded = vld2q_f32(outL);
+					loaded.val[0] = vmlaq_f32(loaded.val[0], vals, vdupq_n_f32(gainLeft));
+					loaded.val[1] = vmlaq_f32(loaded.val[1], vals, vdupq_n_f32(gainRight));
+					vst2q_f32(outL, loaded);
 					outL += 8;
 					blockSamples -= 4;
 				}
