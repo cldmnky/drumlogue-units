@@ -40,9 +40,9 @@ const __unit_header unit_header_t unit_header = {
         /* 14 V.CURVE*/ {0, 4,   0, 0,  k_unit_param_type_strings, 0, 0, 0, {"V.CURVE"}},
         /* 15        */ {0, 0,   0, 0,  k_unit_param_type_none,    0, 0, 0, {""}},
 
-        /* Page 5 — play mode (all blank now that SOLO is removed) */
-        /* 16        */ {0, 0,   0, 0,  k_unit_param_type_none, 0, 0, 0, {""}},
-        /* 17        */ {0, 0,   0, 0,  k_unit_param_type_none, 0, 0, 0, {""}},
+        /* Page 5 — filter */
+        /* 16 CUTOFF */ {0, 127, 0,127, k_unit_param_type_none, 0, 0, 0, {"CUTOFF"}},
+        /* 17 RES    */ {0, 127, 0, 0,   k_unit_param_type_none, 0, 0, 0, {"RES"}},
         /* 18        */ {0, 0,   0, 0,  k_unit_param_type_none, 0, 0, 0, {""}},
         /* 19        */ {0, 0,   0, 0,  k_unit_param_type_none, 0, 0, 0, {""}},
 
