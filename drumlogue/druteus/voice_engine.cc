@@ -37,12 +37,18 @@ void tsf_kill_note(tsf* f, int channel, int preset, int key) {
   }
 }
 
+// Minimum release floor (~5ms at 48kHz) to prevent instantaneous
+// cutoff click on patches with release=0 (e.g. Syn Clav).
+static constexpr float kMinReleaseSamples = 240.0f;
+
 void voice_process_envelopes() {
   if (cached_env_enabled) {
     float atk_samples  = env_time_to_samples_attack(cached_env_atk);
     float hold_samples = env_time_to_samples_hold(cached_env_hold);
     float dec_samples  = env_time_to_samples_decay(cached_env_dec);
     float rel_samples  = env_time_to_samples_release(cached_env_rel);
+    if (rel_samples < kMinReleaseSamples)
+      rel_samples = kMinReleaseSamples;
     float sus_level    = cached_env_sus / 99.0f;
     float note_gain_pri[128] = {};
     float note_gain_sec[128] = {};
@@ -84,6 +90,17 @@ void voice_process_envelopes() {
       else if (v->playingChannel == 1 && v->playingPreset == voice_preset_secondary)
         v->ampGain = note_gain_sec[v->playingKey];
     }
+  } else {
+    // Envelope disabled: set ampGain to unity so the aux envelope below
+    // starts from a clean baseline rather than multiplying TSF's internal
+    // gain (which can be loud enough to clip, e.g. Emperor with both layers
+    // on the same instrument at high volume).
+    for (int i = 0; i < (int)soundfont->voiceNum; i++) {
+      tsf_voice* v = &soundfont->voices[i];
+      if (v->playingPreset == -1) continue;
+      if (v->playingChannel == 0 && v->playingPreset == voice_preset_primary)
+        v->ampGain = 1.0f;
+    }
   }
 
   if (patch_has_secondary && cached_env2_enabled) {
@@ -91,6 +108,8 @@ void voice_process_envelopes() {
     float hold2_samples = env_time_to_samples_hold(cached_env2_hold);
     float dec2_samples  = env_time_to_samples_decay(cached_env2_dec);
     float rel2_samples  = env_time_to_samples_release(cached_env2_rel);
+    if (rel2_samples < kMinReleaseSamples)
+      rel2_samples = kMinReleaseSamples;
     float sus2_level    = cached_env2_sus / 99.0f;
     float note_gain_sec2[128] = {};
 
@@ -122,6 +141,13 @@ void voice_process_envelopes() {
       if (v->playingChannel == 1 && v->playingPreset == voice_preset_secondary)
         v->ampGain = note_gain_sec2[v->playingKey];
     }
+  } else if (patch_has_secondary) {
+    for (int i = 0; i < (int)soundfont->voiceNum; i++) {
+      tsf_voice* v = &soundfont->voices[i];
+      if (v->playingPreset == -1) continue;
+      if (v->playingChannel == 1 && v->playingPreset == voice_preset_secondary)
+        v->ampGain = 1.0f;
+    }
   }
 
   {
@@ -131,6 +157,8 @@ void voice_process_envelopes() {
     float aux_dec_s   = env_time_to_samples_decay(current_patch.i3decay);
     float aux_sus_l   = (float)current_patch.i3sustain / 99.0f;
     float aux_rel_s   = env_time_to_samples_release(current_patch.i3release);
+    if (aux_rel_s < kMinReleaseSamples)
+      aux_rel_s = kMinReleaseSamples;
     float aux_amount  = (float)current_patch.i3amount / 127.0f;
     float note_aux_gain[128] = {};
     for (int vi = 0; vi < 16; vi++) {
