@@ -26,6 +26,19 @@ typedef struct unit_loader {
     unit_note_on_func unit_note_on;
     unit_note_off_func unit_note_off;
     unit_all_note_off_func unit_all_note_off;
+
+    // Gate / drum trigger callbacks
+    unit_gate_on_func unit_gate_on;
+    unit_gate_off_func unit_gate_off;
+
+    // Performance callbacks
+    unit_pitch_bend_func unit_pitch_bend;
+    unit_channel_pressure_func unit_channel_pressure;
+    unit_aftertouch_func unit_aftertouch;
+
+    // Lifecycle
+    unit_set_tempo_func unit_set_tempo;
+    unit_teardown_func unit_teardown;
 } unit_loader_t;
 
 // Load shared library and resolve required symbols

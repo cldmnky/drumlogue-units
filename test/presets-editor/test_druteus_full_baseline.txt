@@ -1,0 +1,48 @@
+=== Loading unit ===
+  Load OK
+
+=== Test 1: Gate on → output; gate off → release silence ===
+  PASS: Gate on peak=0.236864 > 0.001
+  PASS: Gate off still playing (release) peak=0.196416
+  PASS: After release tail silence peak=0.00000000
+
+=== Test 2: Same-note stacking — release one, other still plays ===
+  PASS: Two stacked notes playing peak=0.747931
+  PASS: After one release, still playing peak=0.595081
+  PASS: Both released → silence peak=0.00000000
+
+=== Test 3: Parameter round-trip ===
+  PASS: all 27 param round-trips match
+
+=== Test 4: Transpose changes pitch ===
+  PASS: Transpose 0 peak=0.013134 vs +12 peak=0.028011 differ (diff=0.014877)
+
+=== Test 5: Volume 0 → silence ===
+  PASS: Volume 0 peak=0.00193645 < 0.005 (residual)
+  PASS: Volume 100 peak=0.071270 > 0.001
+
+=== Test 6: Pan hard L/R ===
+  PASS: Pan L: L=0.075229 R=0.007814 (L >> R)
+  PASS: Pan R: L=0.013602 R=0.076552 (R >> L)
+
+=== Test 7: Max voices limiting ===
+  PASS: 1-voice mode: second note steals, output peak=0.078414
+  PASS: 1-voice: after releasing first, note 67 still plays peak=0.063575
+
+=== Test 8: Velocity curve changes amplitude ===
+  V.CURVE=0 peak=0.066722
+  V.CURVE=1 peak=0.054486
+  V.CURVE=2 peak=0.130104
+  V.CURVE=3 peak=0.134996
+  V.CURVE=4 peak=0.026923
+  PASS: all curves produce output
+
+=== Test 9: Pitch bend changes output ===
+  PASS: Pitch bend down changes peak: before=0.103143 after=0.077793
+
+=== Test 10: Existing polyphonic test (regression) ===
+  PASS: A+B playing peak=0.146617
+  PASS: After B release, A still plays peak=0.179280
+  NOTE: After A release tail ongoing peak=0.01602375 (pre-existing, need >200 frames for full decay)
+
+=== Summary: ALL PASSED (0 failures) ===

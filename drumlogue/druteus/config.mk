@@ -6,6 +6,13 @@ CSRC = header.c
 
 # C++ sources
 CXXSRC = unit.cc
+CXXSRC += params.cc
+CXXSRC += sf_loader.cc
+CXXSRC += patch_engine.cc
+CXXSRC += voice_engine.cc
+CXXSRC += lfo_engine.cc
+CXXSRC += dsp_chain.cc
+CXXSRC += dsp_primitives.cc
 CXXSRC += $(COMMON_SRC_PATH)/voice_allocator_core.cc
 
 # Include paths (. ensures tsf.h and logue_fs.h are found in the project dir)
