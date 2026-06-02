@@ -62,10 +62,10 @@ COMMON_SRC_PATH := $(REPO_COMMON)
 INCLUDES += -I$(REPO_ROOT)/test/presets-editor/shim
 INCLUDES += -I$(UNIT_DIR)
 INCLUDES += -I$(COMMON_INC_PATH)
-INCLUDES += -I$(EURORACKDIR)
-INCLUDES += -I$(STMLIBDIR)
-INCLUDES += -I$(REPO_SDK_INC)/common
-INCLUDES += -I$(REPO_SDK_INC)/inc
+INCLUDES += -isystem $(EURORACKDIR)
+INCLUDES += -isystem $(STMLIBDIR)
+INCLUDES += -isystem $(REPO_SDK_INC)/common
+INCLUDES += -isystem $(REPO_SDK_INC)/inc
 
 # Collect sources and normalize to absolute paths
 ALL_SRCS := $(CSRC) $(CXXSRC) $(COMMON_SRC_PATH)
