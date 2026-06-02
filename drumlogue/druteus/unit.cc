@@ -28,6 +28,7 @@
 namespace ndsp = druteus::neon;
 
 #include "tools/proteus_patches.h"
+#include "tools/proteus_instrument_map.h"
 
 // TinySoundFont — single-header SF2 synthesizer.
 // TSF_IMPLEMENTATION must be defined in exactly one translation unit.
@@ -49,6 +50,7 @@ namespace ndsp = druteus::neon;
 #define CHUNK_SIZE       131072                    // bytes per render frame during load
 #define VELOCITY_SCALE   (1.f / 127.f)
 #define OUTPUT_MODE      TSF_STEREO_INTERLEAVED    // drumlogue: stereo interleaved float
+#define REQUIRED_PATCH_SF2 "Proteus1_Instruments.sf2"
 
 // ---------------------------------------------------------------------------
 // Parameter indices — must match header.c descriptor order exactly
@@ -170,6 +172,8 @@ static proteus_patch_t current_patch;
 static bool patch_has_secondary = false;
 static int  voice_preset_primary   = 1;  // TSF preset index for CH0
 static int  voice_preset_secondary = 1;  // TSF preset index for CH1
+static float patch_tune_primary = 0.0f;
+static float patch_tune_secondary = 0.0f;
 
 // Cached patch envelope values (read in render loop, set by s_load_patch).
 static uint32_t cached_env_atk = 0;
@@ -178,6 +182,13 @@ static uint32_t cached_env_dec = 0;
 static uint32_t cached_env_sus = 99;
 static uint32_t cached_env_rel = 99;
 static bool     cached_env_enabled = false;
+// Layer-2 envelope (per-voice AHDSR for secondary channel).
+static uint32_t cached_env2_atk = 0;
+static uint32_t cached_env2_hold = 0;
+static uint32_t cached_env2_dec = 0;
+static uint32_t cached_env2_sus = 99;
+static uint32_t cached_env2_rel = 99;
+static bool     cached_env2_enabled = false;
 
 // Per-voice AHDSR envelope state (indexed by voice allocator voice_index).
 struct VoiceEnv {
@@ -186,6 +197,10 @@ struct VoiceEnv {
   uint64_t note_on_sample;
   uint64_t note_off_sample;
   float    release_start_level;
+  // Layer-2 envelope timing (independent from layer-1).
+  uint64_t note2_on_sample;
+  uint64_t note2_off_sample;
+  float    release2_start_level;
 };
 static VoiceEnv voice_env[16];
 static int      active_notes = 0;  // polyphonic note count
@@ -274,7 +289,6 @@ static float lfo_delay_to_samples(uint32_t v) { return env_lookup_seconds(v, kDe
 
 // Compute the envelope level at a given absolute sample time (AHDSR).
 static float env_level_at_sample(uint64_t sample,
-    uint32_t atk, uint32_t dec, uint32_t sus,
     float atk_samples, float hold_samples, float dec_samples, float sus_level,
     uint64_t note_on) {
   uint64_t elapsed = sample - note_on;
@@ -289,6 +303,78 @@ static float env_level_at_sample(uint64_t sample,
   return sus_level;
 }
 
+static float clamp01(float value) {
+  if (value < 0.0f) return 0.0f;
+  if (value > 1.0f) return 1.0f;
+  return value;
+}
+
+static int find_soundfont_index_by_name(const char* name) {
+  if (name == nullptr || soundfont_list.count <= 0)
+    return -1;
+  for (int i = 0; i < soundfont_list.count; ++i) {
+    if (strcmp(soundfont_list.get(i), name) == 0)
+      return i;
+  }
+  return -1;
+}
+
+static void compute_crossfade_weights(uint8_t mode, uint8_t velocity, uint8_t note,
+                                      uint8_t switchpoint, uint8_t balance,
+                                      uint8_t amount, uint8_t direction,
+                                      float* primary_weight,
+                                      float* secondary_weight) {
+  float pri = 1.0f;
+  float sec = 1.0f;
+
+  // Balance is modeled as an offset around switchpoint; keep range bounded.
+  const float center = clamp01((switchpoint + ((int)balance - 64)) / 127.0f);
+
+  if (mode == 1) {
+    // Velocity crossfade over a controllable transition range.
+    const float u = velocity * VELOCITY_SCALE;
+    const float width = amount > 0 ? (amount / 255.0f) : 0.0f;
+    if (width <= 0.0f) {
+      pri = (u < center) ? 1.0f : 0.0f;
+      sec = 1.0f - pri;
+    } else {
+      const float lo = clamp01(center - 0.5f * width);
+      const float hi = clamp01(center + 0.5f * width);
+      if (u <= lo) {
+        pri = 1.0f;
+        sec = 0.0f;
+      } else if (u >= hi) {
+        pri = 0.0f;
+        sec = 1.0f;
+      } else {
+        const float span = (hi - lo);
+        const float t = (span > 0.0f) ? ((u - lo) / span) : 0.5f;
+        sec = clamp01(t);
+        pri = 1.0f - sec;
+      }
+    }
+  } else if (mode == 2) {
+    // Keyboard cross-switch at switchpoint (+ balance offset).
+    const uint8_t split_key = (uint8_t)(center * 127.0f + 0.5f);
+    if (note < split_key) {
+      pri = 1.0f;
+      sec = 0.0f;
+    } else {
+      pri = 0.0f;
+      sec = 1.0f;
+    }
+  }
+
+  if (direction != 0) {
+    const float tmp = pri;
+    pri = sec;
+    sec = tmp;
+  }
+
+  *primary_weight = pri;
+  *secondary_weight = sec;
+}
+
 
 // ---------------------------------------------------------------------------
 // Internal helper: load a Proteus patch onto TSF channels 0 (primary) and 1 (secondary)
@@ -299,7 +385,7 @@ static void s_load_patch(uint16_t patch_idx) {
     return;
 
   current_patch = kProteusPatchTable[patch_idx];
-  patch_has_secondary = (current_patch.i2volume > 0);
+  patch_has_secondary = false;
 
   cached_env_atk     = current_patch.i1attack;
   cached_env_hold    = current_patch.i1hold;
@@ -307,6 +393,12 @@ static void s_load_patch(uint16_t patch_idx) {
   cached_env_sus     = current_patch.i1sustain;
   cached_env_rel     = current_patch.i1release;
   cached_env_enabled = (current_patch.i1envelopeon != 0);
+  cached_env2_atk    = current_patch.i2attack;
+  cached_env2_hold   = current_patch.i2hold;
+  cached_env2_dec    = current_patch.i2decay;
+  cached_env2_sus    = current_patch.i2sustain;
+  cached_env2_rel    = current_patch.i2release;
+  cached_env2_enabled = false;
 
   if (soundfont == nullptr)
     return;
@@ -315,32 +407,41 @@ static void s_load_patch(uint16_t patch_idx) {
   if (max_preset <= 0)
     return;
 
-  int idx0 = (int)current_patch.i1instrument;
-  if (idx0 <= 0) idx0 = 1;
-  if (idx0 >= max_preset) idx0 = max_preset - 1;
+  int idx0 = resolve_proteus_instrument_to_sf2_preset(
+      (int)current_patch.i1instrument, max_preset);
+  if (idx0 < 0)
+    idx0 = 0;
   voice_preset_primary = idx0;
 
   tsf_channel_set_presetindex(soundfont, 0, idx0);
   tsf_channel_midi_control(soundfont, 0, 7, current_patch.i1volume);
   tsf_channel_set_pan(soundfont, 0,
       ((int)current_patch.i1pan + 7) * 9 / 127.0f);
-  float tune1 = (float)(current_patch.i1tuningcoarse * 100 +
-                        current_patch.i1tuningfine) / 100.0f;
-  tsf_channel_set_tuning(soundfont, 0, tune1);
+  patch_tune_primary =
+      (float)(current_patch.i1tuningcoarse * 100 + current_patch.i1tuningfine) /
+      100.0f;
+  tsf_channel_set_tuning(soundfont, 0,
+      patch_tune_primary + Params[param_fine_tune] / 64.0f);
 
-  if (patch_has_secondary) {
-    int idx1 = (int)current_patch.i2instrument;
-    if (idx1 <= 0) idx1 = 1;
-    if (idx1 >= max_preset) idx1 = max_preset - 1;
+  int idx1 = resolve_proteus_instrument_to_sf2_preset(
+      (int)current_patch.i2instrument, max_preset);
+  if (idx1 >= 0 && current_patch.i2volume > 0) {
+    patch_has_secondary = true;
+    cached_env2_enabled = (current_patch.i2envelopeon != 0);
     voice_preset_secondary = idx1;
 
     tsf_channel_set_presetindex(soundfont, 1, idx1);
     tsf_channel_midi_control(soundfont, 1, 7, current_patch.i2volume);
     tsf_channel_set_pan(soundfont, 1,
         ((int)current_patch.i2pan + 7) * 9 / 127.0f);
-    float tune2 = (float)(current_patch.i2tuningcoarse * 100 +
-                          current_patch.i2tuningfine) / 100.0f;
-    tsf_channel_set_tuning(soundfont, 1, tune2);
+    patch_tune_secondary =
+        (float)(current_patch.i2tuningcoarse * 100 + current_patch.i2tuningfine) /
+        100.0f;
+    tsf_channel_set_tuning(soundfont, 1,
+        patch_tune_secondary + Params[param_fine_tune] / 64.0f);
+  } else {
+    cached_env2_enabled = false;
+    patch_tune_secondary = 0.0f;
   }
 }
 
@@ -389,6 +490,21 @@ static void tsf_kill_note(tsf* f, int channel, int preset, int key) {
   }
 }
 
+static int8_t find_oldest_active_voice_for_note(uint8_t midi_note) {
+  int8_t found = -1;
+  uint32_t oldest_time = UINT32_MAX;
+  for (uint8_t i = 0; i < voice_allocator.GetMaxVoices(); ++i) {
+    const common::VoiceSlot& slot = voice_allocator.GetVoice(i);
+    if (!slot.active || slot.midi_note != midi_note)
+      continue;
+    if (found < 0 || slot.note_on_time < oldest_time) {
+      found = static_cast<int8_t>(i);
+      oldest_time = slot.note_on_time;
+    }
+  }
+  return found;
+}
+
 // ---------------------------------------------------------------------------
 // Internal helper: trigger a note with all transforms applied
 // ---------------------------------------------------------------------------
@@ -427,6 +543,9 @@ static void s_trigger_note(uint8_t note, uint8_t velocity) {
     voice_env[result.voice_index].note_on_sample     = sample_count;
     voice_env[result.voice_index].note_off_sample    = 0;
     voice_env[result.voice_index].release_start_level = 1.0f;
+    voice_env[result.voice_index].note2_on_sample    = sample_count;
+    voice_env[result.voice_index].note2_off_sample   = 0;
+    voice_env[result.voice_index].release2_start_level = 1.0f;
     lfo_delay_completed = 0.0f;
   }
 
@@ -436,24 +555,17 @@ static void s_trigger_note(uint8_t note, uint8_t velocity) {
   uint8_t layers = Params[param_layers];
 
   uint8_t crossfade_mode = (xfade > 0) ? xfade : current_patch.crossfademode;
-  if (crossfade_mode == 1) {
-    float sp     = current_patch.switchpoint / 127.0f;
-    sp += (current_patch.crossfadebalance - 64.0f) * 0.0039f;
-    if (sp < 0.0f) sp = 0.0f;
-    if (sp > 1.0f) sp = 1.0f;
-    float xfade_amt = current_patch.crossfadeamount / 255.0f;
-    float v      = velocity / 127.0f;
-    if (v < sp) {
-      vel0 *= 1.0f;
-      vel1 *= 1.0f - (1.0f - v / sp) * xfade_amt;
-    } else {
-      vel0 *= 1.0f - (v - sp) / (1.0f - sp) * xfade_amt;
-      vel1 *= 1.0f;
-    }
-  } else if (crossfade_mode == 2) {
-    if (adjusted < 64) vel1 = 0.0f;
-    else               vel0 = 0.0f;
-  }
+  float primary_weight = 1.0f;
+  float secondary_weight = 1.0f;
+  compute_crossfade_weights(crossfade_mode, velocity, (uint8_t)adjusted,
+                            current_patch.switchpoint,
+                            current_patch.crossfadebalance,
+                            current_patch.crossfadeamount,
+                            current_patch.crossfadedirection,
+                            &primary_weight,
+                            &secondary_weight);
+  vel0 *= primary_weight;
+  vel1 *= secondary_weight;
 
   bool play_primary = true, play_secondary = true;
   if (layers == 1)       play_secondary = false;
@@ -497,6 +609,11 @@ __unit_callback int8_t unit_init(const unit_runtime_desc_t *desc) {
   // Rescan the Programs folder so SF2 files added after the library was
   // first loaded are visible without a power cycle.
   soundfont_list.refresh();
+  {
+    const int required_sf2_idx = find_soundfont_index_by_name(REQUIRED_PATCH_SF2);
+    if (required_sf2_idx >= 0)
+      Params[param_soundfont] = required_sf2_idx;
+  }
 
   // Init DSP effects.
   chorus_dsp.Init(48000.0f);
@@ -601,6 +718,12 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
 
     // -----------------------------------------------------------------------
     case load_start: {
+      {
+        const int required_sf2_idx = find_soundfont_index_by_name(REQUIRED_PATCH_SF2);
+        if (required_sf2_idx >= 0)
+          Params[param_soundfont] = required_sf2_idx;
+      }
+
       char *path = (char *)malloc(PATH_MAX);
       if (path == nullptr) {
         state = load_idle;
@@ -779,10 +902,11 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
 
   {
     float base_tune = Params[param_fine_tune] / 64.0f;
-    float tuned = base_tune + lfo_pitch_offset;
-    tsf_channel_set_tuning(soundfont, 0, tuned);
+    float tuned0 = patch_tune_primary + base_tune + lfo_pitch_offset;
+    tsf_channel_set_tuning(soundfont, 0, tuned0);
     if (patch_has_secondary)
-      tsf_channel_set_tuning(soundfont, 1, tuned);
+      tsf_channel_set_tuning(soundfont, 1,
+                             patch_tune_secondary + base_tune + lfo_pitch_offset);
   }
 
   // Per-voice AHDSR — compute per-note gain then apply in single TSF voice pass.
@@ -802,7 +926,7 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
       uint64_t note_off = voice_env[vi].note_off_sample;
 
       if (note_off == 0 || sample_count < note_off) {
-        level = env_level_at_sample(sample_count, 0, 0, 0,
+        level = env_level_at_sample(sample_count,
             atk_samples, hold_samples, dec_samples, sus_level, note_on);
       } else {
         uint64_t rel_elapsed = sample_count - note_off;
@@ -830,6 +954,47 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
         v->ampGain = note_gain_pri[v->playingKey];
       else if (v->playingChannel == 1 && v->playingPreset == voice_preset_secondary)
         v->ampGain = note_gain_sec[v->playingKey];
+    }
+  }
+
+  // Per-voice AHDSR for layer 2 (independent envelope on secondary channel).
+  // Only active when patch_has_secondary AND i2envelopeon != 0.
+  if (patch_has_secondary && cached_env2_enabled) {
+    float atk2_samples  = env_time_to_samples_attack(cached_env2_atk);
+    float hold2_samples = env_time_to_samples_hold(cached_env2_hold);
+    float dec2_samples  = env_time_to_samples_decay(cached_env2_dec);
+    float rel2_samples  = env_time_to_samples_release(cached_env2_rel);
+    float sus2_level    = cached_env2_sus / 99.0f;
+    float note_gain_sec2[128] = {};
+
+    for (int vi = 0; vi < 16; vi++) {
+      if (!voice_env[vi].active) continue;
+      float level2;
+      uint64_t note2_on  = voice_env[vi].note2_on_sample;
+      uint64_t note2_off = voice_env[vi].note2_off_sample;
+
+      if (note2_off == 0 || sample_count < note2_off) {
+        level2 = env_level_at_sample(sample_count,
+            atk2_samples, hold2_samples, dec2_samples, sus2_level, note2_on);
+      } else {
+        uint64_t rel2_elapsed = sample_count - note2_off;
+        if (rel2_elapsed < (uint64_t)rel2_samples) {
+          float rel2_t = (float)rel2_elapsed / rel2_samples;
+          level2 = voice_env[vi].release2_start_level * (1.0f - rel2_t);
+        } else {
+          level2 = 0.0f;
+        }
+      }
+
+      note_gain_sec2[voice_env[vi].note] = level2;
+    }
+
+    // Multiply into existing CH1 ampGain (replaces L1 envelope for layer 2).
+    for (int i = 0; i < (int)soundfont->voiceNum; i++) {
+      tsf_voice* v = &soundfont->voices[i];
+      if (v->playingPreset == -1) continue;
+      if (v->playingChannel == 1 && v->playingPreset == voice_preset_secondary)
+        v->ampGain = note_gain_sec2[v->playingKey];
     }
   }
 
@@ -903,10 +1068,17 @@ __unit_callback void unit_set_param_value(uint8_t index, int32_t value) {
     case param_soundfont:
       if (soundfont_list.count <= 0)
         break;
-      if (value >= soundfont_list.count)
-        value = soundfont_list.count - 1;
-      if (value < 0)
-        value = 0;
+      {
+        const int required_sf2_idx = find_soundfont_index_by_name(REQUIRED_PATCH_SF2);
+        if (required_sf2_idx >= 0) {
+          value = required_sf2_idx;
+        } else {
+          if (value >= soundfont_list.count)
+            value = soundfont_list.count - 1;
+          if (value < 0)
+            value = 0;
+        }
+      }
       if (value == Params[index])
         break;
       if (soundfont != nullptr)
@@ -968,9 +1140,10 @@ __unit_callback void unit_set_param_value(uint8_t index, int32_t value) {
       if (value < -63) value = -63;
       if (value > 63)  value = 63;
       if (soundfont != nullptr) {
-        tsf_channel_set_tuning(soundfont, 0, value / 64.0f);
+        float fine = value / 64.0f;
+        tsf_channel_set_tuning(soundfont, 0, patch_tune_primary + fine);
         if (patch_has_secondary)
-          tsf_channel_set_tuning(soundfont, 1, value / 64.0f);
+          tsf_channel_set_tuning(soundfont, 1, patch_tune_secondary + fine);
       }
       break;
 
@@ -1120,12 +1293,11 @@ __unit_callback void unit_note_on(uint8_t note, uint8_t velocity) {
 
 __unit_callback void unit_note_off(uint8_t note) {
   voice_allocator.NoteOff(note);
-  
-  // Deactivate matching voice slots (NoteOff doesn't do this in polyphonic mode).
-  for (uint8_t i = 0; i < voice_allocator.GetMaxVoices(); ++i) {
-    if (voice_allocator.GetVoice(i).active && voice_allocator.GetVoice(i).midi_note == note)
-      voice_allocator.SetVoiceActive(i, false);
-  }
+
+  // Release a single matching voice slot to avoid dropping stacked same-note voices.
+  int8_t released_voice_idx = find_oldest_active_voice_for_note(note);
+  if (released_voice_idx >= 0)
+    voice_allocator.SetVoiceActive((uint8_t)released_voice_idx, false);
   
   // Count active notes from allocator.
   active_notes = 0;
@@ -1136,20 +1308,59 @@ __unit_callback void unit_note_off(uint8_t note) {
   
   int8_t trans = (int8_t)Params[param_transpose];
   int adj = (int)note + trans;
-  if (adj < 0) adj = 0; if (adj > 127) adj = 127;
+  if (adj < 0) adj = 0;
+  if (adj > 127) adj = 127;
 
   if (cached_env_enabled) {
     float atk_s = env_time_to_samples_attack(cached_env_atk);
     float hld_s = env_time_to_samples_hold(cached_env_hold);
     float dec_s = env_time_to_samples_decay(cached_env_dec);
     float sus_l = cached_env_sus / 99.0f;
-    for (int i = 0; i < 16; i++) {
-      if (voice_env[i].active && voice_env[i].note == (uint8_t)adj &&
-          voice_env[i].note_off_sample == 0) {
-        voice_env[i].release_start_level = env_level_at_sample(
-            sample_count, 0, 0, 0, atk_s, hld_s, dec_s, sus_l,
-            voice_env[i].note_on_sample);
-        voice_env[i].note_off_sample = sample_count;
+    if (released_voice_idx >= 0 && released_voice_idx < 16 &&
+        voice_env[released_voice_idx].active &&
+        voice_env[released_voice_idx].note == (uint8_t)adj &&
+        voice_env[released_voice_idx].note_off_sample == 0) {
+      voice_env[released_voice_idx].release_start_level = env_level_at_sample(
+            sample_count, atk_s, hld_s, dec_s, sus_l,
+          voice_env[released_voice_idx].note_on_sample);
+      voice_env[released_voice_idx].note_off_sample = sample_count;
+    } else {
+      for (int i = 0; i < 16; i++) {
+        if (voice_env[i].active && voice_env[i].note == (uint8_t)adj &&
+            voice_env[i].note_off_sample == 0) {
+          voice_env[i].release_start_level = env_level_at_sample(
+            sample_count, atk_s, hld_s, dec_s, sus_l,
+              voice_env[i].note_on_sample);
+          voice_env[i].note_off_sample = sample_count;
+          break;
+        }
+      }
+    }
+  }
+
+  if (cached_env2_enabled) {
+    float atk_s = env_time_to_samples_attack(cached_env2_atk);
+    float hld_s = env_time_to_samples_hold(cached_env2_hold);
+    float dec_s = env_time_to_samples_decay(cached_env2_dec);
+    float sus_l = cached_env2_sus / 99.0f;
+    if (released_voice_idx >= 0 && released_voice_idx < 16 &&
+        voice_env[released_voice_idx].active &&
+        voice_env[released_voice_idx].note == (uint8_t)adj &&
+        voice_env[released_voice_idx].note2_off_sample == 0) {
+      voice_env[released_voice_idx].release2_start_level = env_level_at_sample(
+            sample_count, atk_s, hld_s, dec_s, sus_l,
+          voice_env[released_voice_idx].note2_on_sample);
+      voice_env[released_voice_idx].note2_off_sample = sample_count;
+    } else {
+      for (int i = 0; i < 16; i++) {
+        if (voice_env[i].active && voice_env[i].note == (uint8_t)adj &&
+            voice_env[i].note2_off_sample == 0) {
+          voice_env[i].release2_start_level = env_level_at_sample(
+            sample_count, atk_s, hld_s, dec_s, sus_l,
+              voice_env[i].note2_on_sample);
+          voice_env[i].note2_off_sample = sample_count;
+          break;
+        }
       }
     }
   }
@@ -1162,17 +1373,17 @@ __unit_callback void unit_note_off(uint8_t note) {
 }
 
 __unit_callback void unit_gate_off() {
+  const uint8_t gate_midi_note = 60;
   int8_t transpose = (int8_t)Params[param_transpose];
-  int note = 60 + transpose;
-  if (note < 0) note = 0; if (note > 127) note = 127;
-  
-  voice_allocator.NoteOff((uint8_t)note);
-  
-  // Deactivate matching voice slots (NoteOff doesn't do this in polyphonic mode).
-  for (uint8_t i = 0; i < voice_allocator.GetMaxVoices(); ++i) {
-    if (voice_allocator.GetVoice(i).active && voice_allocator.GetVoice(i).midi_note == note)
-      voice_allocator.SetVoiceActive(i, false);
-  }
+  int note = (int)gate_midi_note + transpose;
+  if (note < 0) note = 0;
+  if (note > 127) note = 127;
+
+  voice_allocator.NoteOff(gate_midi_note);
+
+  int8_t released_voice_idx = find_oldest_active_voice_for_note(gate_midi_note);
+  if (released_voice_idx >= 0)
+    voice_allocator.SetVoiceActive((uint8_t)released_voice_idx, false);
   
   // Count active notes from allocator.
   active_notes = 0;
@@ -1186,13 +1397,24 @@ __unit_callback void unit_gate_off() {
     float hld_s = env_time_to_samples_hold(cached_env_hold);
     float dec_s = env_time_to_samples_decay(cached_env_dec);
     float sus_l = cached_env_sus / 99.0f;
-    for (int i = 0; i < 16; i++) {
-      if (voice_env[i].active && voice_env[i].note == (uint8_t)note &&
-          voice_env[i].note_off_sample == 0) {
-        voice_env[i].release_start_level = env_level_at_sample(
-            sample_count, 0, 0, 0, atk_s, hld_s, dec_s, sus_l,
-            voice_env[i].note_on_sample);
-        voice_env[i].note_off_sample = sample_count;
+    if (released_voice_idx >= 0 && released_voice_idx < 16 &&
+        voice_env[released_voice_idx].active &&
+        voice_env[released_voice_idx].note == (uint8_t)note &&
+        voice_env[released_voice_idx].note_off_sample == 0) {
+      voice_env[released_voice_idx].release_start_level = env_level_at_sample(
+            sample_count, atk_s, hld_s, dec_s, sus_l,
+          voice_env[released_voice_idx].note_on_sample);
+      voice_env[released_voice_idx].note_off_sample = sample_count;
+    } else {
+      for (int i = 0; i < 16; i++) {
+        if (voice_env[i].active && voice_env[i].note == (uint8_t)note &&
+            voice_env[i].note_off_sample == 0) {
+          voice_env[i].release_start_level = env_level_at_sample(
+            sample_count, atk_s, hld_s, dec_s, sus_l,
+              voice_env[i].note_on_sample);
+          voice_env[i].note_off_sample = sample_count;
+          break;
+        }
       }
     }
   }
