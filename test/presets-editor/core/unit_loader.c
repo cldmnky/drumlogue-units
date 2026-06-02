@@ -46,6 +46,19 @@ int unit_loader_open(const char* path, unit_loader_t* loader) {
     loader->unit_note_off = (unit_note_off_func)dlsym(loader->handle, "unit_note_off");
     loader->unit_all_note_off = (unit_all_note_off_func)dlsym(loader->handle, "unit_all_note_off");
 
+    // Gate / drum trigger callbacks
+    loader->unit_gate_on = (unit_gate_on_func)dlsym(loader->handle, "unit_gate_on");
+    loader->unit_gate_off = (unit_gate_off_func)dlsym(loader->handle, "unit_gate_off");
+
+    // Performance callbacks
+    loader->unit_pitch_bend = (unit_pitch_bend_func)dlsym(loader->handle, "unit_pitch_bend");
+    loader->unit_channel_pressure = (unit_channel_pressure_func)dlsym(loader->handle, "unit_channel_pressure");
+    loader->unit_aftertouch = (unit_aftertouch_func)dlsym(loader->handle, "unit_aftertouch");
+
+    // Lifecycle
+    loader->unit_set_tempo = (unit_set_tempo_func)dlsym(loader->handle, "unit_set_tempo");
+    loader->unit_teardown = (unit_teardown_func)dlsym(loader->handle, "unit_teardown");
+
     return 0;
 }
 

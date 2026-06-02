@@ -424,3 +424,27 @@ To get the full patch data into firmware:
 - **Preset save/load:** Store user-modified patches (override values) in drumlogue preset slots
 - **Per-layer DSP:** Distortion, EQ, filter per layer (from Mutable Instruments eurorack modules)
 - **Sample ROM extraction:** If original Proteus sample ROMs become available, extract raw PCM for a fully custom voice engine without TSF dependency
+
+---
+
+## 9. Design Decisions (post-Phase-3 review)
+
+### 9.1 Keyboard crossfade split uses the transposed (audible) note
+
+`compute_crossfade_weights` is called with the transposed `note` value (after `Params[param_transpose]` is applied). This means the keyboard split point at `switchpoint` moves with the TUNE param — when the user transposes, the split point follows the music. The previous reference code used a hard-coded `64`, which was a placeholder; using the transposed note is more ergonomic for performance.
+
+### 9.2 `param_soundfont` is user-selectable, defaulting to Proteus
+
+`unit_init` defaults the SFONT param to the index of `Proteus1_Instruments.sf2` if that file is present in `Programs/`. The user is free to pick any other SF2 from the listing; the value is *not* re-asserted on reload or in `unit_set_param_value`. Previously the param was force-overwritten on every load and every user write, which silently undid user selection.
+
+### 9.3 Stacked same-note voice-off releases the youngest voice
+
+When the same MIDI note is held by multiple voice slots (e.g. fast repeated gate triggers, or drumlogue's held-note re-trigger behavior), a single note-off releases only the *most recent* voice. The older voice continues to ring. Implemented via `find_youngest_active_voice_for_note` in `unit.cc` (returns the slot with the highest `note_on_time` from the allocator).
+
+### 9.4 Per-voice L1 release tail frees the allocator slot
+
+When the L1 envelope release tail completes, both `voice_env[vi].active` and `voice_allocator.GetVoice(vi).active` are cleared in lockstep. This keeps the allocator and the envelope state in sync and frees the slot for new `NoteOn` calls.
+
+### 9.5 Out-of-range Proteus instrument IDs fall back to preset 1, not 0
+
+`resolve_proteus_instrument_to_sf2_preset` returns `-1` for unmapped Proteus IDs. The caller in `s_load_patch` clamps the result to `1` (not `0`) because preset index 0 in many SF2 files is an EOA/dummy entry. Falling back to `1` selects the first audible preset, which is closer to the previous behavior and avoids shipping a silent fallback.

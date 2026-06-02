@@ -1,0 +1,70 @@
+#pragma once
+
+#include <stdint.h>
+#include "tsf.h"
+#include "voice_allocator.h"
+#include "../common/stereo_widener.h"
+#include "rings/dsp/fx/reverb.h"
+#include "filter.h"
+#include "logue_fs.h"
+#include "tools/proteus_patches.h"
+
+extern const char *sf2_prefix;
+extern const char *sf2_suffix;
+extern fs_dir soundfont_list;
+
+extern tsf *soundfont;
+extern char * __attribute__((aligned(32))) soundfont_buf;
+
+extern uint32_t state;
+extern bool suspended;
+
+extern common::ChorusStereoWidener chorus_dsp;
+extern rings::Reverb reverb_dsp;
+extern uint16_t reverb_buffer[32768];
+
+extern SVFilter filter_l;
+extern SVFilter filter_r;
+extern float fx_buf_l[256];
+extern float fx_buf_r[256];
+extern uint64_t sample_count;
+extern uint16_t last_pitch_bend;
+
+extern common::VoiceAllocatorCore voice_allocator;
+
+extern proteus_patch_t current_patch;
+extern bool patch_has_secondary;
+extern int voice_preset_primary;
+extern int voice_preset_secondary;
+extern float patch_tune_primary;
+extern float patch_tune_secondary;
+
+extern uint32_t cached_env_atk;
+extern uint32_t cached_env_hold;
+extern uint32_t cached_env_dec;
+extern uint32_t cached_env_sus;
+extern uint32_t cached_env_rel;
+extern bool cached_env_enabled;
+extern uint32_t cached_env2_atk;
+extern uint32_t cached_env2_hold;
+extern uint32_t cached_env2_dec;
+extern uint32_t cached_env2_sus;
+extern uint32_t cached_env2_rel;
+extern bool cached_env2_enabled;
+
+struct VoiceEnv {
+  bool     active;
+  uint8_t  note;
+  uint64_t note_on_sample;
+  uint64_t note_off_sample;
+  float    release_start_level;
+  uint64_t note2_on_sample;
+  uint64_t note2_off_sample;
+  float    release2_start_level;
+};
+extern VoiceEnv voice_env[16];
+extern int active_notes;
+
+extern float lfo_phase;
+extern float lfo2_phase;
+extern float lfo_delay_completed;

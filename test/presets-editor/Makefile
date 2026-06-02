@@ -89,6 +89,10 @@ NOTE_TEST_OBJS := $(NOTE_TEST_OBJ) build/sdk/runtime_stubs.o build/core/unit_loa
 MOUSE_NOTE_TEST_TARGET := $(BIN_DIR)/mouse-note-test
 MOUSE_NOTE_TEST_SRC := app/mouse_note_state_test.cpp
 MOUSE_NOTE_TEST_OBJ := build/app/mouse_note_state_test.o
+DRUTEUS_FULL_TARGET := $(BIN_DIR)/test_druteus_full
+DRUTEUS_FULL_SRC := app/test_druteus_full.c
+DRUTEUS_FULL_OBJ := build/app/test_druteus_full.o
+DRUTEUS_FULL_OBJS := $(DRUTEUS_FULL_OBJ) build/sdk/runtime_stubs.o build/core/unit_loader.o
 
 # GUI dependencies (SDL2 + ImGui)
 SDL_CFLAGS := $(shell pkg-config --cflags sdl2 2>/dev/null)
@@ -150,13 +154,16 @@ IMGUI_VERSION := 1.91.6
 IMGUI_URL := https://github.com/ocornut/imgui/archive/refs/tags/v$(IMGUI_VERSION).tar.gz
 VENDOR_DIR := vendor
 
-.PHONY: all clean build-unit setup-vendor note-priority-test mouse-note-test
+.PHONY: all clean build-unit setup-vendor note-priority-test mouse-note-test druteus-full-test
 
 note-priority-test: $(NOTE_TEST_TARGET)
 	@echo "Built $(NOTE_TEST_TARGET)"
 
 mouse-note-test: $(MOUSE_NOTE_TEST_TARGET)
 	@echo "Built $(MOUSE_NOTE_TEST_TARGET)"
+
+druteus-full-test: $(DRUTEUS_FULL_TARGET)
+	@echo "Built $(DRUTEUS_FULL_TARGET)"
 
 
 all: $(TARGET)
@@ -209,6 +216,9 @@ $(NOTE_TEST_TARGET): $(NOTE_TEST_OBJS) | $(BIN_DIR)
 
 $(MOUSE_NOTE_TEST_TARGET): $(MOUSE_NOTE_TEST_OBJ) | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
+$(DRUTEUS_FULL_TARGET): $(DRUTEUS_FULL_OBJS) | $(BIN_DIR)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 clean:
 	rm -rf build $(TARGET)
