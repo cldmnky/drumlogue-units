@@ -39,3 +39,8 @@ float lfo_delay_to_samples(uint32_t v);
 float env_level_at_sample(uint64_t sample,
     float atk_samples, float hold_samples, float dec_samples, float sus_level,
     uint64_t note_on);
+
+float aux_env_level_at_sample(uint64_t sample,
+    float delay_samples, float atk_samples, float hold_samples,
+    float dec_samples, float sus_level, float rel_samples,
+    uint64_t note_on, uint64_t note_off, float release_start_level);

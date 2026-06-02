@@ -61,6 +61,19 @@ struct VoiceEnv {
   uint64_t note2_on_sample;
   uint64_t note2_off_sample;
   float    release2_start_level;
+  /* —– per-layer note-on delay —– */
+  bool     note1_pending;
+  uint8_t  note1_pending_note;
+  float    note1_pending_vel;
+  uint64_t note1_pending_sample;
+  bool     note2_pending;
+  uint8_t  note2_pending_note;
+  float    note2_pending_vel;
+  uint64_t note2_pending_sample;
+  /* —– auxiliary envelope —– */
+  uint64_t aux_env_on_sample;
+  uint64_t aux_env_off_sample;
+  float    aux_env_release_start;
 };
 extern VoiceEnv voice_env[16];
 extern int active_notes;

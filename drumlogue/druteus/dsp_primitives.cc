@@ -58,3 +58,29 @@ float env_level_at_sample(uint64_t sample,
   }
   return sus_level;
 }
+
+float aux_env_level_at_sample(uint64_t sample,
+    float delay_samples, float atk_samples, float hold_samples,
+    float dec_samples, float sus_level, float rel_samples,
+    uint64_t note_on, uint64_t note_off, float release_start_level) {
+  if (note_off == 0 || sample < note_off) {
+    uint64_t elapsed = sample - note_on;
+    if (elapsed < delay_samples)
+      return 0.0f;
+    uint64_t after_delay = elapsed - (uint64_t)delay_samples;
+    if (after_delay < (uint64_t)atk_samples)
+      return (float)after_delay / atk_samples;
+    if (after_delay < (uint64_t)atk_samples + (uint64_t)hold_samples)
+      return 1.0f;
+    if (after_delay < (uint64_t)atk_samples + (uint64_t)hold_samples + (uint64_t)dec_samples) {
+      float dec_t = (float)(after_delay - (uint64_t)atk_samples - (uint64_t)hold_samples) / dec_samples;
+      return 1.0f - dec_t * (1.0f - sus_level);
+    }
+    return sus_level;
+  } else {
+    uint64_t rel_elapsed = sample - note_off;
+    if (rel_elapsed < (uint64_t)rel_samples)
+      return release_start_level * (1.0f - (float)rel_elapsed / rel_samples);
+    return 0.0f;
+  }
+}

@@ -461,6 +461,8 @@ struct tsf_voice
 	float  noteGainDB, panFactorLeft, panFactorRight;
 	float  ampGain;
 	unsigned int playIndex, loopStart, loopEnd;
+	unsigned int startAddrsOffset;
+	int playDirection;
 	struct tsf_voice_envelope ampenv, modenv;
 	struct tsf_voice_lowpass lowpass;
 	struct tsf_voice_lfo modlfo, viblfo;
@@ -1252,8 +1254,10 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 	TSF_BOOL updateModEnv = (region->modEnvToPitch || region->modEnvToFilterFc);
 	TSF_BOOL updateModLFO = (v->modlfo.delta && (region->modLfoToPitch || region->modLfoToFilterFc || region->modLfoToVolume));
 	TSF_BOOL updateVibLFO = (v->viblfo.delta && (region->vibLfoToPitch));
-	TSF_BOOL isLooping    = (v->loopStart < v->loopEnd);
+	TSF_BOOL isReversed   = (v->playDirection < 0);
+	TSF_BOOL isLooping    = (!isReversed) && (v->loopStart < v->loopEnd);
 	unsigned int tmpLoopStart = v->loopStart, tmpLoopEnd = v->loopEnd;
+	double tmpSampleStartDbl = (double)(region->offset + v->startAddrsOffset);
 	double tmpSampleEndDbl = (double)region->end, tmpLoopEndDbl = (double)tmpLoopEnd + 1.0;
 	double tmpSourceSamplePosition = v->sourceSamplePosition;
 	struct tsf_voice_lowpass tmpLowpass = v->lowpass;
@@ -1313,7 +1317,10 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 				gainLeft = gainMono * v->panFactorLeft, gainRight = gainMono * v->panFactorRight;
 #ifdef __ARM_NEON
 				// NEON batched accumulation — process 4 stereo samples per iteration.
-				while (blockSamples >= 4 && (tmpSourceSamplePosition + pitchRatio * 3.0) < tmpSampleEndDbl)
+				while (blockSamples >= 4 && (
+				    isReversed
+				    ? (tmpSourceSamplePosition - pitchRatio * 3.0) > tmpSampleStartDbl
+				    : (tmpSourceSamplePosition + pitchRatio * 3.0) < tmpSampleEndDbl))
 				{
 					float val[4];
 					double pp = tmpSourceSamplePosition;
@@ -1323,7 +1330,7 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 						float alpha = (float)(pp - pos);
 						val[k] = (input[pos] * (1.0f - alpha) + input[nextPos] * alpha);
 						if (tmpLowpass.active) val[k] = tsf_voice_lowpass_process(&tmpLowpass, val[k]);
-						pp += pitchRatio;
+						pp = (isReversed ? pp - pitchRatio : pp + pitchRatio);
 						if (pp >= tmpLoopEndDbl && isLooping) pp -= (tmpLoopEnd - tmpLoopStart + 1.0);
 					}
 					tmpSourceSamplePosition = pp;
@@ -1336,7 +1343,7 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 					blockSamples -= 4;
 				}
 #endif
-				while (blockSamples-- && tmpSourceSamplePosition < tmpSampleEndDbl)
+				while (blockSamples-- && (isReversed ? tmpSourceSamplePosition > tmpSampleStartDbl : tmpSourceSamplePosition < tmpSampleEndDbl))
 				{
 					unsigned int pos = (unsigned int)tmpSourceSamplePosition, nextPos = (pos >= tmpLoopEnd && isLooping ? tmpLoopStart : pos + 1);
 
@@ -1350,14 +1357,14 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 					*outL++ += val * gainRight;
 
 					// Next sample.
-					tmpSourceSamplePosition += pitchRatio;
+					if (isReversed) tmpSourceSamplePosition -= pitchRatio; else tmpSourceSamplePosition += pitchRatio;
 					if (tmpSourceSamplePosition >= tmpLoopEndDbl && isLooping) tmpSourceSamplePosition -= (tmpLoopEnd - tmpLoopStart + 1.0);
 				}
 				break;
 
 			case TSF_STEREO_UNWEAVED:
 				gainLeft = gainMono * v->panFactorLeft, gainRight = gainMono * v->panFactorRight;
-				while (blockSamples-- && tmpSourceSamplePosition < tmpSampleEndDbl)
+				while (blockSamples-- && (isReversed ? tmpSourceSamplePosition > tmpSampleStartDbl : tmpSourceSamplePosition < tmpSampleEndDbl))
 				{
 					unsigned int pos = (unsigned int)tmpSourceSamplePosition, nextPos = (pos >= tmpLoopEnd && isLooping ? tmpLoopStart : pos + 1);
 
@@ -1371,13 +1378,13 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 					*outR++ += val * gainRight;
 
 					// Next sample.
-					tmpSourceSamplePosition += pitchRatio;
+					if (isReversed) tmpSourceSamplePosition -= pitchRatio; else tmpSourceSamplePosition += pitchRatio;
 					if (tmpSourceSamplePosition >= tmpLoopEndDbl && isLooping) tmpSourceSamplePosition -= (tmpLoopEnd - tmpLoopStart + 1.0);
 				}
 				break;
 
 			case TSF_MONO:
-				while (blockSamples-- && tmpSourceSamplePosition < tmpSampleEndDbl)
+				while (blockSamples-- && (isReversed ? tmpSourceSamplePosition > tmpSampleStartDbl : tmpSourceSamplePosition < tmpSampleEndDbl))
 				{
 					unsigned int pos = (unsigned int)tmpSourceSamplePosition, nextPos = (pos >= tmpLoopEnd && isLooping ? tmpLoopStart : pos + 1);
 
@@ -1390,13 +1397,15 @@ static void tsf_voice_render(tsf* f, struct tsf_voice* v, float* outputBuffer, i
 					*outL++ += val * gainMono;
 
 					// Next sample.
-					tmpSourceSamplePosition += pitchRatio;
+					if (isReversed) tmpSourceSamplePosition -= pitchRatio; else tmpSourceSamplePosition += pitchRatio;
 					if (tmpSourceSamplePosition >= tmpLoopEndDbl && isLooping) tmpSourceSamplePosition -= (tmpLoopEnd - tmpLoopStart + 1.0);
 				}
 				break;
 		}
 
-		if (tmpSourceSamplePosition >= tmpSampleEndDbl || v->ampenv.segment == TSF_SEGMENT_DONE)
+		if ((!isReversed && tmpSourceSamplePosition >= tmpSampleEndDbl) ||
+		     (isReversed && tmpSourceSamplePosition <= tmpSampleStartDbl) ||
+		     v->ampenv.segment == TSF_SEGMENT_DONE)
 		{
 			tsf_voice_kill(v);
 			return;
@@ -1680,6 +1689,8 @@ TSFDEF int tsf_note_on(tsf* f, int preset_index, int key, float vel)
 		}
 
 		// Offset/end.
+		voice->startAddrsOffset = 0;
+		voice->playDirection = 1;
 		voice->sourceSamplePosition = region->offset;
 
 		// Loop.
@@ -1753,6 +1764,23 @@ TSFDEF void tsf_note_set_amp_gain(tsf* f, int preset_index, int key, float gain)
 	struct tsf_voice *v = f->voices, *vEnd = v + f->voiceNum;
 	for (; v != vEnd; v++) if (v->playingPreset == preset_index && v->playingKey == key)
 		v->ampGain = gain;
+}
+
+TSFDEF void tsf_voice_set_playback_mode(tsf* f, int preset_index, int key, unsigned int proteus_offset, int direction)
+{
+	struct tsf_voice *v = f->voices, *vEnd = v + f->voiceNum;
+	for (; v != vEnd; v++) if (v->playingPreset == preset_index && v->playingKey == key) {
+		unsigned int region_size = v->region->end - v->region->offset;
+		unsigned int abs_offset = region_size > 0
+			? (unsigned int)((double)proteus_offset * region_size / 127.0)
+			: 0;
+		v->startAddrsOffset = abs_offset;
+		v->playDirection = direction;
+		if (direction > 0)
+			v->sourceSamplePosition = (double)(v->region->offset + abs_offset);
+		else
+			v->sourceSamplePosition = (double)(v->region->end - abs_offset);
+	}
 }
 
 TSFDEF int tsf_active_voice_count(tsf* f)
