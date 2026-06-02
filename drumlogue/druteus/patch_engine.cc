@@ -67,6 +67,17 @@ void s_load_patch(uint16_t patch_idx) {
   tsf_channel_set_tuning(soundfont, 0,
       patch_tune_primary + Params[param_fine_tune] / 64.0f);
 
+  {
+    float pr;
+    uint8_t pbr = current_patch.pitchbendrange;
+    if (pbr == 0) pr = 2.0f;
+    else if (pbr <= 12) pr = (float)pbr;
+    else pr = 24.0f;
+    tsf_channel_set_pitchrange(soundfont, 0, pr);
+    if (current_patch.i2volume > 0)
+      tsf_channel_set_pitchrange(soundfont, 1, pr);
+  }
+
   int idx1 = resolve_proteus_instrument_to_sf2_preset(
       (int)current_patch.i2instrument, max_preset);
   // Fall back to preset 1 if the i2 instrument is unmapped. We always try

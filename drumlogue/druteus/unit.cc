@@ -162,6 +162,7 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
                              patch_tune_secondary + base_tune + lfo_pitch_offset);
   }
 
+  voice_process_pending_notes();
   voice_process_envelopes();
 
   tsf_render_float(soundfont, out, (int)frames, TSF_FALSE);

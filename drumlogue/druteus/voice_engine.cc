@@ -123,6 +123,90 @@ void voice_process_envelopes() {
         v->ampGain = note_gain_sec2[v->playingKey];
     }
   }
+
+  {
+    float aux_delay_s = lfo_delay_to_samples(current_patch.i3delay);
+    float aux_atk_s   = env_time_to_samples_attack(current_patch.i3attack);
+    float aux_hold_s  = env_time_to_samples_hold(current_patch.i3hold);
+    float aux_dec_s   = env_time_to_samples_decay(current_patch.i3decay);
+    float aux_sus_l   = (float)current_patch.i3sustain / 99.0f;
+    float aux_rel_s   = env_time_to_samples_release(current_patch.i3release);
+    float aux_amount  = (float)current_patch.i3amount / 127.0f;
+    float note_aux_gain[128] = {};
+    for (int vi = 0; vi < 16; vi++) {
+      if (!voice_env[vi].active) continue;
+      float aux_level = aux_env_level_at_sample(sample_count,
+          aux_delay_s, aux_atk_s, aux_hold_s, aux_dec_s, aux_sus_l, aux_rel_s,
+          voice_env[vi].aux_env_on_sample,
+          voice_env[vi].aux_env_off_sample,
+          voice_env[vi].aux_env_release_start);
+      // Asymmetric modulation depth: positive amount caps at +0.5 (1.5x max
+      // boost) to prevent clipping; negative amount keeps full depth so it
+      // can fully silence the voice. This avoids the 2x gain doubling that
+      // makes presets like Rap Drum Kit (i3amount=127, i3sustain=99) clip.
+      float aux_gain = (aux_amount >= 0.0f)
+          ? 1.0f + 0.5f * aux_level * aux_amount
+          : 1.0f + aux_level * aux_amount;
+      if (aux_gain < 0.0f) aux_gain = 0.0f;
+      note_aux_gain[voice_env[vi].note] =
+          note_aux_gain[voice_env[vi].note] > aux_gain
+          ? note_aux_gain[voice_env[vi].note] : aux_gain;
+    }
+    if (soundfont == nullptr) return;
+    for (int i = 0; i < (int)soundfont->voiceNum; i++) {
+      tsf_voice* v = &soundfont->voices[i];
+      if (v->playingPreset == -1) continue;
+      v->ampGain *= note_aux_gain[v->playingKey];
+    }
+  }
+}
+
+void voice_process_pending_notes() {
+  for (int i = 0; i < 16; i++) {
+    if (!voice_env[i].active) continue;
+
+    if (voice_env[i].note1_pending) {
+      uint64_t elapsed = sample_count - voice_env[i].note1_pending_sample;
+      uint64_t delay_samples = (uint64_t)((float)current_patch.i1delay * 480.0f);
+      if (elapsed >= delay_samples) {
+        voice_env[i].note1_pending = false;
+        voice_env[i].note_on_sample = sample_count;
+        voice_env[i].aux_env_on_sample = sample_count;
+        tsf_channel_note_on(soundfont, 0,
+            voice_env[i].note1_pending_note, voice_env[i].note1_pending_vel);
+        if (current_patch.i1samplestartoffset > 0 || current_patch.i1reversesound != 0)
+          tsf_voice_set_playback_mode(soundfont, voice_preset_primary,
+              voice_env[i].note1_pending_note,
+              current_patch.i1samplestartoffset,
+              current_patch.i1reversesound ? -1 : 1);
+      }
+    }
+
+    if (voice_env[i].note2_pending) {
+      uint64_t elapsed = sample_count - voice_env[i].note2_pending_sample;
+      uint64_t delay_samples = (uint64_t)((float)current_patch.i2delay * 480.0f);
+      if (elapsed >= delay_samples) {
+        voice_env[i].note2_pending = false;
+        voice_env[i].note2_on_sample = sample_count;
+        voice_env[i].aux_env_on_sample = sample_count;
+        tsf_channel_note_on(soundfont, 1,
+            voice_env[i].note2_pending_note, voice_env[i].note2_pending_vel);
+        if (current_patch.i2samplestartoffset > 0 || current_patch.i2reversesound != 0)
+          tsf_voice_set_playback_mode(soundfont, voice_preset_secondary,
+              voice_env[i].note2_pending_note,
+              current_patch.i2samplestartoffset,
+              current_patch.i2reversesound ? -1 : 1);
+      }
+    }
+  }
+}
+
+static void tsf_release_layer(tsf* f, int channel, int preset) {
+  for (int i = 0; i < (int)f->voiceNum; i++) {
+    tsf_voice* v = &f->voices[i];
+    if (v->playingPreset == preset && v->playingChannel == channel && v->ampenv.segment < TSF_SEGMENT_RELEASE)
+      tsf_channel_note_off(f, channel, v->playingKey);
+  }
 }
 
 static int8_t find_youngest_active_voice_for_note(uint8_t midi_note) {
@@ -188,6 +272,17 @@ static void s_trigger_note(uint8_t note, uint8_t velocity) {
     voice_env[result.voice_index].note2_on_sample    = sample_count;
     voice_env[result.voice_index].note2_off_sample   = 0;
     voice_env[result.voice_index].release2_start_level = 1.0f;
+    voice_env[result.voice_index].note1_pending      = false;
+    voice_env[result.voice_index].note1_pending_note = 0;
+    voice_env[result.voice_index].note1_pending_vel  = 0;
+    voice_env[result.voice_index].note1_pending_sample = 0;
+    voice_env[result.voice_index].note2_pending      = false;
+    voice_env[result.voice_index].note2_pending_note = 0;
+    voice_env[result.voice_index].note2_pending_vel  = 0;
+    voice_env[result.voice_index].note2_pending_sample = 0;
+    voice_env[result.voice_index].aux_env_on_sample  = 0;
+    voice_env[result.voice_index].aux_env_off_sample = 0;
+    voice_env[result.voice_index].aux_env_release_start = 1.0f;
     lfo_delay_completed = 0.0f;
   }
 
@@ -223,10 +318,41 @@ static void s_trigger_note(uint8_t note, uint8_t velocity) {
                       (uint8_t)adjusted <= current_patch.i2highkey);
   }
 
-  if (play_primary && vel0 > 0.0f)
-    tsf_channel_note_on(soundfont, 0, (uint8_t)adjusted, vel0);
-  if (patch_has_secondary && play_secondary && vel1 > 0.0f)
-    tsf_channel_note_on(soundfont, 1, (uint8_t)adjusted, vel1);
+  if (play_primary && current_patch.i1solomode != 0)
+    tsf_release_layer(soundfont, 0, voice_preset_primary);
+  if (patch_has_secondary && play_secondary && current_patch.i2solomode != 0)
+    tsf_release_layer(soundfont, 1, voice_preset_secondary);
+
+  if (play_primary && vel0 > 0.0f) {
+    if (current_patch.i1delay > 0) {
+      voice_env[result.voice_index].note1_pending = true;
+      voice_env[result.voice_index].note1_pending_note = (uint8_t)adjusted;
+      voice_env[result.voice_index].note1_pending_vel  = vel0;
+      voice_env[result.voice_index].note1_pending_sample = sample_count;
+    } else {
+      voice_env[result.voice_index].aux_env_on_sample = sample_count;
+      tsf_channel_note_on(soundfont, 0, (uint8_t)adjusted, vel0);
+      if (soundfont && (current_patch.i1samplestartoffset > 0 || current_patch.i1reversesound != 0))
+        tsf_voice_set_playback_mode(soundfont, voice_preset_primary, (uint8_t)adjusted,
+            current_patch.i1samplestartoffset,
+            current_patch.i1reversesound ? -1 : 1);
+    }
+  }
+  if (patch_has_secondary && play_secondary && vel1 > 0.0f) {
+    if (current_patch.i2delay > 0) {
+      voice_env[result.voice_index].note2_pending = true;
+      voice_env[result.voice_index].note2_pending_note = (uint8_t)adjusted;
+      voice_env[result.voice_index].note2_pending_vel  = vel1;
+      voice_env[result.voice_index].note2_pending_sample = sample_count;
+    } else {
+      voice_env[result.voice_index].aux_env_on_sample = sample_count;
+      tsf_channel_note_on(soundfont, 1, (uint8_t)adjusted, vel1);
+      if (soundfont && (current_patch.i2samplestartoffset > 0 || current_patch.i2reversesound != 0))
+        tsf_voice_set_playback_mode(soundfont, voice_preset_secondary, (uint8_t)adjusted,
+            current_patch.i2samplestartoffset,
+            current_patch.i2reversesound ? -1 : 1);
+    }
+  }
 }
 
 void voice_init() {
@@ -321,6 +447,26 @@ void voice_note_off(uint8_t note) {
     }
   }
 
+  {
+    float aux_delay_s = lfo_delay_to_samples(current_patch.i3delay);
+    float aux_atk_s   = env_time_to_samples_attack(current_patch.i3attack);
+    float aux_hold_s  = env_time_to_samples_hold(current_patch.i3hold);
+    float aux_dec_s   = env_time_to_samples_decay(current_patch.i3decay);
+    float aux_sus_l   = (float)current_patch.i3sustain / 99.0f;
+    float aux_rel_s   = env_time_to_samples_release(current_patch.i3release);
+    for (int i = 0; i < 16; i++) {
+      if (voice_env[i].active && voice_env[i].note == (uint8_t)adj &&
+          voice_env[i].aux_env_off_sample == 0) {
+        voice_env[i].aux_env_release_start = aux_env_level_at_sample(
+            sample_count,
+            aux_delay_s, aux_atk_s, aux_hold_s, aux_dec_s, aux_sus_l, aux_rel_s,
+            voice_env[i].aux_env_on_sample, 0, 1.0f);
+        voice_env[i].aux_env_off_sample = sample_count;
+        break;
+      }
+    }
+  }
+
   if (soundfont != nullptr) {
     tsf_channel_note_off(soundfont, 0, (uint8_t)adj);
     if (patch_has_secondary)
@@ -397,6 +543,26 @@ void voice_gate_off() {
           voice_env[i].note2_off_sample = sample_count;
           break;
         }
+      }
+    }
+  }
+
+  {
+    float aux_delay_s = lfo_delay_to_samples(current_patch.i3delay);
+    float aux_atk_s   = env_time_to_samples_attack(current_patch.i3attack);
+    float aux_hold_s  = env_time_to_samples_hold(current_patch.i3hold);
+    float aux_dec_s   = env_time_to_samples_decay(current_patch.i3decay);
+    float aux_sus_l   = (float)current_patch.i3sustain / 99.0f;
+    float aux_rel_s   = env_time_to_samples_release(current_patch.i3release);
+    for (int i = 0; i < 16; i++) {
+      if (voice_env[i].active && voice_env[i].note == (uint8_t)note &&
+          voice_env[i].aux_env_off_sample == 0) {
+        voice_env[i].aux_env_release_start = aux_env_level_at_sample(
+            sample_count,
+            aux_delay_s, aux_atk_s, aux_hold_s, aux_dec_s, aux_sus_l, aux_rel_s,
+            voice_env[i].aux_env_on_sample, 0, 1.0f);
+        voice_env[i].aux_env_off_sample = sample_count;
+        break;
       }
     }
   }

@@ -268,13 +268,19 @@ def parse_preset(data: bytes, source_file: str, file_offset: int) -> Optional[di
 # ---------------------------------------------------------------------------
 
 def find_emu_files(base_dir: Path) -> list[Path]:
-    """Find all .EMU files under base_dir."""
+    """Find all .EMU files under base_dir, deduplicating by content."""
     found = []
+    seen_hashes = set()
     for root, dirs, files in os.walk(base_dir):
         dirs.sort()
         for f in sorted(files):
             if f.upper().endswith('.EMU'):
-                found.append(Path(root) / f)
+                path = Path(root) / f
+                content = path.read_bytes()
+                h = hash(content)
+                if h not in seen_hashes:
+                    seen_hashes.add(h)
+                    found.append(path)
     return found
 
 
@@ -369,6 +375,26 @@ typedef struct {{
     uint8_t  i2sustain;
     uint8_t  i2release;
     uint8_t  i2envelopeon;
+    /* —– Phase 4A: per-layer delay & solo —– */
+    uint8_t  i1delay;
+    uint8_t  i2delay;
+    uint8_t  i1solomode;
+    uint8_t  i2solomode;
+    /* —– Phase 4B: sample offset & reverse —– */
+    uint8_t  i1samplestartoffset;
+    uint8_t  i2samplestartoffset;
+    uint8_t  i1reversesound;
+    uint8_t  i2reversesound;
+    /* —– Phase 4C: auxiliary envelope —– */
+    uint8_t  i3delay;
+    uint8_t  i3attack;
+    uint8_t  i3hold;
+    uint8_t  i3decay;
+    uint8_t  i3sustain;
+    uint8_t  i3release;
+    int8_t   i3amount;
+    /* —– Phase 4D: pitch bend range —– */
+    uint8_t  pitchbendrange;
 }} proteus_patch_t;
 
 /* Preset table */
@@ -441,7 +467,23 @@ def generate_c_header(presets: list[dict], source_files: list[str]) -> str:
             f'{pr["i2decay"]}, '
             f'{pr["i2sustain"]}, '
             f'{pr["i2release"]}, '
-            f'{pr["i2envelopeon"]} '
+            f'{pr["i2envelopeon"]}, '
+            f'{pr["i1delay"]}, '
+            f'{pr["i2delay"]}, '
+            f'{pr["i1solomode"]}, '
+            f'{pr["i2solomode"]}, '
+            f'{pr["i1samplestartoffset"]}, '
+            f'{pr["i2samplestartoffset"]}, '
+            f'{pr["i1reversesound"]}, '
+            f'{pr["i2reversesound"]}, '
+            f'{pr["i3delay"]}, '
+            f'{pr["i3attack"]}, '
+            f'{pr["i3hold"]}, '
+            f'{pr["i3decay"]}, '
+            f'{pr["i3sustain"]}, '
+            f'{pr["i3release"]}, '
+            f'{pr["i3amount"]}, '
+            f'{pr["pitchbendrange"]} '
             f'}},  /* {p["source_file"]} */'
         )
         rows.append(row)
