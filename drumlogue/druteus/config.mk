@@ -27,6 +27,10 @@ COMMON_SRC_PATH = /workspace/drumlogue/common
 ULIBDIR =
 ULIBS   = -lm
 
+# Warning suppressions for upstream eurorack code
+USE_CWARN   = -W -Wall -Wextra -Wno-unused-local-typedefs -Wno-unused-parameter
+USE_CXXWARN = -W -Wall -Wextra -Wno-ignored-qualifiers -Wno-unused-local-typedefs -Wno-unused-parameter
+
 # Preprocessor defines
 UDEFS = -DUSE_NEON
 UDEFS += -mfpu=neon

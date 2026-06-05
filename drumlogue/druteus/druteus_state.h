@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <atomic>
 #include "tsf.h"
 #include "voice_allocator.h"
 #include "../common/stereo_widener.h"
@@ -16,8 +17,9 @@ extern fs_dir soundfont_list;
 extern tsf *soundfont;
 extern char * __attribute__((aligned(32))) soundfont_buf;
 
-extern uint32_t state;
-extern bool suspended;
+extern volatile uint32_t state;
+extern volatile bool suspended;
+extern std::atomic<bool> patch_dirty;
 
 extern common::ChorusStereoWidener chorus_dsp;
 extern rings::Reverb reverb_dsp;
@@ -51,6 +53,13 @@ extern uint32_t cached_env2_dec;
 extern uint32_t cached_env2_sus;
 extern uint32_t cached_env2_rel;
 extern bool cached_env2_enabled;
+
+extern float cached_xfade_center;
+extern float cached_xfade_width;
+extern float cached_xfade_lo;
+extern float cached_xfade_hi;
+extern float cached_xfade_span;
+extern uint8_t cached_xfade_split_key;
 
 struct VoiceEnv {
   bool     active;

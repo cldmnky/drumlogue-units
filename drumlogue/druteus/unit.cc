@@ -123,6 +123,7 @@ __unit_callback void unit_resume() {
 // ---------------------------------------------------------------------------
 
 __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
+  // Synth unit — input buffer is not used.
   (void)in;
 
   if (suspended) {
@@ -130,6 +131,10 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
     return;
   }
 
+  // ── 1. Soundfont loader state machine ─────────────────────────
+  // Advances the async SF2 loader one step per callback.  The loader
+  // outputs silence (via the early-return above) until the font is
+  // fully loaded and configured.
   sf_load_step(frames);
 
   if (state != SF_LOAD_IDLE) {
@@ -142,8 +147,18 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
     return;
   }
 
+  // ── 2. Apply deferred parameter changes (control → audio thread) ──
+  // param_preset is written by the control thread.  We apply the
+  // associated s_load_patch here so that all current_patch reads
+  // happen on a single thread.
+  if (patch_dirty.load(std::memory_order_acquire)) {
+    s_load_patch((uint16_t)Params[param_preset]);
+    patch_dirty.store(false, std::memory_order_relaxed);
+  }
+
   sample_count += frames;
 
+  // ── 3. LFO pitch offset ──────────────────────────────────────
   float lfo_pitch_offset = 0.0f;
 
   if (Params[param_lfo_amount] > 0) {
@@ -153,6 +168,7 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
     lfo_pitch_offset = lfo_process_lfo_pitch_offset(frames);
   }
 
+  // ── 4. Apply combined tuning (patch coarse/fine + user fine-tune + LFO) ──
   {
     float base_tune = Params[param_fine_tune] / 64.0f;
     float tuned0 = patch_tune_primary + base_tune + lfo_pitch_offset;
@@ -162,9 +178,15 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
                              patch_tune_secondary + base_tune + lfo_pitch_offset);
   }
 
+  // ── 5. Process pending delayed note-ons & envelopes ──────────
+  // Envelopes must be applied *before* tsf_render_float so that
+  // finished voices are killed before their samples go to the DAC.
   voice_process_pending_notes();
   voice_process_envelopes();
 
+  // ── 6. Render TinySoundFont audio ────────────────────────────
+  static_assert(sizeof(int) >= sizeof(uint32_t),
+                "int must be at least 32 bits for the frames cast");
   tsf_render_float(soundfont, out, (int)frames, TSF_FALSE);
 
   if (Params[param_lfo_amount] > 0 && Params[param_lfo_dest] != 0) {

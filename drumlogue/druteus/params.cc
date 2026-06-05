@@ -47,8 +47,9 @@ void params_set(uint8_t index, int32_t value) {
         value = 0;
       if (value == Params[index])
         break;
-      if (soundfont != nullptr)
-        tsf_channel_sounds_off_all(soundfont, 0);
+      // Set the load flag first so the audio thread's sf_load_step drives
+      // all cleanup via SF_LOAD_CLOSE.  Don't touch soundfont here — it
+      // would race with the audio thread freeing it under SF_LOAD_CLOSE.
       state = SF_LOAD_START;
       break;
 
@@ -58,7 +59,7 @@ void params_set(uint8_t index, int32_t value) {
         value = PROTEUS_PATCH_COUNT - 1;
       if (value != Params[index]) {
         Params[index] = value;
-        s_load_patch((uint16_t)value);
+        patch_dirty.store(true, std::memory_order_release);
       }
       return;
 

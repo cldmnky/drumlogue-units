@@ -50,8 +50,8 @@ void voice_process_envelopes() {
     if (rel_samples < kMinReleaseSamples)
       rel_samples = kMinReleaseSamples;
     float sus_level    = cached_env_sus / 99.0f;
-    float note_gain_pri[128] = {};
-    float note_gain_sec[128] = {};
+    static float note_gain_pri[128];
+    static float note_gain_sec[128];
 
     for (int vi = 0; vi < 16; vi++) {
       if (!voice_env[vi].active) continue;
@@ -111,7 +111,7 @@ void voice_process_envelopes() {
     if (rel2_samples < kMinReleaseSamples)
       rel2_samples = kMinReleaseSamples;
     float sus2_level    = cached_env2_sus / 99.0f;
-    float note_gain_sec2[128] = {};
+    static float note_gain_sec2[128];
 
     for (int vi = 0; vi < 16; vi++) {
       if (!voice_env[vi].active) continue;
@@ -160,7 +160,11 @@ void voice_process_envelopes() {
     if (aux_rel_s < kMinReleaseSamples)
       aux_rel_s = kMinReleaseSamples;
     float aux_amount  = (float)current_patch.i3amount / 127.0f;
-    float note_aux_gain[128] = {};
+    static float note_aux_gain[128];
+    for (int vi = 0; vi < 16; vi++) {
+      if (!voice_env[vi].active) continue;
+      note_aux_gain[voice_env[vi].note] = 0.0f;
+    }
     for (int vi = 0; vi < 16; vi++) {
       if (!voice_env[vi].active) continue;
       float aux_level = aux_env_level_at_sample(sample_count,
