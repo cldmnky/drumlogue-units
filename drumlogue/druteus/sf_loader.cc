@@ -17,8 +17,8 @@ const char *sf2_suffix = ".sf2";
 fs_dir soundfont_list = fs_dir(SOUNDFONT_PATH, sf2_prefix, sf2_suffix);
 tsf *soundfont = nullptr;
 char * __attribute__((aligned(32))) soundfont_buf = nullptr;
-uint32_t state = SF_LOAD_IDLE;
-bool suspended = false;
+volatile uint32_t state = SF_LOAD_IDLE;
+volatile bool suspended = false;
 
 void sf_teardown() {
   soundfont_list.cleanup();
