@@ -395,6 +395,61 @@ typedef struct {{
     int8_t   i3amount;
     /* —– Phase 4D: pitch bend range —– */
     uint8_t  pitchbendrange;
+    /* —– Phase 4E: keyboard/velocity modulation (6 slots) —– */
+    uint8_t  keyvelsource1;
+    uint8_t  keyveldest1;
+    int8_t   keyvelamount1;
+    uint8_t  keyvelsource2;
+    uint8_t  keyveldest2;
+    int8_t   keyvelamount2;
+    uint8_t  keyvelsource3;
+    uint8_t  keyveldest3;
+    int8_t   keyvelamount3;
+    uint8_t  keyvelsource4;
+    uint8_t  keyveldest4;
+    int8_t   keyvelamount4;
+    uint8_t  keyvelsource5;
+    uint8_t  keyveldest5;
+    int8_t   keyvelamount5;
+    uint8_t  keyvelsource6;
+    uint8_t  keyveldest6;
+    int8_t   keyvelamount6;
+    /* —– Phase 4F: realtime modulation (8 slots) —– */
+    uint8_t  realtimesource1;
+    uint8_t  realtimedest1;
+    uint8_t  realtimesource2;
+    uint8_t  realtimedest2;
+    uint8_t  realtimesource3;
+    uint8_t  realtimedest3;
+    uint8_t  realtimesource4;
+    uint8_t  realtimedest4;
+    uint8_t  realtimesource5;
+    uint8_t  realtimedest5;
+    uint8_t  realtimesource6;
+    uint8_t  realtimedest6;
+    uint8_t  realtimesource7;
+    uint8_t  realtimedest7;
+    uint8_t  realtimesource8;
+    uint8_t  realtimedest8;
+    /* —– Phase 4G: MIDI controllers & pressure —– */
+    int8_t   controlleramount1;
+    int8_t   controlleramount2;
+    int8_t   controlleramount3;
+    int8_t   controlleramount4;
+    int8_t   pressureamount;
+    /* —– Phase 4H: footswitch destinations —– */
+    uint8_t  footswitchdest1;
+    uint8_t  footswitchdest2;
+    uint8_t  footswitchdest3;
+    /* —– Phase 4I: global per-preset —– */
+    uint8_t  keyboardcenter;
+    uint8_t  velocitycurve;
+    uint8_t  keyboardtuning;
+    uint8_t  submix;
+    /* —– Phase 4J: preset links —– */
+    int16_t  link1;
+    int16_t  link2;
+    int16_t  link3;
 }} proteus_patch_t;
 
 /* Preset table */
@@ -417,11 +472,26 @@ def format_c_string(s: str, maxlen: int = 12) -> str:
     return f'"{escaped}"'
 
 
+KEYVEL_FIELDS = [
+    ( 1, "keyvelsource", "keyvelsource"),
+    ( 2, "keyveldest",   "keyveldest"),
+    ( 3, "keyvelamount", "keyvelamount"),
+]
+
 def generate_c_header(presets: list[dict], source_files: list[str]) -> str:
     rows = []
     for p in presets:
         pr = p["params"]
         name = p["name"][:12]
+
+        def kv(n):
+            """Format a keyvel field for a given slot."""
+            return f'{pr[f"keyvelsource{n}"]}, {pr[f"keyveldest{n}"]}, {pr[f"keyvelamount{n}"]}'
+
+        def rt(n):
+            """Format a realtime mod field for a given slot."""
+            return f'{pr[f"realtimesource{n}"]}, {pr[f"realtimedest{n}"]}'
+
         row = (
             f'    {{ {format_c_string(name, 12)}, '
             f'{p["preset_number"]}, '
@@ -483,7 +553,16 @@ def generate_c_header(presets: list[dict], source_files: list[str]) -> str:
             f'{pr["i3sustain"]}, '
             f'{pr["i3release"]}, '
             f'{pr["i3amount"]}, '
-            f'{pr["pitchbendrange"]} '
+            f'{pr["pitchbendrange"]}, '
+            f'{kv(1)}, {kv(2)}, {kv(3)}, {kv(4)}, {kv(5)}, {kv(6)}, '
+            f'{rt(1)}, {rt(2)}, {rt(3)}, {rt(4)}, {rt(5)}, {rt(6)}, {rt(7)}, {rt(8)}, '
+            f'{pr["controlleramount1"]}, {pr["controlleramount2"]}, '
+            f'{pr["controlleramount3"]}, {pr["controlleramount4"]}, '
+            f'{pr["pressureamount"]}, '
+            f'{pr["footswitchdest1"]}, {pr["footswitchdest2"]}, {pr["footswitchdest3"]}, '
+            f'{pr["keyboardcenter"]}, {pr["velocitycurve"]}, '
+            f'{pr["keyboardtuning"]}, {pr["submix"]}, '
+            f'{pr["link1"]}, {pr["link2"]}, {pr["link3"]} '
             f'}},  /* {p["source_file"]} */'
         )
         rows.append(row)
@@ -510,6 +589,8 @@ def main():
                         help="C header output file")
     parser.add_argument("--verbose", action="store_true",
                         help="Print each preset name as it is parsed")
+    parser.add_argument("--skip-expansion", action="store_true",
+                        help="Skip patches using Plus Orchestral expansion instruments (125-202)")
     args = parser.parse_args()
 
     emu_files = find_emu_files(args.dir)
@@ -541,6 +622,30 @@ def main():
 
     print(f"\nTotal: {len(all_presets)} presets "
           f"({bad_checksums} bad checksums)", file=sys.stderr)
+
+    # Filter out patches using Plus Orchestral expansion instruments (125-202)
+    if args.skip_expansion:
+        original_count = len(all_presets)
+        filtered_presets = []
+        skipped = []
+        for p in all_presets:
+            params = p["params"]
+            i1 = params.get("i1instrument", -1)
+            i2 = params.get("i2instrument", -1)
+            # Filter out any instrument ID >= 125 (base Proteus/1 has 0-124)
+            uses_expansion = (i1 >= 125) or (i2 >= 125)
+            if uses_expansion:
+                skipped.append(p)
+            else:
+                filtered_presets.append(p)
+        
+        all_presets = filtered_presets
+        print(f"\nFiltered out {len(skipped)} patches using expansion instruments:", file=sys.stderr)
+        for p in skipped:
+            params = p["params"]
+            print(f"  [{p['preset_number']:3d}] \"{p['name']}\" "
+                  f"i1={params['i1instrument']} i2={params['i2instrument']}", file=sys.stderr)
+        print(f"Remaining: {len(all_presets)} patches (from {original_count})", file=sys.stderr)
 
     # Summary: unique preset names
     unique_names = sorted({p["name"] for p in all_presets})

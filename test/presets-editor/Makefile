@@ -93,6 +93,10 @@ DRUTEUS_FULL_TARGET := $(BIN_DIR)/test_druteus_full
 DRUTEUS_FULL_SRC := app/test_druteus_full.c
 DRUTEUS_FULL_OBJ := build/app/test_druteus_full.o
 DRUTEUS_FULL_OBJS := $(DRUTEUS_FULL_OBJ) build/sdk/runtime_stubs.o build/core/unit_loader.o
+ODD_VIBES_TARGET := $(BIN_DIR)/test_odd_vibes
+ODD_VIBES_SRC := app/test_odd_vibes.c
+ODD_VIBES_OBJ := build/app/test_odd_vibes.o
+ODD_VIBES_OBJS := $(ODD_VIBES_OBJ) build/sdk/runtime_stubs.o build/core/unit_loader.o
 
 # GUI dependencies (SDL2 + ImGui)
 SDL_CFLAGS := $(shell pkg-config --cflags sdl2 2>/dev/null)
@@ -154,7 +158,7 @@ IMGUI_VERSION := 1.91.6
 IMGUI_URL := https://github.com/ocornut/imgui/archive/refs/tags/v$(IMGUI_VERSION).tar.gz
 VENDOR_DIR := vendor
 
-.PHONY: all clean build-unit setup-vendor note-priority-test mouse-note-test druteus-full-test
+.PHONY: all clean build-unit setup-vendor note-priority-test mouse-note-test druteus-full-test odd-vibes-test
 
 note-priority-test: $(NOTE_TEST_TARGET)
 	@echo "Built $(NOTE_TEST_TARGET)"
@@ -164,6 +168,9 @@ mouse-note-test: $(MOUSE_NOTE_TEST_TARGET)
 
 druteus-full-test: $(DRUTEUS_FULL_TARGET)
 	@echo "Built $(DRUTEUS_FULL_TARGET)"
+
+odd-vibes-test: $(ODD_VIBES_TARGET)
+	@echo "Built $(ODD_VIBES_TARGET)"
 
 
 all: $(TARGET)
@@ -220,8 +227,11 @@ $(MOUSE_NOTE_TEST_TARGET): $(MOUSE_NOTE_TEST_OBJ) | $(BIN_DIR)
 $(DRUTEUS_FULL_TARGET): $(DRUTEUS_FULL_OBJS) | $(BIN_DIR)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
+$(ODD_VIBES_TARGET): $(ODD_VIBES_OBJS) | $(BIN_DIR)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
 clean:
-	rm -rf build $(TARGET)
+	rm -rf build $(TARGET) $(ODD_VIBES_TARGET)
 
 clean-all: clean
 	rm -rf $(VENDOR_DIR)
