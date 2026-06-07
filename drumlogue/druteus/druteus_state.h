@@ -83,6 +83,17 @@ struct VoiceEnv {
   uint64_t aux_env_on_sample;
   uint64_t aux_env_off_sample;
   float    aux_env_release_start;
+  /* —– key/velocity modulation (computed at note-on) —– */
+  float keyvel_volume_mod;         /* 1.0 = no change */
+  float keyvel_pan_mod;            /* 0.0 = center (shift in ±pan-steps) */
+  float keyvel_tone_mod;           /* 0.0 = no shift (filter cutoff fraction) */
+  uint8_t keyvel_sample_start_pri; /* per-note sample-start offset */
+  uint8_t keyvel_sample_start_sec; /* per-note sample-start offset */
+  /* —– effective aux envelope params (keyvel-modulated, for per-voice use) —– */
+  int8_t  eff_i3amount;            /* effective i3amount after keyvel mod */
+  uint8_t eff_i3attack;            /* effective i3attack after keyvel mod */
+  uint8_t eff_i3decay;             /* effective i3decay after keyvel mod */
+  uint8_t eff_i3release;           /* effective i3release after keyvel mod */
 };
 extern VoiceEnv voice_env[16];
 extern int active_notes;

@@ -184,17 +184,45 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
   voice_process_pending_notes();
   voice_process_envelopes();
 
+  // ── 5.5. Realtime pitch modulation (AuxEnv/LFO→pitch from matrix) ──
+  // Applied after envelopes so aux env levels are current.  Re-tunes
+  // channels before rendering so the pitch offset affects this buffer.
+  {
+    float base_tune = Params[param_fine_tune] / 64.0f;
+    float pri_pitch = lfo_get_realtime_pitch_offset(0);
+    float sec_pitch = patch_has_secondary ? lfo_get_realtime_pitch_offset(1) : 0.0f;
+    float tuned0 = patch_tune_primary + base_tune + lfo_pitch_offset + pri_pitch;
+    tsf_channel_set_tuning(soundfont, 0, tuned0);
+    if (patch_has_secondary)
+      tsf_channel_set_tuning(soundfont, 1,
+                             patch_tune_secondary + base_tune + lfo_pitch_offset + sec_pitch);
+  }
+
   // ── 6. Render TinySoundFont audio ────────────────────────────
   static_assert(sizeof(int) >= sizeof(uint32_t),
                 "int must be at least 32 bits for the frames cast");
   tsf_render_float(soundfont, out, (int)frames, TSF_FALSE);
 
-  if (Params[param_lfo_amount] > 0 && Params[param_lfo_dest] != 0) {
-    float amt  = Params[param_lfo_amount] / 127.0f;
-    float lfo_val = lfo_wave_shape(lfo_phase, Params[param_lfo_wave]);
-    float vol_mod = 1.0f + lfo_val * amt;
-    if (vol_mod < 0.0f) vol_mod = 0.0f;
-    ndsp::ApplyGain(out, vol_mod, frames * 2);
+  if (Params[param_lfo_amount] > 0) {
+    // User LFO is active — its phase was advanced by lfo_process_user_mod
+    // above, so lfo_phase is at user rate, NOT patch LFO1 rate.
+    if (Params[param_lfo_dest] != 0) {
+      // User LFO targets volume (dest != pitch-only) — apply volume mod.
+      float amt  = Params[param_lfo_amount] / 127.0f;
+      float lfo_val = lfo_wave_shape(lfo_phase, Params[param_lfo_wave]);
+      float vol_mod = 1.0f + lfo_val * amt;
+      if (vol_mod < 0.0f) vol_mod = 0.0f;
+      ndsp::ApplyGain(out, vol_mod, frames * 2);
+    }
+    // When user LFO targets pitch only, volume is unchanged and patch
+    // modulation is NOT applied because lfo_phase is no longer valid
+    // for the patch LFO1 source.
+  } else {
+    // No user LFO — apply patch realtime modulation.
+    // lfo_phase/lfo2_phase were advanced at patch LFO rate by
+    // lfo_process_lfo_pitch_offset and are correct for the patch LFO
+    // source waveforms.
+    lfo_apply_patch_mod(out, frames);
   }
 
   dsp_process_filter(out, frames);

@@ -150,47 +150,9 @@ void voice_process_envelopes() {
     }
   }
 
-  {
-    float aux_delay_s = lfo_delay_to_samples(current_patch.i3delay);
-    float aux_atk_s   = env_time_to_samples_attack(current_patch.i3attack);
-    float aux_hold_s  = env_time_to_samples_hold(current_patch.i3hold);
-    float aux_dec_s   = env_time_to_samples_decay(current_patch.i3decay);
-    float aux_sus_l   = (float)current_patch.i3sustain / 99.0f;
-    float aux_rel_s   = env_time_to_samples_release(current_patch.i3release);
-    if (aux_rel_s < kMinReleaseSamples)
-      aux_rel_s = kMinReleaseSamples;
-    float aux_amount  = (float)current_patch.i3amount / 127.0f;
-    static float note_aux_gain[128];
-    for (int vi = 0; vi < 16; vi++) {
-      if (!voice_env[vi].active) continue;
-      note_aux_gain[voice_env[vi].note] = 0.0f;
-    }
-    for (int vi = 0; vi < 16; vi++) {
-      if (!voice_env[vi].active) continue;
-      float aux_level = aux_env_level_at_sample(sample_count,
-          aux_delay_s, aux_atk_s, aux_hold_s, aux_dec_s, aux_sus_l, aux_rel_s,
-          voice_env[vi].aux_env_on_sample,
-          voice_env[vi].aux_env_off_sample,
-          voice_env[vi].aux_env_release_start);
-      // Asymmetric modulation depth: positive amount caps at +0.5 (1.5x max
-      // boost) to prevent clipping; negative amount keeps full depth so it
-      // can fully silence the voice. This avoids the 2x gain doubling that
-      // makes presets like Rap Drum Kit (i3amount=127, i3sustain=99) clip.
-      float aux_gain = (aux_amount >= 0.0f)
-          ? 1.0f + 0.5f * aux_level * aux_amount
-          : 1.0f + aux_level * aux_amount;
-      if (aux_gain < 0.0f) aux_gain = 0.0f;
-      note_aux_gain[voice_env[vi].note] =
-          note_aux_gain[voice_env[vi].note] > aux_gain
-          ? note_aux_gain[voice_env[vi].note] : aux_gain;
-    }
-    if (soundfont == nullptr) return;
-    for (int i = 0; i < (int)soundfont->voiceNum; i++) {
-      tsf_voice* v = &soundfont->voices[i];
-      if (v->playingPreset == -1) continue;
-      v->ampGain *= note_aux_gain[v->playingKey];
-    }
-  }
+  // Aux envelope is now processed through the realtime modulation matrix
+  // in lfo_apply_patch_mod, not hardcoded to volume. This fixes patches
+  // like EasternSands where AuxEnv is routed to pitch, not volume.
 }
 
 void voice_process_pending_notes() {
@@ -199,34 +161,34 @@ void voice_process_pending_notes() {
 
     if (voice_env[i].note1_pending) {
       uint64_t elapsed = sample_count - voice_env[i].note1_pending_sample;
-      uint64_t delay_samples = (uint64_t)((float)current_patch.i1delay * 480.0f);
+      uint64_t delay_samples = (uint64_t)lfo_delay_to_samples(current_patch.i1delay);
       if (elapsed >= delay_samples) {
         voice_env[i].note1_pending = false;
         voice_env[i].note_on_sample = sample_count;
         voice_env[i].aux_env_on_sample = sample_count;
         tsf_channel_note_on(soundfont, 0,
             voice_env[i].note1_pending_note, voice_env[i].note1_pending_vel);
-        if (current_patch.i1samplestartoffset > 0 || current_patch.i1reversesound != 0)
+        if (voice_env[i].keyvel_sample_start_pri > 0 || current_patch.i1reversesound != 0)
           tsf_voice_set_playback_mode(soundfont, voice_preset_primary,
               voice_env[i].note1_pending_note,
-              current_patch.i1samplestartoffset,
+              voice_env[i].keyvel_sample_start_pri,
               current_patch.i1reversesound ? -1 : 1);
       }
     }
 
     if (voice_env[i].note2_pending) {
       uint64_t elapsed = sample_count - voice_env[i].note2_pending_sample;
-      uint64_t delay_samples = (uint64_t)((float)current_patch.i2delay * 480.0f);
+      uint64_t delay_samples = (uint64_t)lfo_delay_to_samples(current_patch.i2delay);
       if (elapsed >= delay_samples) {
         voice_env[i].note2_pending = false;
         voice_env[i].note2_on_sample = sample_count;
         voice_env[i].aux_env_on_sample = sample_count;
         tsf_channel_note_on(soundfont, 1,
             voice_env[i].note2_pending_note, voice_env[i].note2_pending_vel);
-        if (current_patch.i2samplestartoffset > 0 || current_patch.i2reversesound != 0)
+        if (voice_env[i].keyvel_sample_start_sec > 0 || current_patch.i2reversesound != 0)
           tsf_voice_set_playback_mode(soundfont, voice_preset_secondary,
               voice_env[i].note2_pending_note,
-              current_patch.i2samplestartoffset,
+              voice_env[i].keyvel_sample_start_sec,
               current_patch.i2reversesound ? -1 : 1);
       }
     }
@@ -265,6 +227,82 @@ static float s_apply_velocity_curve(uint8_t velocity) {
     case 3:  return 0.5f + 0.5f * v;
     case 4:  return v * v * v;
     default: return v;
+  }
+}
+
+static void s_apply_keyvel_slot(
+    uint8_t source, uint8_t dest, int8_t amount,
+    uint8_t midi_velocity, uint8_t midi_note,
+    float& vel0, float& vel1,
+    float& pri_weight, float& sec_weight,
+    uint8_t& sample_start_pri, uint8_t& sample_start_sec,
+    int& aux_amount, int& aux_attack, int& aux_decay, int& aux_release)
+{
+  if (source == 0 || dest == 0 || amount == 0)
+    return;
+  float src_norm;
+  if (source == 1) {
+    /* Key Number: bipolar around keyboard center (manual p.34, 58).
+     * Keys above center → positive, keys below → negative. */
+    int center = (int)current_patch.keyboardcenter;
+    int diff = (int)midi_note - center;
+    if (diff >= 0) {
+      int range = 127 - center;
+      src_norm = (range > 0) ? (float)diff / (float)range : 0.0f;
+    } else {
+      int range = center;
+      src_norm = (range > 0) ? (float)diff / (float)range : 0.0f;
+    }
+  } else {
+    src_norm = midi_velocity / 127.0f;
+  }
+  float mod_scale = amount * (1.0f / 127.0f);
+  float mod_factor = 1.0f + mod_scale * src_norm;
+  switch (dest) {
+    case 4:
+      vel0 *= mod_factor;
+      vel1 *= mod_factor;
+      break;
+    case 5:
+      vel0 *= mod_factor;
+      break;
+    case 6:
+      vel1 *= mod_factor;
+      break;
+    case 16: {
+      float shift = mod_scale * src_norm * 0.25f;
+      // Apply crossfade modulation directly to vel0/vel1 since pri_weight
+      // and sec_weight are already baked into them (lines 382-383).
+      vel0 *= (1.0f - shift);
+      vel1 *= (1.0f + shift);
+      break;
+    }
+    case 21:
+      aux_amount += (int)(mod_scale * src_norm * 127.0f);
+      break;
+    case 22:
+      aux_attack += (int)(mod_scale * src_norm * 99.0f);
+      break;
+    case 23:
+      aux_decay += (int)(mod_scale * src_norm * 99.0f);
+      break;
+    case 24:
+      aux_release += (int)(mod_scale * src_norm * 99.0f);
+      break;
+    case 26: {
+      int modded = (int)sample_start_pri + (int)(mod_scale * src_norm * 128.0f);
+      if (modded < 0) modded = 0;
+      if (modded > 255) modded = 255;
+      sample_start_pri = (uint8_t)modded;
+      break;
+    }
+    case 27: {
+      int modded = (int)sample_start_sec + (int)(mod_scale * src_norm * 128.0f);
+      if (modded < 0) modded = 0;
+      if (modded > 255) modded = 255;
+      sample_start_sec = (uint8_t)modded;
+      break;
+    }
   }
 }
 
@@ -315,6 +353,10 @@ static void s_trigger_note(uint8_t note, uint8_t velocity) {
     voice_env[result.voice_index].aux_env_on_sample  = 0;
     voice_env[result.voice_index].aux_env_off_sample = 0;
     voice_env[result.voice_index].aux_env_release_start = 1.0f;
+    voice_env[result.voice_index].eff_i3amount  = current_patch.i3amount;
+    voice_env[result.voice_index].eff_i3attack  = current_patch.i3attack;
+    voice_env[result.voice_index].eff_i3decay   = current_patch.i3decay;
+    voice_env[result.voice_index].eff_i3release = current_patch.i3release;
     lfo_delay_completed = 0.0f;
   }
 
@@ -335,6 +377,59 @@ static void s_trigger_note(uint8_t note, uint8_t velocity) {
                              &secondary_weight);
   vel0 *= primary_weight;
   vel1 *= secondary_weight;
+
+  uint8_t kvel_sample_start_pri = current_patch.i1samplestartoffset;
+  uint8_t kvel_sample_start_sec = current_patch.i2samplestartoffset;
+  int eff_aux_amount  = current_patch.i3amount;
+  int eff_aux_attack  = current_patch.i3attack;
+  int eff_aux_decay   = current_patch.i3decay;
+  int eff_aux_release = current_patch.i3release;
+
+  s_apply_keyvel_slot(current_patch.keyvelsource1, current_patch.keyveldest1,
+      current_patch.keyvelamount1, velocity, (uint8_t)adjusted,
+      vel0, vel1, primary_weight, secondary_weight,
+      kvel_sample_start_pri, kvel_sample_start_sec,
+      eff_aux_amount, eff_aux_attack, eff_aux_decay, eff_aux_release);
+  s_apply_keyvel_slot(current_patch.keyvelsource2, current_patch.keyveldest2,
+      current_patch.keyvelamount2, velocity, (uint8_t)adjusted,
+      vel0, vel1, primary_weight, secondary_weight,
+      kvel_sample_start_pri, kvel_sample_start_sec,
+      eff_aux_amount, eff_aux_attack, eff_aux_decay, eff_aux_release);
+  s_apply_keyvel_slot(current_patch.keyvelsource3, current_patch.keyveldest3,
+      current_patch.keyvelamount3, velocity, (uint8_t)adjusted,
+      vel0, vel1, primary_weight, secondary_weight,
+      kvel_sample_start_pri, kvel_sample_start_sec,
+      eff_aux_amount, eff_aux_attack, eff_aux_decay, eff_aux_release);
+  s_apply_keyvel_slot(current_patch.keyvelsource4, current_patch.keyveldest4,
+      current_patch.keyvelamount4, velocity, (uint8_t)adjusted,
+      vel0, vel1, primary_weight, secondary_weight,
+      kvel_sample_start_pri, kvel_sample_start_sec,
+      eff_aux_amount, eff_aux_attack, eff_aux_decay, eff_aux_release);
+  s_apply_keyvel_slot(current_patch.keyvelsource5, current_patch.keyveldest5,
+      current_patch.keyvelamount5, velocity, (uint8_t)adjusted,
+      vel0, vel1, primary_weight, secondary_weight,
+      kvel_sample_start_pri, kvel_sample_start_sec,
+      eff_aux_amount, eff_aux_attack, eff_aux_decay, eff_aux_release);
+  s_apply_keyvel_slot(current_patch.keyvelsource6, current_patch.keyveldest6,
+      current_patch.keyvelamount6, velocity, (uint8_t)adjusted,
+      vel0, vel1, primary_weight, secondary_weight,
+      kvel_sample_start_pri, kvel_sample_start_sec,
+      eff_aux_amount, eff_aux_attack, eff_aux_decay, eff_aux_release);
+
+  if (vel0 > 1.0f) vel0 = 1.0f;
+  if (vel0 < 0.0f) vel0 = 0.0f;
+  if (vel1 > 1.0f) vel1 = 1.0f;
+  if (vel1 < 0.0f) vel1 = 0.0f;
+
+  voice_env[result.voice_index].keyvel_volume_mod = 1.0f;
+  voice_env[result.voice_index].keyvel_pan_mod    = 0.0f;
+  voice_env[result.voice_index].keyvel_tone_mod   = 0.0f;
+  voice_env[result.voice_index].keyvel_sample_start_pri = kvel_sample_start_pri;
+  voice_env[result.voice_index].keyvel_sample_start_sec = kvel_sample_start_sec;
+  voice_env[result.voice_index].eff_i3amount  = (int8_t) Clamp((float)eff_aux_amount, -128.0f, 127.0f);
+  voice_env[result.voice_index].eff_i3attack  = (uint8_t) Clamp((float)eff_aux_attack, 0.0f, 99.0f);
+  voice_env[result.voice_index].eff_i3decay   = (uint8_t) Clamp((float)eff_aux_decay, 0.0f, 99.0f);
+  voice_env[result.voice_index].eff_i3release = (uint8_t) Clamp((float)eff_aux_release, 0.0f, 99.0f);
 
   bool play_primary = true, play_secondary = true;
   if (layers == 1)       play_secondary = false;
@@ -364,9 +459,9 @@ static void s_trigger_note(uint8_t note, uint8_t velocity) {
     } else {
       voice_env[result.voice_index].aux_env_on_sample = sample_count;
       tsf_channel_note_on(soundfont, 0, (uint8_t)adjusted, vel0);
-      if (soundfont && (current_patch.i1samplestartoffset > 0 || current_patch.i1reversesound != 0))
+      if (soundfont && (kvel_sample_start_pri > 0 || current_patch.i1reversesound != 0))
         tsf_voice_set_playback_mode(soundfont, voice_preset_primary, (uint8_t)adjusted,
-            current_patch.i1samplestartoffset,
+            kvel_sample_start_pri,
             current_patch.i1reversesound ? -1 : 1);
     }
   }
@@ -379,9 +474,9 @@ static void s_trigger_note(uint8_t note, uint8_t velocity) {
     } else {
       voice_env[result.voice_index].aux_env_on_sample = sample_count;
       tsf_channel_note_on(soundfont, 1, (uint8_t)adjusted, vel1);
-      if (soundfont && (current_patch.i2samplestartoffset > 0 || current_patch.i2reversesound != 0))
+      if (soundfont && (kvel_sample_start_sec > 0 || current_patch.i2reversesound != 0))
         tsf_voice_set_playback_mode(soundfont, voice_preset_secondary, (uint8_t)adjusted,
-            current_patch.i2samplestartoffset,
+            kvel_sample_start_sec,
             current_patch.i2reversesound ? -1 : 1);
     }
   }
