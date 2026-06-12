@@ -32,6 +32,8 @@ void lfo_apply_patch_mod(float* out, uint32_t frames);
 // added to the channel tuning in unit_render.
 float lfo_get_realtime_pitch_offset(uint8_t channel);
 
+float lfo_get_realtime_crossfade_shift();
+
 // Evaluate wave shape at given phase; shape 0=tri, 1=sin, 2=square, 3=saw, 4=s&h.
 // The single-arg overload returns 0 for shape 4 to force callers to use
 // the slot-based variant when S&H is needed.

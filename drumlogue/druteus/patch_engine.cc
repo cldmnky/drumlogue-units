@@ -1,7 +1,6 @@
 #include "patch_engine.h"
 #include "druteus_state.h"
 #include "params.h"
-#include "tools/proteus_instrument_map.h"
 #include "dsp_primitives.h"
 
 namespace {
@@ -13,7 +12,6 @@ constexpr float kPanOffset           =  7.0f;
 constexpr float kDefaultPitchBend    =  2.0f;
 constexpr float kMaxPitchBend        = 24.0f;
 constexpr float kCrossfadeWidthScale = 255.0f;
-constexpr int   kBalanceCenter       = 64;
 
 }  // namespace
 
@@ -38,11 +36,11 @@ uint32_t cached_env2_rel = 99;
 bool cached_env2_enabled = false;
 
 float cached_xfade_center = 0.5f;
+float cached_xfade_switch_point = 0.5f;
 float cached_xfade_width = 0.0f;
 float cached_xfade_lo = 0.0f;
 float cached_xfade_hi = 1.0f;
 float cached_xfade_span = 0.0f;
-uint8_t cached_xfade_split_key = 64;
 
 void s_load_patch(uint16_t patch_idx) {
   if (patch_idx >= PROTEUS_PATCH_COUNT)
@@ -67,17 +65,11 @@ void s_load_patch(uint16_t patch_idx) {
   if (soundfont == nullptr)
     return;
 
-  int max_preset = tsf_get_presetcount(soundfont);
-  if (max_preset <= 0)
+  if (tsf_get_presetcount(soundfont) <= 0)
     return;
 
-  int idx0 = resolve_proteus_instrument_to_sf2_preset(
-      (int)current_patch.i1instrument, max_preset);
-  // Fall back to 0 — a single-preset SF2 has only preset 0 valid;
-  // preset 1 is out of range and would yield silence (review #18).
+  int idx0 = tsf_get_presetindex(soundfont, 0, (int)current_patch.i1instrument);
   if (idx0 < 0)
-    idx0 = 0;
-  if (idx0 >= max_preset)
     idx0 = 0;
   voice_preset_primary = idx0;
 
@@ -102,13 +94,8 @@ void s_load_patch(uint16_t patch_idx) {
       tsf_channel_set_pitchrange(soundfont, 1, pr);
   }
 
-  int idx1 = resolve_proteus_instrument_to_sf2_preset(
-      (int)current_patch.i2instrument, max_preset);
-  if (idx1 < 0)
-    idx1 = 0;
-  if (idx1 >= max_preset)
-    idx1 = 0;
-  if (current_patch.i2volume > 0) {
+  int idx1 = tsf_get_presetindex(soundfont, 0, (int)current_patch.i2instrument);
+  if (idx1 >= 0 && current_patch.i2volume > 0) {
     patch_has_secondary = true;
     cached_env2_enabled = (current_patch.i2envelopeon != 0);
     voice_preset_secondary = idx1;
@@ -127,14 +114,13 @@ void s_load_patch(uint16_t patch_idx) {
     patch_tune_secondary = 0.0f;
   }
 
-  cached_xfade_center = clamp01(
-      (current_patch.switchpoint + ((int)current_patch.crossfadebalance - kBalanceCenter)) / kMidiMax);
+  cached_xfade_center = current_patch.crossfadebalance / kMidiMax;
+  cached_xfade_switch_point = current_patch.switchpoint / kMidiMax;
   cached_xfade_width = current_patch.crossfadeamount > 0
       ? (current_patch.crossfadeamount / kCrossfadeWidthScale) : 0.0f;
   cached_xfade_lo = clamp01(cached_xfade_center - 0.5f * cached_xfade_width);
   cached_xfade_hi = clamp01(cached_xfade_center + 0.5f * cached_xfade_width);
   cached_xfade_span = cached_xfade_hi - cached_xfade_lo;
-  cached_xfade_split_key = (uint8_t)(cached_xfade_center * kMidiMax + 0.5f);
 }
 
 void s_apply_params() {
@@ -203,24 +189,8 @@ void compute_crossfade_weights(uint8_t mode, uint8_t velocity, uint8_t note,
     }
   } else if (mode == 2) {
     const float u = note / kMidiMax;
-
-    if (cached_xfade_width <= 0.0f) {
-      pri = (u < cached_xfade_center) ? 1.0f : 0.0f;
-      sec = 1.0f - pri;
-    } else {
-      if (u <= cached_xfade_lo) {
-        pri = 1.0f;
-        sec = 0.0f;
-      } else if (u >= cached_xfade_hi) {
-        pri = 0.0f;
-        sec = 1.0f;
-      } else {
-        const float t = (cached_xfade_span > 0.0f)
-            ? ((u - cached_xfade_lo) / cached_xfade_span) : 0.5f;
-        sec = clamp01(t);
-        pri = 1.0f - sec;
-      }
-    }
+    pri = (u < cached_xfade_switch_point) ? 1.0f : 0.0f;
+    sec = 1.0f - pri;
   }
 
   if (direction != 0) {
