@@ -47,10 +47,11 @@ void params_set(uint8_t index, int32_t value) {
         value = 0;
       if (value == Params[index])
         break;
-      // Set the load flag first so the audio thread's sf_load_step drives
-      // all cleanup via SF_LOAD_CLOSE.  Don't touch soundfont here — it
-      // would race with the audio thread freeing it under SF_LOAD_CLOSE.
-      state = SF_LOAD_START;
+      // Store the new index FIRST so the audio thread can't observe
+      // `reload_requested` set while still seeing the old index
+      // (review #3 — order of stores matters here).
+      Params[index] = value;
+      reload_requested.store(true, std::memory_order_release);
       break;
 
     case param_preset:
@@ -66,11 +67,10 @@ void params_set(uint8_t index, int32_t value) {
     case param_max_voices:
       if (value < 1)  value = 1;
       if (value > 16) value = 16;
-      voice_allocator.Init((uint8_t)value);
-      voice_allocator.SetMode(common::VoiceMode::Polyphonic);
-      voice_allocator.SetAllocationStrategy(common::VoiceAllocationStrategy::OldestNote);
-      if (soundfont != nullptr)
-        tsf_set_max_voices(soundfont, value);
+      // Defer tsf_set_max_voices to the audio thread — it reallocates
+      // f->voices and would race with tsf_render_float (review #1).
+      pending_max_voices.store(value, std::memory_order_relaxed);
+      voices_dirty.store(true, std::memory_order_release);
       break;
 
     case param_transpose:
@@ -81,21 +81,15 @@ void params_set(uint8_t index, int32_t value) {
     case param_volume:
       if (value < 0)   value = 0;
       if (value > 127) value = 127;
-      if (soundfont != nullptr) {
-        tsf_channel_midi_control(soundfont, 0, 7, value);
-        if (patch_has_secondary)
-          tsf_channel_midi_control(soundfont, 1, 7, value);
-      }
+      // Defer: tsf_channel_midi_control walks live voices and would
+      // race with tsf_render_float (review #10).
+      pending_volume.store(value, std::memory_order_relaxed);
       break;
 
     case param_pan:
       if (value < 0)   value = 0;
       if (value > 127) value = 127;
-      if (soundfont != nullptr) {
-        tsf_channel_set_pan(soundfont, 0, value / 127.0f);
-        if (patch_has_secondary)
-          tsf_channel_set_pan(soundfont, 1, value / 127.0f);
-      }
+      pending_pan.store(value, std::memory_order_relaxed);
       break;
 
     case param_velocity_curve:
@@ -106,12 +100,7 @@ void params_set(uint8_t index, int32_t value) {
     case param_fine_tune:
       if (value < -63) value = -63;
       if (value > 63)  value = 63;
-      if (soundfont != nullptr) {
-        float fine = value / 64.0f;
-        tsf_channel_set_tuning(soundfont, 0, patch_tune_primary + fine);
-        if (patch_has_secondary)
-          tsf_channel_set_tuning(soundfont, 1, patch_tune_secondary + fine);
-      }
+      pending_fine_tune.store(value, std::memory_order_relaxed);
       break;
 
     case param_xfade:

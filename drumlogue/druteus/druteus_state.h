@@ -17,9 +17,27 @@ extern fs_dir soundfont_list;
 extern tsf *soundfont;
 extern char * __attribute__((aligned(32))) soundfont_buf;
 
-extern volatile uint32_t state;
-extern volatile bool suspended;
+// Loader state machine state.  Touched by the audio thread only;
+// `reload_requested` (separate atomic, see below) is the cross-thread
+// trigger from the control thread.
+extern std::atomic<uint32_t> state;
+
+// Cross-thread reload trigger: control thread sets this to true (release);
+// audio thread sees it, advances `state` to SF_LOAD_START, then clears it.
+// Decoupled from `state` to avoid lost-update races on the read-modify-write.
+extern std::atomic<bool> reload_requested;
+
+extern std::atomic<bool> suspended;
 extern std::atomic<bool> patch_dirty;
+
+// Deferred TSF state.  Param writes from the control thread set the
+// corresponding "pending" value (release) and raise `voices_dirty`;
+// the audio thread applies them at the top of `unit_render`.
+extern std::atomic<bool> voices_dirty;
+extern std::atomic<int>  pending_max_voices;
+extern std::atomic<int>  pending_volume;
+extern std::atomic<int>  pending_pan;
+extern std::atomic<int>  pending_fine_tune;
 
 extern common::ChorusStereoWidener chorus_dsp;
 extern rings::Reverb reverb_dsp;
@@ -63,12 +81,18 @@ extern uint8_t cached_xfade_split_key;
 
 struct VoiceEnv {
   bool     active;
-  uint8_t  note;
+  bool     released;             /* explicit "note-off received" flag
+                                    (replaces the note_off_sample==0
+                                    sentinel — see review #16) */
+  uint8_t  note;                 /* the adjusted (transposed) MIDI key
+                                    the TSF voice was started on */
+  uint8_t  raw_note;             /* original MIDI note from caller */
   uint64_t note_on_sample;
   uint64_t note_off_sample;
   float    release_start_level;
   uint64_t note2_on_sample;
   uint64_t note2_off_sample;
+  bool     released2;
   float    release2_start_level;
   /* —– per-layer note-on delay —– */
   bool     note1_pending;
@@ -82,6 +106,7 @@ struct VoiceEnv {
   /* —– auxiliary envelope —– */
   uint64_t aux_env_on_sample;
   uint64_t aux_env_off_sample;
+  bool     aux_env_released;
   float    aux_env_release_start;
   /* —– key/velocity modulation (computed at note-on) —– */
   float keyvel_volume_mod;         /* 1.0 = no change */
@@ -100,4 +125,5 @@ extern int active_notes;
 
 extern float lfo_phase;
 extern float lfo2_phase;
-extern float lfo_delay_completed;
+extern float lfo1_delay_completed;
+extern float lfo2_delay_completed;

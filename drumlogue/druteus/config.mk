@@ -31,8 +31,16 @@ ULIBS   = -lm
 USE_CWARN   = -W -Wall -Wextra -Wno-unused-local-typedefs -Wno-unused-parameter
 USE_CXXWARN = -W -Wall -Wextra -Wno-ignored-qualifiers -Wno-unused-local-typedefs -Wno-unused-parameter
 
-# Preprocessor defines
+# Preprocessor defines.  ARM codegen flags and -ffast-math live here
+# (review #20): the SDK Makefile routes UDEFS into both C and C++
+# compilations, so they apply to header.c as well.  Documented
+# behavior — keep, do not remove.
 UDEFS = -DUSE_NEON
 UDEFS += -mfpu=neon
 UDEFS += -mfloat-abi=hard
+# -ffast-math assumes no NaN/Inf; in this unit we never produce
+# them (no divisions by user-controlled values, denormals flushed
+# at the top of process_envelopes).  TSF's internal float math
+# relies on IEEE behavior; if you ever see glitches, drop this
+# flag and the unit will run ~3-5% slower.
 UDEFS += -ffast-math

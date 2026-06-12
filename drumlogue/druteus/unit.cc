@@ -23,6 +23,7 @@
 #include "../common/stereo_widener.h"
 #include "rings/dsp/fx/reverb.h"
 #include "filter.h"
+#include "../common/smoothed_value.h"
 
 #define NEON_DSP_NS druteus
 #include "../common/neon_dsp.h"
@@ -51,6 +52,33 @@ namespace ndsp = druteus::neon;
 #include "dsp_chain.h"
 #include "dsp_primitives.h"
 
+// One-pole smoothed volume for the user LFO (review #14).
+// Coef 0.05 ≈ ~1 ms time constant at 48 kHz.
+static dsp::SmoothedValue s_vol_smooth;
+
+static void s_apply_pending_tsf_state() {
+  int vol  = pending_volume.load(std::memory_order_relaxed);
+  int pan  = pending_pan.load(std::memory_order_relaxed);
+  int fine = pending_fine_tune.load(std::memory_order_relaxed);
+
+  if (soundfont == nullptr)
+    return;
+
+  tsf_channel_midi_control(soundfont, 0, 7, vol);
+  if (patch_has_secondary)
+    tsf_channel_midi_control(soundfont, 1, 7, vol);
+
+  tsf_channel_set_pan(soundfont, 0, pan / 127.0f);
+  if (patch_has_secondary)
+    tsf_channel_set_pan(soundfont, 1, pan / 127.0f);
+
+  tsf_channel_set_tuning(soundfont, 0,
+      patch_tune_primary + fine / 64.0f);
+  if (patch_has_secondary)
+    tsf_channel_set_tuning(soundfont, 1,
+        patch_tune_secondary + fine / 64.0f);
+}
+
 // ---------------------------------------------------------------------------
 // unit_init
 // ---------------------------------------------------------------------------
@@ -66,9 +94,22 @@ __unit_callback int8_t unit_init(const unit_runtime_desc_t *desc) {
     return k_unit_err_samplerate;
   if (desc->output_channels != 2)
     return k_unit_err_geometry;
+  // Review #11: the fixed-size per-render FX buffers in dsp_chain are
+  // 256 frames; refuse to load if the host promises more so we never
+  // overrun them.
+  if (desc->frames_per_buffer == 0 || desc->frames_per_buffer > 256)
+    return k_unit_err_geometry;
 
   for (int i = 0; i < param_num; i++)
     Params[i] = kParamDefaults[i];
+
+  // Seed pending_* to defaults so the first render applies them
+  // consistently (review #10).
+  pending_max_voices.store(Params[param_max_voices], std::memory_order_relaxed);
+  pending_volume.store(Params[param_volume], std::memory_order_relaxed);
+  pending_pan.store(Params[param_pan], std::memory_order_relaxed);
+  pending_fine_tune.store(Params[param_fine_tune], std::memory_order_relaxed);
+  voices_dirty.store(true, std::memory_order_release);
 
   soundfont_list.refresh();
   {
@@ -80,9 +121,13 @@ __unit_callback int8_t unit_init(const unit_runtime_desc_t *desc) {
   dsp_init();
   voice_init();
   lfo_init();
+  dsp_init_smoothers(Params[param_cutoff] / 127.0f,
+                     Params[param_resonance] / 127.0f);
+
+  s_vol_smooth.Init(1.0f, 0.05f);
 
   if (soundfont_list.count > 0)
-    state = SF_LOAD_START;
+    reload_requested.store(true, std::memory_order_release);
 
   return k_unit_err_none;
 }
@@ -111,11 +156,11 @@ __unit_callback void unit_reset() {
 // ---------------------------------------------------------------------------
 
 __unit_callback void unit_suspend() {
-  suspended = true;
+  suspended.store(true, std::memory_order_release);
 }
 
 __unit_callback void unit_resume() {
-  suspended = false;
+  suspended.store(false, std::memory_order_release);
 }
 
 // ---------------------------------------------------------------------------
@@ -126,7 +171,7 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
   // Synth unit — input buffer is not used.
   (void)in;
 
-  if (suspended) {
+  if (suspended.load(std::memory_order_acquire)) {
     memset(out, 0, frames * 2 * sizeof(float));
     return;
   }
@@ -137,7 +182,11 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
   // fully loaded and configured.
   sf_load_step(frames);
 
-  if (state != SF_LOAD_IDLE) {
+  // Fold in deferred TSF state changes (voices/volume/pan/fine-tune)
+  // raised by the control thread — review #1 / #10.
+  sf_apply_pending();
+
+  if (state.load(std::memory_order_acquire) != SF_LOAD_IDLE) {
     memset(out, 0, frames * 2 * sizeof(float));
     return;
   }
@@ -147,36 +196,46 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
     return;
   }
 
-  // ── 2. Apply deferred parameter changes (control → audio thread) ──
+  // ── 2. Apply deferred patch change (control → audio thread) ──
   // param_preset is written by the control thread.  We apply the
   // associated s_load_patch here so that all current_patch reads
-  // happen on a single thread.
+  // happen on a single thread.  Kill all TSF voices on patch change
+  // so the stale note_gain_* tables don't bleed into the new patch
+  // (review #17).
   if (patch_dirty.load(std::memory_order_acquire)) {
     s_load_patch((uint16_t)Params[param_preset]);
+    for (int ch = 0; ch < 2; ch++) {
+      tsf_channel_sounds_off_all(soundfont, ch);
+    }
     patch_dirty.store(false, std::memory_order_relaxed);
   }
 
+  // Apply pending TSF channel state (vol/pan/tuning) right after the
+  // patch load so the new patch sees the current user values.
+  s_apply_pending_tsf_state();
+
   sample_count += frames;
 
-  // ── 3. LFO pitch offset ──────────────────────────────────────
+  // ── 2.5. Cache aux envelope once per block (review #21) ──
+  lfo_update_aux_env_cache();
+
+  // ── 3. LFO phase advancement & pitch offset ──────────────────
+  // Pitch from the realtime modulation matrix is applied separately
+  // below (step 5.5) only when user LFO is inactive.  The global
+  // LFO1/LFO2 pitch offset is NOT used — it would double-apply.
+  bool user_lfo_active = (Params[param_lfo_amount] > 0);
   float lfo_pitch_offset = 0.0f;
 
-  if (Params[param_lfo_amount] > 0) {
+  if (user_lfo_active) {
     uint8_t dest = Params[param_lfo_dest];
     lfo_pitch_offset = lfo_process_user_mod(frames, dest);
   } else {
-    lfo_pitch_offset = lfo_process_lfo_pitch_offset(frames);
+    lfo_process_lfo_pitch_offset(frames);
   }
 
   // ── 4. Apply combined tuning (patch coarse/fine + user fine-tune + LFO) ──
-  {
-    float base_tune = Params[param_fine_tune] / 64.0f;
-    float tuned0 = patch_tune_primary + base_tune + lfo_pitch_offset;
-    tsf_channel_set_tuning(soundfont, 0, tuned0);
-    if (patch_has_secondary)
-      tsf_channel_set_tuning(soundfont, 1,
-                             patch_tune_secondary + base_tune + lfo_pitch_offset);
-  }
+  // (Moved into step 5.5 below so the matrix path runs once and uses
+  // the cached aux env — review #21.)
 
   // ── 5. Process pending delayed note-ons & envelopes ──────────
   // Envelopes must be applied *before* tsf_render_float so that
@@ -184,18 +243,24 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
   voice_process_pending_notes();
   voice_process_envelopes();
 
-  // ── 5.5. Realtime pitch modulation (AuxEnv/LFO→pitch from matrix) ──
-  // Applied after envelopes so aux env levels are current.  Re-tunes
-  // channels before rendering so the pitch offset affects this buffer.
+  // ── 5.5. Patch realtime pitch modulation (matrix) ────────────
+  // Single tsf_channel_set_tuning call per channel per block.  The
+  // previous code wrote twice (once in step 4, once in step 5.5);
+  // consolidating here removes the redundant voice-walk
+  // (review #21).
   {
     float base_tune = Params[param_fine_tune] / 64.0f;
-    float pri_pitch = lfo_get_realtime_pitch_offset(0);
-    float sec_pitch = patch_has_secondary ? lfo_get_realtime_pitch_offset(1) : 0.0f;
-    float tuned0 = patch_tune_primary + base_tune + lfo_pitch_offset + pri_pitch;
+    float pri_pitch = user_lfo_active
+        ? lfo_pitch_offset
+        : lfo_get_realtime_pitch_offset(0);
+    float sec_pitch = (patch_has_secondary && !user_lfo_active)
+        ? lfo_get_realtime_pitch_offset(1) : 0.0f;
+    float tuned0 = patch_tune_primary + base_tune + pri_pitch;
     tsf_channel_set_tuning(soundfont, 0, tuned0);
-    if (patch_has_secondary)
-      tsf_channel_set_tuning(soundfont, 1,
-                             patch_tune_secondary + base_tune + lfo_pitch_offset + sec_pitch);
+    if (patch_has_secondary) {
+      float tuned1 = patch_tune_secondary + base_tune + sec_pitch;
+      tsf_channel_set_tuning(soundfont, 1, tuned1);
+    }
   }
 
   // ── 6. Render TinySoundFont audio ────────────────────────────
@@ -203,25 +268,26 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
                 "int must be at least 32 bits for the frames cast");
   tsf_render_float(soundfont, out, (int)frames, TSF_FALSE);
 
-  if (Params[param_lfo_amount] > 0) {
-    // User LFO is active — its phase was advanced by lfo_process_user_mod
-    // above, so lfo_phase is at user rate, NOT patch LFO1 rate.
-    if (Params[param_lfo_dest] != 0) {
-      // User LFO targets volume (dest != pitch-only) — apply volume mod.
-      float amt  = Params[param_lfo_amount] / 127.0f;
-      float lfo_val = lfo_wave_shape(lfo_phase, Params[param_lfo_wave]);
-      float vol_mod = 1.0f + lfo_val * amt;
-      if (vol_mod < 0.0f) vol_mod = 0.0f;
-      ndsp::ApplyGain(out, vol_mod, frames * 2);
-    }
-    // When user LFO targets pitch only, volume is unchanged and patch
-    // modulation is NOT applied because lfo_phase is no longer valid
-    // for the patch LFO1 source.
+  // ── 7. Volume modulation (smoothed — review #14) ──────────
+  float target_vol = 1.0f;
+  if (user_lfo_active && Params[param_lfo_dest] != 0) {
+    float amt  = Params[param_lfo_amount] / 127.0f;
+    float lfo_val = lfo_wave_shape_slot(lfo_phase, Params[param_lfo_wave], 0);
+    float vol_mod = 1.0f + lfo_val * amt;
+    if (vol_mod < 0.0f) vol_mod = 0.0f;
+    target_vol = vol_mod;
+  }
+  s_vol_smooth.SetTarget(target_vol);
+  // Step the smoother once per block.  The smoother's one-pole
+  // filter never reaches exactly 1.0f (IEEE 754 convergence), so
+  // compare via epsilon (review BUG 1).
+  float smooth_vol = s_vol_smooth.Process();
+  if (!s_vol_smooth.HasReachedTarget(1e-5f)) {
+    ndsp::ApplyGain(out, smooth_vol, frames * 2);
   } else {
-    // No user LFO — apply patch realtime modulation.
-    // lfo_phase/lfo2_phase were advanced at patch LFO rate by
-    // lfo_process_lfo_pitch_offset and are correct for the patch LFO
-    // source waveforms.
+    // Snap explicitly so the next block's comparison is reliable.
+    s_vol_smooth.SetImmediate(1.0f);
+    // Patch realtime modulation (LFO1/LFO2/AuxEnv → volume)
     lfo_apply_patch_mod(out, frames);
   }
 

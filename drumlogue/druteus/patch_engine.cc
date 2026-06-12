@@ -4,8 +4,6 @@
 #include "tools/proteus_instrument_map.h"
 #include "dsp_primitives.h"
 
-#include <atomic>
-
 namespace {
 
 constexpr float kMidiMax             = 127.0f;
@@ -46,8 +44,6 @@ float cached_xfade_hi = 1.0f;
 float cached_xfade_span = 0.0f;
 uint8_t cached_xfade_split_key = 64;
 
-std::atomic<bool> patch_dirty{false};
-
 void s_load_patch(uint16_t patch_idx) {
   if (patch_idx >= PROTEUS_PATCH_COUNT)
     return;
@@ -77,8 +73,12 @@ void s_load_patch(uint16_t patch_idx) {
 
   int idx0 = resolve_proteus_instrument_to_sf2_preset(
       (int)current_patch.i1instrument, max_preset);
+  // Fall back to 0 — a single-preset SF2 has only preset 0 valid;
+  // preset 1 is out of range and would yield silence (review #18).
   if (idx0 < 0)
-    idx0 = 1;
+    idx0 = 0;
+  if (idx0 >= max_preset)
+    idx0 = 0;
   voice_preset_primary = idx0;
 
   tsf_channel_set_presetindex(soundfont, 0, idx0);
@@ -105,7 +105,9 @@ void s_load_patch(uint16_t patch_idx) {
   int idx1 = resolve_proteus_instrument_to_sf2_preset(
       (int)current_patch.i2instrument, max_preset);
   if (idx1 < 0)
-    idx1 = 1;
+    idx1 = 0;
+  if (idx1 >= max_preset)
+    idx1 = 0;
   if (current_patch.i2volume > 0) {
     patch_has_secondary = true;
     cached_env2_enabled = (current_patch.i2envelopeon != 0);
@@ -140,6 +142,28 @@ void s_apply_params() {
     return;
   tsf_set_max_voices(soundfont, Params[param_max_voices]);
   s_load_patch(Params[param_preset]);
+
+  // Apply the latest user-set TSF channel state (volume/pan/fine-tune)
+  // so it survives a soundfont reload — these are kept in pending_*
+  // atomics on the audio thread side but the canonical value is Params[].
+  int vol   = Params[param_volume];
+  int pan   = Params[param_pan];
+  int fine  = Params[param_fine_tune];
+
+  tsf_channel_midi_control(soundfont, 0, 7, vol);
+  if (patch_has_secondary)
+    tsf_channel_midi_control(soundfont, 1, 7, vol);
+
+  tsf_channel_set_pan(soundfont, 0, pan / 127.0f);
+  if (patch_has_secondary)
+    tsf_channel_set_pan(soundfont, 1, pan / 127.0f);
+
+  tsf_channel_set_tuning(soundfont, 0,
+      patch_tune_primary + fine / 64.0f);
+  if (patch_has_secondary)
+    tsf_channel_set_tuning(soundfont, 1,
+        patch_tune_secondary + fine / 64.0f);
+
   tsf_channel_set_pitchwheel(soundfont, 0, (int)last_pitch_bend);
   if (patch_has_secondary)
     tsf_channel_set_pitchwheel(soundfont, 1, (int)last_pitch_bend);

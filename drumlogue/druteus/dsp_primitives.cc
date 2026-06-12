@@ -6,6 +6,15 @@ static const env_point_t kReleasePts[] = {
   {80, 20.0f}, {99, 60.0f},
 };
 
+// Attack times are much shorter than release times (a 60 s attack is
+// nonsensical).  Calibrated against the same exponential curve shape
+// but capped to 4 s — review #13.
+static const env_point_t kAttackPts[] = {
+  {0, 0.0f}, {5, 0.001f}, {10, 0.002f}, {20, 0.005f}, {30, 0.01f},
+  {40, 0.02f}, {50, 0.05f}, {60, 0.1f}, {70, 0.25f}, {75, 0.5f},
+  {80, 1.0f}, {99, 4.0f},
+};
+
 static const env_point_t kDecayPts[] = {
   {0, 0.0f}, {5, 0.125f}, {10, 0.25f}, {20, 0.4f}, {30, 0.75f},
   {40, 1.5f}, {50, 3.0f}, {60, 5.0f}, {70, 9.0f}, {75, 12.0f},
@@ -38,7 +47,7 @@ float env_lookup_seconds(uint32_t value, const env_point_t *table, int n) {
   return table[n - 1].seconds;
 }
 
-float env_time_to_samples_attack(uint32_t v)  { return env_lookup_seconds(v, kReleasePts, 12) * 48000.0f; }
+float env_time_to_samples_attack(uint32_t v)  { return env_lookup_seconds(v, kAttackPts,  12) * 48000.0f; }
 float env_time_to_samples_hold(uint32_t v)     { return env_lookup_seconds(v, kHoldPts,    12) * 48000.0f; }
 float env_time_to_samples_decay(uint32_t v)     { return env_lookup_seconds(v, kDecayPts,   12) * 48000.0f; }
 float env_time_to_samples_release(uint32_t v)   { return env_lookup_seconds(v, kReleasePts, 12) * 48000.0f; }
