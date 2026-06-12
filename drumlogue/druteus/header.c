@@ -18,7 +18,7 @@ const __unit_header unit_header_t unit_header = {
     .params = {
         /* Page 1 — sound source */
         /* 0 SFONT   */ {0, 63,  0, 0,  k_unit_param_type_strings, 0, 0, 0, {"SFONT"}},
-        /* 1 PATCH   */ {0, 767, 0, 0,  k_unit_param_type_strings, 0, 0, 0, {"PATCH"}},
+        /* 1 PATCH   */ {0, 441, 0, 0,  k_unit_param_type_strings, 0, 0, 0, {"PATCH"}},  /* review #12: was 767 */
         /* 2 VOICES  */ {1, 16,  1, 16, k_unit_param_type_none,    0, 0, 0, {"VOICES"}},
         /* 3 TUNE    */ {-12,12, 0, 0,  k_unit_param_type_none,    0, 0, 0, {"TUNE"}},
 
@@ -36,7 +36,7 @@ const __unit_header unit_header_t unit_header = {
 
         /* Page 4 — effects & feel */
         /* 12 CHORUS */ {0, 15,  0, 0,  k_unit_param_type_none,    0, 0, 0, {"CHORUS"}},
-        /* 13 REVERB */ {0, 127, 0, 0,  k_unit_param_type_percent, 0, 0, 0, {"REVERB"}},
+        /* 13 REVERB */ {0, 127, 0, 0,  k_unit_param_type_none,    0, 0, 0, {"REVERB"}},  /* review #15: was percent */
         /* 14 V.CURVE*/ {0, 4,   0, 0,  k_unit_param_type_strings, 0, 0, 0, {"V.CURVE"}},
         /* 15        */ {0, 0,   0, 0,  k_unit_param_type_none,    0, 0, 0, {""}},
 

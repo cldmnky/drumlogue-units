@@ -59,7 +59,12 @@ void voice_process_envelopes() {
       uint64_t note_on  = voice_env[vi].note_on_sample;
       uint64_t note_off = voice_env[vi].note_off_sample;
 
-      if (note_off == 0 || sample_count < note_off) {
+      // Use the explicit `released` flag instead of the
+      // `note_off_sample == 0` sentinel — at stream start (or
+      // immediately after `unit_reset`) sample_count and the sentinel
+      // collide and a held-but-just-released note sustains forever
+      // (review #16).
+      if (!voice_env[vi].released || sample_count < note_off) {
         level = env_level_at_sample(sample_count,
             atk_samples, hold_samples, dec_samples, sus_level, note_on);
       } else {
@@ -119,7 +124,7 @@ void voice_process_envelopes() {
       uint64_t note2_on  = voice_env[vi].note2_on_sample;
       uint64_t note2_off = voice_env[vi].note2_off_sample;
 
-      if (note2_off == 0 || sample_count < note2_off) {
+      if (!voice_env[vi].released2 || sample_count < note2_off) {
         level2 = env_level_at_sample(sample_count,
             atk2_samples, hold2_samples, dec2_samples, sus2_level, note2_on);
       } else {
@@ -307,8 +312,9 @@ static void s_apply_keyvel_slot(
 }
 
 static void s_trigger_note(uint8_t note, uint8_t velocity) {
-  if (soundfont == nullptr)
+  if (soundfont == nullptr) {
     return;
+  }
 
   int8_t transpose = (int8_t)Params[param_transpose];
   int adjusted = (int)note + transpose;
@@ -318,8 +324,9 @@ static void s_trigger_note(uint8_t note, uint8_t velocity) {
   float vel = s_apply_velocity_curve(velocity);
 
   common::NoteOnResult result = voice_allocator.NoteOn(note, velocity);
-  if (result.voice_index < 0)
+  if (result.voice_index < 0) {
     return;
+  }
 
   active_notes = 0;
   for (uint8_t i = 0; i < voice_allocator.GetMaxVoices(); ++i) {
@@ -335,6 +342,9 @@ static void s_trigger_note(uint8_t note, uint8_t velocity) {
         tsf_kill_note(soundfont, 1, voice_preset_secondary, old_note);
     }
     voice_env[result.voice_index].active             = true;
+    voice_env[result.voice_index].released           = false;
+    voice_env[result.voice_index].released2          = false;
+    voice_env[result.voice_index].raw_note           = note;       /* review #9 */
     voice_env[result.voice_index].note               = (uint8_t)adjusted;
     voice_env[result.voice_index].note_on_sample     = sample_count;
     voice_env[result.voice_index].note_off_sample    = 0;
@@ -352,12 +362,14 @@ static void s_trigger_note(uint8_t note, uint8_t velocity) {
     voice_env[result.voice_index].note2_pending_sample = 0;
     voice_env[result.voice_index].aux_env_on_sample  = 0;
     voice_env[result.voice_index].aux_env_off_sample = 0;
+    voice_env[result.voice_index].aux_env_released   = false;
     voice_env[result.voice_index].aux_env_release_start = 1.0f;
     voice_env[result.voice_index].eff_i3amount  = current_patch.i3amount;
     voice_env[result.voice_index].eff_i3attack  = current_patch.i3attack;
     voice_env[result.voice_index].eff_i3decay   = current_patch.i3decay;
     voice_env[result.voice_index].eff_i3release = current_patch.i3release;
-    lfo_delay_completed = 0.0f;
+    lfo1_delay_completed = 0.0f;
+    lfo2_delay_completed = 0.0f;
   }
 
   float vel0 = vel, vel1 = vel;
@@ -515,10 +527,17 @@ void voice_note_off(uint8_t note) {
       active_notes++;
   }
 
-  int8_t trans = (int8_t)Params[param_transpose];
-  int adj = (int)note + trans;
-  if (adj < 0) adj = 0;
-  if (adj > 127) adj = 127;
+  // Find the voice(s) we just released and use their stored adjusted
+  // key (review #9).  The previous code recomputed `adj` from the
+  // current transpose, so changing TUNE while a note was held caused
+  // a stuck note (wrong key targeted at note-off).
+  // Match by raw_note (the note the caller actually sent) so multiple
+  // voice slots triggered by the same raw note (e.g. legato) all release.
+  if (released_voice_idx < 0) {
+    // No allocator record — fall through with a recomputed adj as a
+    // best-effort, but mark every voice_env with this raw_note as
+    // released via the loop below.
+  }
 
   if (cached_env_enabled) {
     float atk_s = env_time_to_samples_attack(cached_env_atk);
@@ -527,20 +546,22 @@ void voice_note_off(uint8_t note) {
     float sus_l = cached_env_sus / 99.0f;
     if (released_voice_idx >= 0 && released_voice_idx < 16 &&
         voice_env[released_voice_idx].active &&
-        voice_env[released_voice_idx].note == (uint8_t)adj &&
-        voice_env[released_voice_idx].note_off_sample == 0) {
+        voice_env[released_voice_idx].raw_note == note &&
+        !voice_env[released_voice_idx].released) {
       voice_env[released_voice_idx].release_start_level = env_level_at_sample(
             sample_count, atk_s, hld_s, dec_s, sus_l,
           voice_env[released_voice_idx].note_on_sample);
       voice_env[released_voice_idx].note_off_sample = sample_count;
+      voice_env[released_voice_idx].released = true;
     } else {
       for (int i = 0; i < 16; i++) {
-        if (voice_env[i].active && voice_env[i].note == (uint8_t)adj &&
-            voice_env[i].note_off_sample == 0) {
+        if (voice_env[i].active && voice_env[i].raw_note == note &&
+            !voice_env[i].released) {
           voice_env[i].release_start_level = env_level_at_sample(
             sample_count, atk_s, hld_s, dec_s, sus_l,
               voice_env[i].note_on_sample);
           voice_env[i].note_off_sample = sample_count;
+          voice_env[i].released = true;
           break;
         }
       }
@@ -554,20 +575,22 @@ void voice_note_off(uint8_t note) {
     float sus_l = cached_env2_sus / 99.0f;
     if (released_voice_idx >= 0 && released_voice_idx < 16 &&
         voice_env[released_voice_idx].active &&
-        voice_env[released_voice_idx].note == (uint8_t)adj &&
-        voice_env[released_voice_idx].note2_off_sample == 0) {
+        voice_env[released_voice_idx].raw_note == note &&
+        !voice_env[released_voice_idx].released2) {
       voice_env[released_voice_idx].release2_start_level = env_level_at_sample(
             sample_count, atk_s, hld_s, dec_s, sus_l,
           voice_env[released_voice_idx].note2_on_sample);
       voice_env[released_voice_idx].note2_off_sample = sample_count;
+      voice_env[released_voice_idx].released2 = true;
     } else {
       for (int i = 0; i < 16; i++) {
-        if (voice_env[i].active && voice_env[i].note == (uint8_t)adj &&
-            voice_env[i].note2_off_sample == 0) {
+        if (voice_env[i].active && voice_env[i].raw_note == note &&
+            !voice_env[i].released2) {
           voice_env[i].release2_start_level = env_level_at_sample(
             sample_count, atk_s, hld_s, dec_s, sus_l,
               voice_env[i].note2_on_sample);
           voice_env[i].note2_off_sample = sample_count;
+          voice_env[i].released2 = true;
           break;
         }
       }
@@ -582,35 +605,61 @@ void voice_note_off(uint8_t note) {
     float aux_sus_l   = (float)current_patch.i3sustain / 99.0f;
     float aux_rel_s   = env_time_to_samples_release(current_patch.i3release);
     for (int i = 0; i < 16; i++) {
-      if (voice_env[i].active && voice_env[i].note == (uint8_t)adj &&
-          voice_env[i].aux_env_off_sample == 0) {
+      if (voice_env[i].active && voice_env[i].raw_note == note &&
+          !voice_env[i].aux_env_released) {
         voice_env[i].aux_env_release_start = aux_env_level_at_sample(
             sample_count,
             aux_delay_s, aux_atk_s, aux_hold_s, aux_dec_s, aux_sus_l, aux_rel_s,
             voice_env[i].aux_env_on_sample, 0, 1.0f);
         voice_env[i].aux_env_off_sample = sample_count;
+        voice_env[i].aux_env_released   = true;
         break;
       }
     }
   }
 
   if (soundfont != nullptr) {
-    tsf_channel_note_off(soundfont, 0, (uint8_t)adj);
+    // Use the stored adjusted key from the released voice — review #9.
+    // Fall back to a recomputed adj only if no matching voice_env exists
+    // (defensive — shouldn't happen in normal flow).
+    int fallback_key = (int)note + (int8_t)Params[param_transpose];
+    if (fallback_key < 0) fallback_key = 0;
+    if (fallback_key > 127) fallback_key = 127;
+    uint8_t key = (uint8_t)fallback_key;
+    if (released_voice_idx >= 0 && released_voice_idx < 16 &&
+        voice_env[released_voice_idx].active) {
+      key = voice_env[released_voice_idx].note;
+    } else {
+      for (int i = 0; i < 16; i++) {
+        if (voice_env[i].active && voice_env[i].raw_note == note) {
+          key = voice_env[i].note;
+          break;
+        }
+      }
+    }
+    tsf_channel_note_off(soundfont, 0, key);
     if (patch_has_secondary)
-      tsf_channel_note_off(soundfont, 1, (uint8_t)adj);
+      tsf_channel_note_off(soundfont, 1, key);
   }
 }
 
 void voice_gate_off() {
   const uint8_t gate_midi_note = 60;
-  int8_t transpose = (int8_t)Params[param_transpose];
-  int note = (int)gate_midi_note + transpose;
-  if (note < 0) note = 0;
-  if (note > 127) note = 127;
+  // Use the stored adjusted key from the released voice_env (review #9).
+  int8_t released_voice_idx = find_youngest_active_voice_for_note(gate_midi_note);
+  uint8_t adj_key = 60;
+  if (released_voice_idx >= 0 && released_voice_idx < 16 &&
+      voice_env[released_voice_idx].active) {
+    adj_key = voice_env[released_voice_idx].note;
+  } else {
+    int tmp = (int)gate_midi_note + (int8_t)Params[param_transpose];
+    if (tmp < 0) tmp = 0;
+    if (tmp > 127) tmp = 127;
+    adj_key = (uint8_t)tmp;
+  }
 
   voice_allocator.NoteOff(gate_midi_note);
 
-  int8_t released_voice_idx = find_youngest_active_voice_for_note(gate_midi_note);
   if (released_voice_idx >= 0)
     voice_allocator.SetVoiceActive((uint8_t)released_voice_idx, false);
 
@@ -627,20 +676,22 @@ void voice_gate_off() {
     float sus_l = cached_env_sus / 99.0f;
     if (released_voice_idx >= 0 && released_voice_idx < 16 &&
         voice_env[released_voice_idx].active &&
-        voice_env[released_voice_idx].note == (uint8_t)note &&
-        voice_env[released_voice_idx].note_off_sample == 0) {
+        voice_env[released_voice_idx].raw_note == gate_midi_note &&
+        !voice_env[released_voice_idx].released) {
       voice_env[released_voice_idx].release_start_level = env_level_at_sample(
             sample_count, atk_s, hld_s, dec_s, sus_l,
           voice_env[released_voice_idx].note_on_sample);
       voice_env[released_voice_idx].note_off_sample = sample_count;
+      voice_env[released_voice_idx].released = true;
     } else {
       for (int i = 0; i < 16; i++) {
-        if (voice_env[i].active && voice_env[i].note == (uint8_t)note &&
-            voice_env[i].note_off_sample == 0) {
+        if (voice_env[i].active && voice_env[i].raw_note == gate_midi_note &&
+            !voice_env[i].released) {
           voice_env[i].release_start_level = env_level_at_sample(
             sample_count, atk_s, hld_s, dec_s, sus_l,
               voice_env[i].note_on_sample);
           voice_env[i].note_off_sample = sample_count;
+          voice_env[i].released = true;
           break;
         }
       }
@@ -654,20 +705,22 @@ void voice_gate_off() {
     float sus_l = cached_env2_sus / 99.0f;
     if (released_voice_idx >= 0 && released_voice_idx < 16 &&
         voice_env[released_voice_idx].active &&
-        voice_env[released_voice_idx].note == (uint8_t)note &&
-        voice_env[released_voice_idx].note2_off_sample == 0) {
+        voice_env[released_voice_idx].raw_note == gate_midi_note &&
+        !voice_env[released_voice_idx].released2) {
       voice_env[released_voice_idx].release2_start_level = env_level_at_sample(
             sample_count, atk_s, hld_s, dec_s, sus_l,
           voice_env[released_voice_idx].note2_on_sample);
       voice_env[released_voice_idx].note2_off_sample = sample_count;
+      voice_env[released_voice_idx].released2 = true;
     } else {
       for (int i = 0; i < 16; i++) {
-        if (voice_env[i].active && voice_env[i].note == (uint8_t)note &&
-            voice_env[i].note2_off_sample == 0) {
+        if (voice_env[i].active && voice_env[i].raw_note == gate_midi_note &&
+            !voice_env[i].released2) {
           voice_env[i].release2_start_level = env_level_at_sample(
             sample_count, atk_s, hld_s, dec_s, sus_l,
               voice_env[i].note2_on_sample);
           voice_env[i].note2_off_sample = sample_count;
+          voice_env[i].released2 = true;
           break;
         }
       }
@@ -682,22 +735,23 @@ void voice_gate_off() {
     float aux_sus_l   = (float)current_patch.i3sustain / 99.0f;
     float aux_rel_s   = env_time_to_samples_release(current_patch.i3release);
     for (int i = 0; i < 16; i++) {
-      if (voice_env[i].active && voice_env[i].note == (uint8_t)note &&
-          voice_env[i].aux_env_off_sample == 0) {
+      if (voice_env[i].active && voice_env[i].raw_note == gate_midi_note &&
+          !voice_env[i].aux_env_released) {
         voice_env[i].aux_env_release_start = aux_env_level_at_sample(
             sample_count,
             aux_delay_s, aux_atk_s, aux_hold_s, aux_dec_s, aux_sus_l, aux_rel_s,
             voice_env[i].aux_env_on_sample, 0, 1.0f);
         voice_env[i].aux_env_off_sample = sample_count;
+        voice_env[i].aux_env_released   = true;
         break;
       }
     }
   }
 
   if (soundfont != nullptr) {
-    tsf_channel_note_off(soundfont, 0, (uint8_t)note);
+    tsf_channel_note_off(soundfont, 0, adj_key);
     if (patch_has_secondary)
-      tsf_channel_note_off(soundfont, 1, (uint8_t)note);
+      tsf_channel_note_off(soundfont, 1, adj_key);
   }
 }
 
