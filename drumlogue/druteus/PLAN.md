@@ -24,43 +24,48 @@ This document describes the current state of the `druteus` drumlogue synth unit 
 
 ## 3. Parameter Set (24 slots, 6 pages)
 
+> **Note (Phase 3 / review #22):** the original Phase-1 user ADSR page
+> was removed in favour of per-patch AHDSR data carried by each
+> Proteus preset.  The Page 3 / Page 5 layout below matches
+> `header.c` as of the current build.
+
 ### Page 1 — Sound Source
 | Index | Name   | Type | Range | Default | Notes |
 |-------|--------|------|-------|---------|-------|
 | 0     | SFONT  | strings | 0–63 | 0 | SF2 filename from Programs/ |
-| 1     | PRESET | strings | 0–255 | 0 | Preset name from TSF |
+| 1     | PATCH  | strings | 0–441 | 0 | Proteus patch name from `proteus_patches.h` |
 | 2     | VOICES | none  | 1–16 | 16 | Max polyphony (voice stealing via VoiceAllocatorCore) |
-| 3     | TUNE   | none  | 0–24 (-12..+12) | 12 (0) | Semitone transpose applied as `note + (tune-12)` |
+| 3     | TUNE   | none  | −12..+12 | 0 | Semitone transpose applied as `note + tune` |
 
 ### Page 2 — Pitch & Mix
 | Index | Name   | Type | Range | Default | Notes |
 |-------|--------|------|-------|---------|-------|
-| 4     | FINETN | none  | 0–126 (-63..+63) | 63 (0) | Cent fine-tune via `tsf_channel_set_tuning` |
-| 5     | VOLUME | none  | 0–127 | 100 | CC7, via `tsf_channel_midi_control` |
-| 6     | PAN    | none  | 0–127 | 64 | CC10, via `tsf_channel_midi_control` |
+| 4     | FINETN | none  | −63..+63 | 0 | Cent fine-tune via `tsf_channel_set_tuning` (deferred to render thread) |
+| 5     | VOLUME | none  | 0–127 | 100 | CC7, via `tsf_channel_midi_control` (deferred to render thread) |
+| 6     | PAN    | none  | 0–127 | 64 | CC10, via `tsf_channel_set_pan` (deferred to render thread) |
 | 7     | (blank) | none | — | — | — |
 
-### Page 3 — Envelope (ADSR)
+### Page 3 — Layer Control
 | Index | Name   | Type | Range | Default | Notes |
 |-------|--------|------|-------|---------|-------|
-| 8     | ENV ATK | none | 0–99 | 0 | Attack time (0→1ms, 99→956ms, exponential) |
-| 9     | ENV DEC | none | 0–99 | 0 | Decay time |
-| 10    | ENV SUS | none | 0–99 | 99 | Sustain level (0=silent..99=full) |
-| 11    | ENV REL | none | 0–99 | 99 | Release time |
+| 8     | XFADE  | strings | 0–2 | 0 | Crossfade override: OFF, VEL, KEY |
+| 9     | LAYERS | strings | 0–2 | 0 | Layer mode: BOTH, PRI, SEC |
+| 10    | (blank) | none | — | — | — |
+| 11    | (blank) | none | — | — | — |
 
 ### Page 4 — Effects & Feel
 | Index | Name   | Type | Range | Default | Notes |
 |-------|--------|------|-------|---------|-------|
-| 12    | CHORUS | none | 0–15 | 0 | DSP chorus mix (0=off); `ChorusStereoWidener` |
-| 13    | REVERB | none | 0–127 | 0 | DSP reverb amount (0=off); `rings::Reverb` |
+| 12    | CHORUS | none | 0–15 | 0 | DSP chorus mix (0=off); `ChorusStereoWidener` (smoothed) |
+| 13    | REVERB | none | 0–127 | 0 | DSP reverb amount (0=off); `rings::Reverb` (smoothed) |
 | 14    | V.CURVE | strings | 0–4 | 0 | Velocity curve: LINEAR, EXP, LOG, COMP, STEEP |
 | 15    | (blank) | none | — | — | — |
 
-### Page 5 — Play Mode
+### Page 5 — Filter
 | Index | Name | Type | Range | Default | Notes |
 |-------|------|------|-------|---------|-------|
-| 16    | (blank) | none | — | — | — |
-| 17    | (blank) | none | — | — | — |
+| 16    | CUTOFF | none | 0–127 | 127 | SVF cutoff (smoothed) |
+| 17    | RES    | none | 0–127 | 0 | SVF resonance (smoothed) |
 | 18    | (blank) | none | — | — | — |
 | 19    | (blank) | none | — | — | — |
 
@@ -353,9 +358,9 @@ The current 24-param layout needs adjustment for Phase 3:
 
 | Change | Reason |
 |--------|--------|
-| PRESET range: 0–767 | 768 Proteus patches instead of flat SF2 presets |
+| PATCH range: 0–441 | 442 Proteus patches (header.c `max=441`) instead of flat SF2 presets |
 | Remove ENV ATK/DEC/SUS/REL (params 8–11) | Replaced by per-patch AHDSR from patch data |
-| Add PATCH param (new) | Select from 768 named Proteus presets |
+| Add PATCH param (new) | Select from 442 named Proteus presets |
 | Keep LFO RTE/AMT/DST/WAV (params 20–23) | Override per-patch LFO with user values |
 | Keep CHORUS/REVERB (params 12–13) | Override per-patch effects with user values |
 
@@ -364,23 +369,25 @@ The current 24-param layout needs adjustment for Phase 3:
 | Page | Slot | Name | Notes |
 |------|------|------|-------|
 | 1 | 0 | SFONT | SF2 file selector (unchanged) |
-| 1 | 1 | PATCH | 0–767 Proteus preset selector (replaces PRESET) |
+| 1 | 1 | PATCH | 0–441 Proteus preset selector (replaces PRESET) |
 | 1 | 2 | VOICES | Max polyphony (unchanged) |
 | 1 | 3 | TUNE | Global transpose (unchanged) |
-| 2 | 4 | FINETN | Global fine tune (unchanged) |
-| 2 | 5 | VOLUME | Global volume (unchanged) |
-| 2 | 6 | PAN | Global pan (unchanged) |
+| 2 | 4 | FINETN | Global fine tune (deferred to audio thread) |
+| 2 | 5 | VOLUME | Global volume (deferred to audio thread) |
+| 2 | 6 | PAN | Global pan (deferred to audio thread) |
 | 2 | 7 | (blank) | |
 | 3 | 8 | XFADE | Crossfade override: OFF, VEL, KEY (replaces ENV ATK) |
 | 3 | 9 | LAYERS | Layer mode: BOTH, PRI, SEC (replaces ENV DEC) |
 | 3 | 10 | (blank) | (replaces ENV SUS) |
 | 3 | 11 | (blank) | (replaces ENV REL) |
-| 4 | 12 | CHORUS | Chorus override (unchanged) |
-| 4 | 13 | REVERB | Reverb override (unchanged) |
+| 4 | 12 | CHORUS | Chorus override (smoothed) |
+| 4 | 13 | REVERB | Reverb override (smoothed) |
 | 4 | 14 | V.CURVE | Velocity curve (unchanged) |
 | 4 | 15 | (blank) | |
-| 5 | 16 | SOLO | Mono/poly mode (unchanged) |
-| 5 | 17–19 | (blank) | |
+| 5 | 16 | CUTOFF | SVF cutoff (smoothed) |
+| 5 | 17 | RES | SVF resonance (smoothed) |
+| 5 | 18 | (blank) | |
+| 5 | 19 | (blank) | |
 | 6 | 20 | LFO RTE | LFO rate override (unchanged) |
 | 6 | 21 | LFO AMT | LFO amount override (unchanged) |
 | 6 | 22 | LFO DST | LFO destination (unchanged) |

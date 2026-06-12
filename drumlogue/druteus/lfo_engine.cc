@@ -252,6 +252,73 @@ float lfo_get_realtime_pitch_offset(uint8_t channel) {
   return pitch_offset;
 }
 
+float lfo_get_realtime_crossfade_shift() {
+  const proteus_patch_t& p = current_patch;
+  uint8_t srcs[8] = {
+    p.realtimesource1, p.realtimesource2,
+    p.realtimesource3, p.realtimesource4,
+    p.realtimesource5, p.realtimesource6,
+    p.realtimesource7, p.realtimesource8
+  };
+  uint8_t dests[8] = {
+    p.realtimedest1, p.realtimedest2,
+    p.realtimedest3, p.realtimedest4,
+    p.realtimedest5, p.realtimedest6,
+    p.realtimedest7, p.realtimedest8
+  };
+
+  float shift = 0.0f;
+  float lfo1_val = (p.lfo1amount != 0) ? lfo_wave_shape_slot(lfo_phase, p.lfo1shape, 1) : 0.0f;
+  float lfo2_val = (p.lfo2amount != 0) ? lfo_wave_shape_slot(lfo2_phase, p.lfo2shape, 2) : 0.0f;
+
+  for (int i = 0; i < 8; i++) {
+    uint8_t src = srcs[i];
+    uint8_t dest = dests[i];
+    if (src == 0 || dest != 16) continue;
+
+    float mod_val = 0.0f;
+    float amt_scale = 0.0f;
+    switch (src) {
+      case 7:
+        if (p.lfo1amount == 0)
+          continue;
+        if (p.lfo1delay > 0) {
+          float ds = lfo_delay_to_samples(p.lfo1delay);
+          float delay_scale = lfo1_delay_completed >= ds ? 1.0f : lfo1_delay_completed / ds;
+          amt_scale = (float)p.lfo1amount * (1.0f / 127.0f) * delay_scale;
+        } else {
+          amt_scale = (float)p.lfo1amount * (1.0f / 127.0f);
+        }
+        mod_val = lfo1_val;
+        break;
+      case 8:
+        if (p.lfo2amount == 0)
+          continue;
+        if (p.lfo2delay > 0) {
+          float ds = lfo_delay_to_samples(p.lfo2delay);
+          float delay_scale = lfo2_delay_completed >= ds ? 1.0f : lfo2_delay_completed / ds;
+          amt_scale = (float)p.lfo2amount * (1.0f / 127.0f) * delay_scale;
+        } else {
+          amt_scale = (float)p.lfo2amount * (1.0f / 127.0f);
+        }
+        mod_val = lfo2_val;
+        break;
+      case 9:
+        if (p.i3amount == 0)
+          continue;
+        mod_val = aux_env_cached_;
+        amt_scale = (float)p.i3amount * (1.0f / 127.0f);
+        break;
+      default:
+        continue;
+    }
+
+    shift += 0.5f * mod_val * amt_scale;
+  }
+
+  return Clamp(shift, -0.5f, 0.5f);
+}
+
 void lfo_apply_patch_mod(float* out, uint32_t frames) {
   const proteus_patch_t& p = current_patch;
   float vol_mod = 1.0f;

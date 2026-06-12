@@ -193,7 +193,7 @@ void sf_load_step(uint32_t frames) {
       // truncates the selected patch on every font load
       // (review #4).  params_set already clamps against the patch
       // table; the SF2-instrument-to-preset mapping happens in
-      // resolve_proteus_instrument_to_sf2_preset (patch_engine).
+      // s_load_patch via tsf_get_presetindex (patch_engine).
       break;
     }
     case SF_LOAD_TSF_SET: {

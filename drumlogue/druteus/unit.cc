@@ -31,7 +31,6 @@
 namespace ndsp = druteus::neon;
 
 #include "tools/proteus_patches.h"
-#include "tools/proteus_instrument_map.h"
 
 // TSF_IMPLEMENTATION: the public extern implementations live here.
 // voice_engine.cc has its own static copy (under TSF_IMPLEMENTATION+TSF_STATIC)

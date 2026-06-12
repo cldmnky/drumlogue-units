@@ -73,11 +73,11 @@ extern uint32_t cached_env2_rel;
 extern bool cached_env2_enabled;
 
 extern float cached_xfade_center;
+extern float cached_xfade_switch_point;
 extern float cached_xfade_width;
 extern float cached_xfade_lo;
 extern float cached_xfade_hi;
 extern float cached_xfade_span;
-extern uint8_t cached_xfade_split_key;
 
 struct VoiceEnv {
   bool     active;
@@ -112,6 +112,8 @@ struct VoiceEnv {
   float keyvel_volume_mod;         /* 1.0 = no change */
   float keyvel_pan_mod;            /* 0.0 = center (shift in ±pan-steps) */
   float keyvel_tone_mod;           /* 0.0 = no shift (filter cutoff fraction) */
+  float xfade_pri_weight;          /* base primary/secondary balance at note-on */
+  float xfade_sec_weight;
   uint8_t keyvel_sample_start_pri; /* per-note sample-start offset */
   uint8_t keyvel_sample_start_sec; /* per-note sample-start offset */
   /* —– effective aux envelope params (keyvel-modulated, for per-voice use) —– */

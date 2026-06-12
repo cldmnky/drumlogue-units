@@ -18,7 +18,7 @@
 #include "params.h"
 #include "patch_engine.h"
 #include "dsp_primitives.h"
-#include "tools/proteus_instrument_map.h"
+#include "lfo_engine.h"
 
 common::VoiceAllocatorCore voice_allocator;
 uint64_t sample_count = 0;
@@ -41,7 +41,14 @@ void tsf_kill_note(tsf* f, int channel, int preset, int key) {
 // cutoff click on patches with release=0 (e.g. Syn Clav).
 static constexpr float kMinReleaseSamples = 240.0f;
 
+static void s_apply_realtime_xfade(int vi, float shift, float* pri_gain, float* sec_gain);
+
 void voice_process_envelopes() {
+  const float realtime_xfade_shift = lfo_get_realtime_crossfade_shift();
+  static float note_gain_pri[128];
+  static float note_gain_sec[128];
+  static float note_gain_sec2[128];
+
   if (cached_env_enabled) {
     float atk_samples  = env_time_to_samples_attack(cached_env_atk);
     float hold_samples = env_time_to_samples_hold(cached_env_hold);
@@ -50,8 +57,6 @@ void voice_process_envelopes() {
     if (rel_samples < kMinReleaseSamples)
       rel_samples = kMinReleaseSamples;
     float sus_level    = cached_env_sus / 99.0f;
-    static float note_gain_pri[128];
-    static float note_gain_sec[128];
 
     for (int vi = 0; vi < 16; vi++) {
       if (!voice_env[vi].active) continue;
@@ -82,9 +87,12 @@ void voice_process_envelopes() {
         }
       }
 
-      note_gain_pri[voice_env[vi].note] = level;
+      float pri_gain = level;
+      float sec_gain = level;
+      s_apply_realtime_xfade(vi, realtime_xfade_shift, &pri_gain, &sec_gain);
+      note_gain_pri[voice_env[vi].note] = pri_gain;
       if (patch_has_secondary)
-        note_gain_sec[voice_env[vi].note] = level;
+        note_gain_sec[voice_env[vi].note] = sec_gain;
     }
 
     for (int i = 0; i < (int)soundfont->voiceNum; i++) {
@@ -100,11 +108,21 @@ void voice_process_envelopes() {
     // starts from a clean baseline rather than multiplying TSF's internal
     // gain (which can be loud enough to clip, e.g. Emperor with both layers
     // on the same instrument at high volume).
+    for (int vi = 0; vi < 16; vi++) {
+      if (!voice_env[vi].active) continue;
+      float pri_gain = 1.0f;
+      float sec_gain = 1.0f;
+      s_apply_realtime_xfade(vi, realtime_xfade_shift, &pri_gain, &sec_gain);
+      note_gain_pri[voice_env[vi].note] = pri_gain;
+      if (patch_has_secondary)
+        note_gain_sec[voice_env[vi].note] = sec_gain;
+    }
+
     for (int i = 0; i < (int)soundfont->voiceNum; i++) {
       tsf_voice* v = &soundfont->voices[i];
       if (v->playingPreset == -1) continue;
       if (v->playingChannel == 0 && v->playingPreset == voice_preset_primary)
-        v->ampGain = 1.0f;
+        v->ampGain = note_gain_pri[v->playingKey];
     }
   }
 
@@ -116,7 +134,6 @@ void voice_process_envelopes() {
     if (rel2_samples < kMinReleaseSamples)
       rel2_samples = kMinReleaseSamples;
     float sus2_level    = cached_env2_sus / 99.0f;
-    static float note_gain_sec2[128];
 
     for (int vi = 0; vi < 16; vi++) {
       if (!voice_env[vi].active) continue;
@@ -137,7 +154,10 @@ void voice_process_envelopes() {
         }
       }
 
-      note_gain_sec2[voice_env[vi].note] = level2;
+      float pri_gain = 1.0f;
+      float sec_gain = level2;
+      s_apply_realtime_xfade(vi, realtime_xfade_shift, &pri_gain, &sec_gain);
+      note_gain_sec2[voice_env[vi].note] = sec_gain;
     }
 
     for (int i = 0; i < (int)soundfont->voiceNum; i++) {
@@ -147,11 +167,19 @@ void voice_process_envelopes() {
         v->ampGain = note_gain_sec2[v->playingKey];
     }
   } else if (patch_has_secondary) {
+    for (int vi = 0; vi < 16; vi++) {
+      if (!voice_env[vi].active) continue;
+      float pri_gain = 1.0f;
+      float sec_gain = 1.0f;
+      s_apply_realtime_xfade(vi, realtime_xfade_shift, &pri_gain, &sec_gain);
+      note_gain_sec[voice_env[vi].note] = sec_gain;
+    }
+
     for (int i = 0; i < (int)soundfont->voiceNum; i++) {
       tsf_voice* v = &soundfont->voices[i];
       if (v->playingPreset == -1) continue;
       if (v->playingChannel == 1 && v->playingPreset == voice_preset_secondary)
-        v->ampGain = 1.0f;
+        v->ampGain = note_gain_sec[v->playingKey];
     }
   }
 
@@ -206,6 +234,13 @@ static void tsf_release_layer(tsf* f, int channel, int preset) {
     if (v->playingPreset == preset && v->playingChannel == channel && v->ampenv.segment < TSF_SEGMENT_RELEASE)
       tsf_channel_note_off(f, channel, v->playingKey);
   }
+}
+
+static void s_apply_realtime_xfade(int vi, float shift, float* pri_gain, float* sec_gain) {
+  if (!patch_has_secondary || shift == 0.0f)
+    return;
+  *pri_gain *= clamp01(voice_env[vi].xfade_pri_weight + shift);
+  *sec_gain *= clamp01(voice_env[vi].xfade_sec_weight - shift);
 }
 
 static int8_t find_youngest_active_voice_for_note(uint8_t midi_note) {
@@ -389,6 +424,8 @@ static void s_trigger_note(uint8_t note, uint8_t velocity) {
                              &secondary_weight);
   vel0 *= primary_weight;
   vel1 *= secondary_weight;
+  voice_env[result.voice_index].xfade_pri_weight = primary_weight;
+  voice_env[result.voice_index].xfade_sec_weight = secondary_weight;
 
   uint8_t kvel_sample_start_pri = current_patch.i1samplestartoffset;
   uint8_t kvel_sample_start_sec = current_patch.i2samplestartoffset;
