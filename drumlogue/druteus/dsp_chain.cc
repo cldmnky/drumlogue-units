@@ -1,6 +1,7 @@
 #include "dsp_chain.h"
 #include "druteus_state.h"
 #include "params.h"
+#include "trance_gate.h"
 #include "../common/neon_dsp.h"
 #include "../common/simd_utils.h"
 #include "../common/smoothed_value.h"
@@ -86,6 +87,7 @@ void dsp_process_effects(float *out, uint32_t frames) {
   float patch_chorus  = (current_patch.i1chorus + current_patch.i2chorus) / 30.0f;
   float chorus_mix    = global_chorus * 0.5f + patch_chorus * 0.5f;
   float reverb_amount = Params[param_reverb] / 127.0f;
+  bool gate_active    = Params[param_trance_gate] > 0;
 
   // Smooth chorus mix and reverb amount (review #14).
   s_chorus_smooth.SetTarget(chorus_mix);
@@ -93,12 +95,17 @@ void dsp_process_effects(float *out, uint32_t frames) {
   float chorus_mix_s = s_chorus_smooth.Process();
   float reverb_amount_s = s_reverb_smooth.Process();
 
-  if (chorus_mix_s > 0.0f || reverb_amount_s > 0.0f) {
+  if (chorus_mix_s > 0.0f || reverb_amount_s > 0.0f || gate_active) {
     simd_deinterleave_stereo(out, fx_buf_l, fx_buf_r, frames);
 
     if (chorus_mix_s > 0.0f) {
       chorus_dsp.SetMix(chorus_mix_s);
       chorus_dsp.ProcessStereoBatch(fx_buf_l, fx_buf_r, frames);
+    }
+
+    // Trance gate: after chorus, before reverb
+    if (gate_active) {
+      trance_gate_process_stereo(fx_buf_l, fx_buf_r, frames);
     }
 
     if (reverb_amount_s > 0.0f) {

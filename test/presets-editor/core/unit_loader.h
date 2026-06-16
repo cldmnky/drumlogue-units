@@ -56,6 +56,9 @@ void unit_loader_render(unit_loader_t* loader,
 // Set a parameter value
 void unit_loader_set_param(unit_loader_t* loader, uint8_t param_id, int32_t value);
 
+// Set unit tempo (fixed-point BPM: integer in upper 16 bits, fraction in lower 16)
+void unit_loader_set_tempo(unit_loader_t* loader, uint32_t tempo_fixed);
+
 // Unload shared library
 void unit_loader_close(unit_loader_t* loader);
 

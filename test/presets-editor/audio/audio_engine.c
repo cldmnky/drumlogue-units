@@ -13,6 +13,7 @@
 #include "ring_buffer.h"
 
 #define PARAM_QUEUE_CAPACITY 64
+#define BPM_QUEUE_CAPACITY 8
 #define PITCH_BUFFER_SIZE 4096  // ~85ms at 48kHz for pitch detection
 #define WAVEFORM_BUFFER_SIZE 96000  // ~2 seconds at 48kHz for waveform display (full bar at 120 BPM)
 
@@ -20,6 +21,10 @@ typedef struct {
     uint8_t id;
     int32_t value;
 } param_msg_t;
+
+typedef struct {
+    float bpm;
+} bpm_msg_t;
 
 struct audio_engine {
     audio_config_t cfg;
@@ -31,6 +36,7 @@ struct audio_engine {
     void* stream;
 #endif
     ring_buffer_t param_queue;
+    ring_buffer_t bpm_queue;
     float master_volume;  // Thread-safe read in audio callback
     bool tuner_enabled;   // Thread-safe read in audio callback
     
@@ -62,6 +68,18 @@ static inline float soft_clip(float x) {
     // Use gentler scaling (0.7 instead of 0.9) for more headroom
     // This allows synth to peak around ±1.4 before hard clipping
     return tanhf(x * 0.7f) / 0.7f;
+}
+
+// Convert float BPM to drumlogue fixed-point tempo format:
+// upper 16 bits = integer BPM, lower 16 bits = fractional BPM / 65536.
+static uint32_t bpm_to_fixed_tempo(float bpm) {
+    if (bpm < 0.0f) bpm = 0.0f;
+    uint32_t integer = (uint32_t)bpm;
+    float frac = bpm - (float)integer;
+    if (frac < 0.0f) frac = 0.0f;
+    if (frac >= 1.0f) frac = 0.0f;
+    uint32_t fraction = (uint32_t)(frac * 65536.0f);
+    return (integer << 16) | (fraction & 0xFFFFu);
 }
 
 // YIN-style autocorrelation pitch detection with hysteresis
@@ -193,6 +211,13 @@ static int audio_cb(const void* input,
         unit_loader_set_param(engine->loader, msg.id, msg.value);
     }
 
+    // Apply queued BPM updates
+    bpm_msg_t bpm_msg;
+    while (ring_buffer_pop(&engine->bpm_queue, &bpm_msg) == 0) {
+        uint32_t tempo = bpm_to_fixed_tempo(bpm_msg.bpm);
+        unit_loader_set_tempo(engine->loader, tempo);
+    }
+
     const float* in = (const float*)input;
     float* out = (float*)output;
 
@@ -313,10 +338,17 @@ audio_engine_t* audio_engine_create(const audio_config_t* cfg,
         return NULL;
     }
 
+    if (ring_buffer_init(&engine->bpm_queue, BPM_QUEUE_CAPACITY, sizeof(bpm_msg_t)) != 0) {
+        ring_buffer_free(&engine->param_queue);
+        free(engine);
+        return NULL;
+    }
+
     PaError err = Pa_Initialize();
     if (err != paNoError) {
         fprintf(stderr, "PortAudio init failed: %s\n", Pa_GetErrorText(err));
         ring_buffer_free(&engine->param_queue);
+        ring_buffer_free(&engine->bpm_queue);
         free(engine);
         return NULL;
     }
@@ -349,6 +381,7 @@ audio_engine_t* audio_engine_create(const audio_config_t* cfg,
         fprintf(stderr, "PortAudio open failed: %s\n", Pa_GetErrorText(err));
         Pa_Terminate();
         ring_buffer_free(&engine->param_queue);
+        ring_buffer_free(&engine->bpm_queue);
         free(engine);
         return NULL;
     }
@@ -373,6 +406,7 @@ void audio_engine_destroy(audio_engine_t* engine) {
     }
     Pa_Terminate();
     ring_buffer_free(&engine->param_queue);
+    ring_buffer_free(&engine->bpm_queue);
     free(engine);
 }
 
@@ -395,6 +429,13 @@ int audio_engine_set_param(audio_engine_t* engine, uint8_t id, int32_t value) {
     if (!engine) return -1;
     param_msg_t msg = {.id = id, .value = value};
     return ring_buffer_push(&engine->param_queue, &msg);
+}
+
+void audio_engine_set_bpm(audio_engine_t* engine, float bpm) {
+    if (!engine) return;
+    if (bpm < 0.0f) bpm = 0.0f;
+    bpm_msg_t msg = {.bpm = bpm};
+    ring_buffer_push(&engine->bpm_queue, &msg);
 }
 
 void audio_engine_set_master_volume(audio_engine_t* engine, float volume) {
@@ -499,6 +540,9 @@ void audio_engine_stop(audio_engine_t* engine) { (void)engine; }
 
 int audio_engine_set_param(audio_engine_t* engine, uint8_t id, int32_t value) {
     (void)engine; (void)id; (void)value; return -1; }
+
+void audio_engine_set_bpm(audio_engine_t* engine, float bpm) {
+    (void)engine; (void)bpm; }
 
 void audio_engine_set_master_volume(audio_engine_t* engine, float volume) {
     (void)engine; (void)volume; }

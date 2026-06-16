@@ -18,7 +18,7 @@ enum {
   param_chorus         = 12,
   param_reverb         = 13,
   param_velocity_curve = 14,
-  param_unused_15      = 15,
+  param_trance_gate    = 15,
   param_cutoff         = 16,
   param_resonance      = 17,
   param_unused_18      = 18,
