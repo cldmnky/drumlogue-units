@@ -43,6 +43,7 @@ ImGuiApp::ImGuiApp(const std::string& unit_path,
       octave_offset_(0),
       arp_enabled_(false),
       arp_bpm_(120.0f),
+      last_sent_bpm_(-1.0f),
       arp_pattern_(0),
       arp_division_(2),
       arp_hold_(false),
@@ -262,6 +263,8 @@ void ImGuiApp::render_ui() {
           audio_engine_ = audio_engine_create(&cfg, loader_, runtime_state_);
           if (audio_engine_ && audio_engine_start(audio_engine_) == 0) {
             audio_running_ = true;
+            audio_engine_set_bpm(audio_engine_, arp_bpm_);
+            last_sent_bpm_ = arp_bpm_;
           } else {
             shutdown_audio();
           }
@@ -524,6 +527,10 @@ void ImGuiApp::render_piano_roll() {
   
   ImGui::SetNextItemWidth(100);
   ImGui::SliderFloat("BPM", &arp_bpm_, 40.0f, 240.0f, "%.0f");
+  if (ImGui::IsItemEdited() && audio_engine_) {
+    audio_engine_set_bpm(audio_engine_, arp_bpm_);
+    last_sent_bpm_ = arp_bpm_;
+  }
   ImGui::SameLine();
   
   const char* divisions[] = {"1/4", "1/8", "1/16", "1/32"};

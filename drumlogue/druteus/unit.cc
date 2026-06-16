@@ -50,6 +50,7 @@ namespace ndsp = druteus::neon;
 #include "lfo_engine.h"
 #include "dsp_chain.h"
 #include "dsp_primitives.h"
+#include "trance_gate.h"
 
 // One-pole smoothed volume for the user LFO (review #14).
 // Coef 0.05 ≈ ~1 ms time constant at 48 kHz.
@@ -120,6 +121,7 @@ __unit_callback int8_t unit_init(const unit_runtime_desc_t *desc) {
   dsp_init();
   voice_init();
   lfo_init();
+  trance_gate_init();
   dsp_init_smoothers(Params[param_cutoff] / 127.0f,
                      Params[param_resonance] / 127.0f);
 
@@ -370,7 +372,7 @@ __unit_callback void unit_aftertouch(uint8_t note, uint8_t aftertouch) {
 // ---------------------------------------------------------------------------
 
 __unit_callback void unit_set_tempo(uint32_t tempo) {
-  (void)tempo;
+  trance_gate_set_tempo(tempo);
 }
 
 __unit_callback void unit_tempo_4ppqn_tick(uint32_t counter) {

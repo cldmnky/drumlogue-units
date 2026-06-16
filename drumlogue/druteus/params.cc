@@ -113,6 +113,11 @@ void params_set(uint8_t index, int32_t value) {
       if (value > 2) value = 2;
       break;
 
+    case param_trance_gate:
+      if (value < 0) value = 0;
+      if (value > 32) value = 32;
+      break;
+
     case param_unused_10:
     case param_unused_11:
       break;
@@ -191,6 +196,18 @@ const char *params_get_str(uint8_t index, int32_t value) {
       if (value < 0) value = 0;
       if (value > 2) value = 2;
       return layer_names[value];
+    }
+
+    case param_trance_gate: {
+      if (value <= 0) return "OFF";
+      if (value > 32) value = 32;
+      static const char* gate_names[33] = {
+        "OFF","1","2","3","4","5","6","7","8","9","10",
+        "11","12","13","14","15","16","17","18","19","20",
+        "21","22","23","24","25","26","27","28","29","30",
+        "31","32"
+      };
+      return gate_names[value % 33];
     }
 
     case param_velocity_curve: {

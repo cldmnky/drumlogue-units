@@ -78,6 +78,7 @@ class ImGuiApp {
   // Arpeggiator state
   bool arp_enabled_;
   float arp_bpm_;
+  float last_sent_bpm_;             // last BPM forwarded to audio engine
   int arp_pattern_;                 // 0=up, 1=down, 2=up-down, 3=random
   int arp_division_;                // 0=1/4, 1=1/8, 2=1/16, 3=1/32
   bool arp_hold_;                   // Latch mode

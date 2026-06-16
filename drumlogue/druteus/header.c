@@ -38,7 +38,7 @@ const __unit_header unit_header_t unit_header = {
         /* 12 CHORUS */ {0, 15,  0, 0,  k_unit_param_type_none,    0, 0, 0, {"CHORUS"}},
         /* 13 REVERB */ {0, 127, 0, 0,  k_unit_param_type_none,    0, 0, 0, {"REVERB"}},  /* review #15: was percent */
         /* 14 V.CURVE*/ {0, 4,   0, 0,  k_unit_param_type_strings, 0, 0, 0, {"V.CURVE"}},
-        /* 15        */ {0, 0,   0, 0,  k_unit_param_type_none,    0, 0, 0, {""}},
+        /* 15 TGATE  */ {0, 32,  0, 0,  k_unit_param_type_strings, 0, 0, 0, {"TGATE"}},
 
         /* Page 5 — filter */
         /* 16 CUTOFF */ {0, 127, 0,127, k_unit_param_type_none, 0, 0, 0, {"CUTOFF"}},

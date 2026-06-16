@@ -86,6 +86,13 @@ void unit_loader_set_param(unit_loader_t* loader, uint8_t param_id, int32_t valu
     loader->unit_set_param_value(param_id, value);
 }
 
+void unit_loader_set_tempo(unit_loader_t* loader, uint32_t tempo_fixed) {
+    if (!loader || !loader->unit_set_tempo) {
+        return;
+    }
+    loader->unit_set_tempo(tempo_fixed);
+}
+
 void unit_loader_close(unit_loader_t* loader) {
     if (!loader) {
         return;

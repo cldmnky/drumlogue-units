@@ -30,6 +30,9 @@ void audio_engine_stop(audio_engine_t* engine);
 // Thread-safe enqueue of parameter updates (applied in audio thread)
 int audio_engine_set_param(audio_engine_t* engine, uint8_t id, int32_t value);
 
+// Set unit BPM (applied in audio thread via unit_set_tempo)
+void audio_engine_set_bpm(audio_engine_t* engine, float bpm);
+
 // Set master output volume (0.0 to 1.0)
 void audio_engine_set_master_volume(audio_engine_t* engine, float volume);
 
