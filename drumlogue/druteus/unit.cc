@@ -62,6 +62,8 @@ static uint8_t perf_render_total;
 static uint8_t perf_tsf_render;
 static uint8_t perf_envelopes;
 static uint8_t perf_post_dsp;
+static char s_perf_display[32] = "";
+static uint64_t s_perf_frame = 0;
 #endif
 
 static void s_apply_pending_tsf_state() {
@@ -332,6 +334,17 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
 #ifdef PERF_MON
   PERF_MON_END(perf_post_dsp);
   PERF_MON_END(perf_render_total);
+  s_perf_frame += frames;
+  if (s_perf_frame >= 4800) {
+    s_perf_frame = 0;
+    uint32_t tsf = PERF_MON_GET_AVG(perf_tsf_render);
+    uint32_t env = PERF_MON_GET_AVG(perf_envelopes);
+    uint32_t dsp = PERF_MON_GET_AVG(perf_post_dsp);
+    uint32_t tot = PERF_MON_GET_AVG(perf_render_total);
+    snprintf(s_perf_display, sizeof(s_perf_display),
+             "TSF%uK EN%uK D%uK T%uK",
+             tsf / 1000, env / 1000, dsp / 1000, tot / 1000);
+  }
 #endif
 }
 
@@ -421,6 +434,14 @@ __unit_callback void unit_tempo_4ppqn_tick(uint32_t counter) {
 // ---------------------------------------------------------------------------
 // Preset save/load — not used in Phase 1
 // ---------------------------------------------------------------------------
+
+__unit_callback const char *unit_get_perf_display() {
+#ifdef PERF_MON
+  return s_perf_display;
+#else
+  return "";
+#endif
+}
 
 __unit_callback void unit_load_preset(uint8_t idx) {
   (void)idx;

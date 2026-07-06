@@ -95,6 +95,7 @@ void voice_process_envelopes() {
         note_gain_sec[voice_env[vi].note] = sec_gain;
     }
 
+    if (active_notes > 0) {
     for (int i = 0; i < (int)soundfont->voiceNum; i++) {
       tsf_voice* v = &soundfont->voices[i];
       if (v->playingPreset == -1) continue;
@@ -102,6 +103,7 @@ void voice_process_envelopes() {
         v->ampGain = note_gain_pri[v->playingKey];
       else if (v->playingChannel == 1 && v->playingPreset == voice_preset_secondary)
         v->ampGain = note_gain_sec[v->playingKey];
+    }
     }
   } else {
     // Envelope disabled: set ampGain to unity so the aux envelope below
@@ -118,11 +120,13 @@ void voice_process_envelopes() {
         note_gain_sec[voice_env[vi].note] = sec_gain;
     }
 
+    if (active_notes > 0) {
     for (int i = 0; i < (int)soundfont->voiceNum; i++) {
       tsf_voice* v = &soundfont->voices[i];
       if (v->playingPreset == -1) continue;
       if (v->playingChannel == 0 && v->playingPreset == voice_preset_primary)
         v->ampGain = note_gain_pri[v->playingKey];
+    }
     }
   }
 
@@ -160,11 +164,13 @@ void voice_process_envelopes() {
       note_gain_sec2[voice_env[vi].note] = sec_gain;
     }
 
+    if (active_notes > 0) {
     for (int i = 0; i < (int)soundfont->voiceNum; i++) {
       tsf_voice* v = &soundfont->voices[i];
       if (v->playingPreset == -1) continue;
       if (v->playingChannel == 1 && v->playingPreset == voice_preset_secondary)
         v->ampGain = note_gain_sec2[v->playingKey];
+    }
     }
   } else if (patch_has_secondary) {
     for (int vi = 0; vi < 16; vi++) {
@@ -175,11 +181,13 @@ void voice_process_envelopes() {
       note_gain_sec[voice_env[vi].note] = sec_gain;
     }
 
+    if (active_notes > 0) {
     for (int i = 0; i < (int)soundfont->voiceNum; i++) {
       tsf_voice* v = &soundfont->voices[i];
       if (v->playingPreset == -1) continue;
       if (v->playingChannel == 1 && v->playingPreset == voice_preset_secondary)
         v->ampGain = note_gain_sec[v->playingKey];
+    }
     }
   }
 
