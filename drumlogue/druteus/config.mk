@@ -32,16 +32,21 @@ ULIBS   = -lm
 USE_CWARN   = -W -Wall -Wextra -Wno-unused-local-typedefs -Wno-unused-parameter
 USE_CXXWARN = -W -Wall -Wextra -Wno-ignored-qualifiers -Wno-unused-local-typedefs -Wno-unused-parameter
 
-# Preprocessor defines.  ARM codegen flags and -ffast-math live here
-# (review #20): the SDK Makefile routes UDEFS into both C and C++
-# compilations, so they apply to header.c as well.  Documented
-# behavior — keep, do not remove.
+# Preprocessor defines.  USE_NEON enables NEON codecs in common/neon_dsp.h
+# and simd_utils.h.  PERF_MON enables cycle-counting instrumentation for
+# profiling render cost on hardware.
+# NOTE: -mfpu=neon -mfloat-abi=hard are already set by the SDK Makefile
+# (OPT += -mfpu=neon-vfpv4 -mfloat-abi=hard); do NOT repeat them here.
+# NOTE: -ffast-math was removed — it enables -ffinite-math-only which
+# replaces standard powf/expf/log with __finite variants that break TSF's
+# IEEE assumptions (e.g. log(0) in envelope/gain calculations).
 UDEFS = -DUSE_NEON
-UDEFS += -mfpu=neon
-UDEFS += -mfloat-abi=hard
-# -ffast-math assumes no NaN/Inf; in this unit we never produce
-# them (no divisions by user-controlled values, denormals flushed
-# at the top of process_envelopes).  TSF's internal float math
-# relies on IEEE behavior; if you ever see glitches, drop this
-# flag and the unit will run ~3-5% slower.
-UDEFS += -ffast-math
+UDEFS += -DPERF_MON
+CXXSRC += $(COMMON_SRC_PATH)/perf_mon.cc
+UDEFS += -O2
+
+# Conditional QEMU ARM override — test-unit.sh passes __QEMU_ARM__=1 so
+# perf_mon.h uses std::chrono instead of the real ARM DWT register.
+ifeq ($(__QEMU_ARM__),1)
+  UDEFS += -D__QEMU_ARM__
+endif

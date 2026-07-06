@@ -24,6 +24,7 @@
 #include "rings/dsp/fx/reverb.h"
 #include "filter.h"
 #include "../common/smoothed_value.h"
+#include "../common/perf_mon.h"
 
 #define NEON_DSP_NS druteus
 #include "../common/neon_dsp.h"
@@ -55,6 +56,13 @@ namespace ndsp = druteus::neon;
 // One-pole smoothed volume for the user LFO (review #14).
 // Coef 0.05 ≈ ~1 ms time constant at 48 kHz.
 static dsp::SmoothedValue s_vol_smooth;
+
+#ifdef PERF_MON
+static uint8_t perf_render_total;
+static uint8_t perf_tsf_render;
+static uint8_t perf_envelopes;
+static uint8_t perf_post_dsp;
+#endif
 
 static void s_apply_pending_tsf_state() {
   int vol  = pending_volume.load(std::memory_order_relaxed);
@@ -125,6 +133,14 @@ __unit_callback int8_t unit_init(const unit_runtime_desc_t *desc) {
   dsp_init_smoothers(Params[param_cutoff] / 127.0f,
                      Params[param_resonance] / 127.0f);
 
+#ifdef PERF_MON
+  PERF_MON_INIT();
+  perf_render_total = PERF_MON_REGISTER("RenderTotal");
+  perf_tsf_render   = PERF_MON_REGISTER("TSF_Render");
+  perf_envelopes    = PERF_MON_REGISTER("Envelopes");
+  perf_post_dsp     = PERF_MON_REGISTER("PostDSP");
+#endif
+
   s_vol_smooth.Init(1.0f, 0.05f);
 
   if (soundfont_list.count > 0)
@@ -176,6 +192,10 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
     memset(out, 0, frames * 2 * sizeof(float));
     return;
   }
+
+#ifdef PERF_MON
+  PERF_MON_START(perf_render_total);
+#endif
 
   // ── 1. Soundfont loader state machine ─────────────────────────
   // Advances the async SF2 loader one step per callback.  The loader
@@ -241,8 +261,14 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
   // ── 5. Process pending delayed note-ons & envelopes ──────────
   // Envelopes must be applied *before* tsf_render_float so that
   // finished voices are killed before their samples go to the DAC.
+#ifdef PERF_MON
+  PERF_MON_START(perf_envelopes);
+#endif
   voice_process_pending_notes();
   voice_process_envelopes();
+#ifdef PERF_MON
+  PERF_MON_END(perf_envelopes);
+#endif
 
   // ── 5.5. Patch realtime pitch modulation (matrix) ────────────
   // Single tsf_channel_set_tuning call per channel per block.  The
@@ -267,7 +293,13 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
   // ── 6. Render TinySoundFont audio ────────────────────────────
   static_assert(sizeof(int) >= sizeof(uint32_t),
                 "int must be at least 32 bits for the frames cast");
+#ifdef PERF_MON
+  PERF_MON_START(perf_tsf_render);
+#endif
   tsf_render_float(soundfont, out, (int)frames, TSF_FALSE);
+#ifdef PERF_MON
+  PERF_MON_END(perf_tsf_render);
+#endif
 
   // ── 7. Volume modulation (smoothed — review #14) ──────────
   float target_vol = 1.0f;
@@ -292,8 +324,15 @@ __unit_callback void unit_render(const float *in, float *out, uint32_t frames) {
     lfo_apply_patch_mod(out, frames);
   }
 
+#ifdef PERF_MON
+  PERF_MON_START(perf_post_dsp);
+#endif
   dsp_process_filter(out, frames);
   dsp_process_effects(out, frames);
+#ifdef PERF_MON
+  PERF_MON_END(perf_post_dsp);
+  PERF_MON_END(perf_render_total);
+#endif
 }
 
 // ---------------------------------------------------------------------------

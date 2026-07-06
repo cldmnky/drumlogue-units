@@ -74,8 +74,12 @@ void sf_apply_pending() {
     // Apply to TSF only if the soundfont is loaded — tsf_set_max_voices
     // reallocates f->voices, which would race with tsf_render_float
     // (review #1).  The audio thread runs alone here, so it's safe.
+    // With dual-layer patches, each MIDI note-on creates 2 TSF voices
+    // (one per layer channel).  Double the pool so all requested notes
+    // get voices; otherwise TSF silently steals voices causing distorted
+    // audio when the pool is exhausted.
     if (soundfont != nullptr)
-      tsf_set_max_voices(soundfont, v);
+      tsf_set_max_voices(soundfont, patch_has_secondary ? v * 2 : v);
 
     voices_dirty.store(false, std::memory_order_release);
   }
