@@ -43,7 +43,7 @@ const __unit_header unit_header_t unit_header = {
         /* Page 5 — filter */
         /* 16 CUTOFF */ {0, 127, 0,127, k_unit_param_type_none, 0, 0, 0, {"CUTOFF"}},
         /* 17 RES    */ {0, 127, 0, 0,   k_unit_param_type_none, 0, 0, 0, {"RES"}},
-        /* 18 PERF   */ {0, 0,   0, 0,  k_unit_param_type_none, 0, 0, 0, {"PERF"}},
+        /* 18        */ {0, 0,   0, 0,  k_unit_param_type_none, 0, 0, 0, {""}},
         /* 19        */ {0, 0,   0, 0,  k_unit_param_type_none, 0, 0, 0, {""}},
 
         /* Page 6 — LFO */

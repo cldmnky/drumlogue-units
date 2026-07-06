@@ -233,9 +233,6 @@ const char *params_get_str(uint8_t index, int32_t value) {
       return wave_names[value];
     }
 
-    case param_unused_18:
-      return unit_get_perf_display();
-
     default:
       return nullptr;
   }
