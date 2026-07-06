@@ -35,6 +35,97 @@ static void s_write_ln(const char *s) {
   fputc('\n', g_out);
 }
 
+static void s_write_fmt(const char *fmt, ...);
+
+static uint32_t s_djb2(const uint8_t *data, size_t len) {
+  uint32_t hash = 5381;
+  for (size_t i = 0; i < len; i++)
+    hash = ((hash << 5) + hash) + data[i];
+  return hash;
+}
+
+static void s_write_file_hash(const char *path, const char *label) {
+  FILE *f = fopen(path, "rb");
+  if (!f) {
+    s_write_fmt("%s: (not found)\n", label);
+    return;
+  }
+  uint8_t buf[4096];
+  size_t total = 0;
+  uint32_t hash = 5381;
+  while (!feof(f)) {
+    size_t n = fread(buf, 1, sizeof(buf), f);
+    if (n == 0) break;
+    total += n;
+    hash = s_djb2(buf, n);
+  }
+  fclose(f);
+  s_write_fmt("%s: djb2=%08X  size=%zu  (%s)\n", label, hash, total, path);
+}
+
+static void s_write_file_strings(const char *path, const char *label, int min_len) {
+  FILE *f = fopen(path, "rb");
+  if (!f) {
+    s_write_fmt("%s: (not found)\n", label);
+    return;
+  }
+  s_write_fmt("--- %s (printable strings >= %d chars) ---\n", label, min_len);
+  int c, count = 0, start = 0, pos = 0;
+  char buf[256];
+  while ((c = fgetc(f)) != EOF) {
+    if (c >= 32 && c <= 126) {
+      if (count == 0) start = pos;
+      if (count < (int)sizeof(buf) - 1)
+        buf[count] = (char)c;
+      count++;
+    } else {
+      if (count >= min_len) {
+        buf[count] = '\0';
+        s_write_fmt("  0x%06X: %s\n", start, buf);
+      }
+      count = 0;
+    }
+    pos++;
+  }
+  if (count >= min_len) {
+    buf[count] = '\0';
+    s_write_fmt("  0x%06X: %s\n", start, buf);
+  }
+  fclose(f);
+  s_write_ln("");
+}
+
+static void s_write_file_hex_head(const char *path, const char *label, size_t bytes) {
+  FILE *f = fopen(path, "rb");
+  if (!f) {
+    s_write_fmt("%s: (not found)\n", label);
+    return;
+  }
+  s_write_fmt("--- %s (first %zu bytes) ---\n", label, bytes);
+  uint8_t buf[16];
+  size_t offset = 0;
+  while (offset < bytes && !feof(f)) {
+    size_t n = fread(buf, 1, 16, f);
+    if (n == 0) break;
+    char line[80];
+    int p = snprintf(line, sizeof(line), "  %06zX:", offset);
+    for (size_t i = 0; i < 16; i++) {
+      if (i < n)
+        p += snprintf(line + p, sizeof(line) - p, " %02X", buf[i]);
+      else
+        p += snprintf(line + p, sizeof(line) - p, "   ");
+    }
+    p += snprintf(line + p, sizeof(line) - p, "  ");
+    for (size_t i = 0; i < n; i++)
+      p += snprintf(line + p, sizeof(line) - p, "%c",
+                    (buf[i] >= 32 && buf[i] <= 126) ? buf[i] : '.');
+    s_write_ln(line);
+    offset += n;
+  }
+  fclose(f);
+  s_write_ln("");
+}
+
 static void s_write_fmt(const char *fmt, ...) {
   if (!g_out) return;
   char buf[256];
@@ -439,6 +530,37 @@ __unit_callback int8_t unit_init(const unit_runtime_desc_t *desc) {
       closedir(d);
     }
   }
+
+  s_write_ln("");
+  s_write_header("Binary Analysis");
+  s_write_file_hash("/usr/bin/drumlogued", "  drumlogued");
+  s_write_file_hex_head("/usr/bin/drumlogued", "drumlogued ELF header", 512);
+  s_write_file_strings("/usr/bin/drumlogued", "drumlogued", 8);
+
+  s_write_header("Factory Unit Hashes");
+  s_write_file_hash("/usr/local/share/drumlogued/units/synths/01_Nano.drmlgunit", "  Nano");
+  s_write_file_hash("/usr/local/share/drumlogued/units/masterfx/01_Compressor.drmlgunit", "  Compressor");
+  s_write_file_hash("/usr/local/share/drumlogued/units/masterfx/02_Filter.drmlgunit", "  Filter");
+  s_write_file_hash("/usr/local/share/drumlogued/units/masterfx/03_Boost.drmlgunit", "  Boost");
+  s_write_file_hash("/usr/local/share/drumlogued/units/masterfx/04_EQ_Three.drmlgunit", "  EQ_Three");
+  s_write_file_hash("/usr/local/share/drumlogued/units/delfx/01_Stereo.drmlgunit", "  Stereo_Del");
+  s_write_file_hash("/usr/local/share/drumlogued/units/delfx/02_Mono.drmlgunit", "  Mono_Del");
+  s_write_file_hash("/usr/local/share/drumlogued/units/delfx/03_Tape.drmlgunit", "  Tape_Del");
+  s_write_file_hash("/usr/local/share/drumlogued/units/delfx/04_Stereo_BPM.drmlgunit", "  StereoBPM_Del");
+  s_write_file_hash("/usr/local/share/drumlogued/units/delfx/05_Mono_BPM.drmlgunit", "  MonoBPM_Del");
+  s_write_file_hash("/usr/local/share/drumlogued/units/delfx/06_Tape_BPM.drmlgunit", "  TapeBPM_Del");
+  s_write_file_hash("/usr/local/share/drumlogued/units/revfx/01_Room.drmlgunit", "  Room");
+  s_write_file_hash("/usr/local/share/drumlogued/units/revfx/02_Hall.drmlgunit", "  Hall");
+  s_write_file_hash("/usr/local/share/drumlogued/units/revfx/03_Space.drmlgunit", "  Space");
+  s_write_file_hash("/usr/local/share/drumlogued/units/revfx/04_Riser.drmlgunit", "  Riser");
+  s_write_file_hash("/usr/local/share/drumlogued/units/revfx/05_Submarine.drmlgunit", "  Submarine");
+
+  s_write_header("System Library Hashes");
+  s_write_file_hash("/lib/libc-2.24.so", "  libc");
+  s_write_file_hash("/lib/libm-2.24.so", "  libm");
+  s_write_file_hash("/lib/libstdc++.so.6.0.22", "  libstdc++");
+  s_write_file_hash("/lib/libpthread-2.24.so", "  libpthread");
+  s_write_file_hash("/lib/ld-2.24.so", "  ld-linux");
 
   s_write_ln("");
   s_write_ln("=== END OF REPORT ===");
