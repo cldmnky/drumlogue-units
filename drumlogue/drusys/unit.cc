@@ -211,6 +211,107 @@ __unit_callback int8_t unit_init(const unit_runtime_desc_t *desc) {
   s_scan_dir("/var/lib/drumlogued/userfs", 0, 4);
 
   s_write_ln("");
+  s_write_header("Running Processes");
+  {
+    DIR *d = opendir("/proc");
+    if (d) {
+      struct dirent *e;
+      while ((e = readdir(d)) != nullptr) {
+        if (e->d_name[0] < '0' || e->d_name[0] > '9')
+          continue;
+
+        int pid = atoi(e->d_name);
+        if (pid <= 0) continue;
+
+        char path[128];
+        char buf[256];
+        char comm[64] = "";
+        char state[16] = "";
+        char cmdline[256] = "";
+        unsigned long vm_rss = 0;
+        int threads = 1;
+        int ppid = 0;
+        unsigned long utime = 0, stime = 0;
+
+        snprintf(path, sizeof(path), "/proc/%s/comm", e->d_name);
+        FILE *f = fopen(path, "r");
+        if (f) {
+          if (fgets(comm, sizeof(comm), f)) {
+            size_t len = strlen(comm);
+            if (len > 0 && comm[len - 1] == '\n')
+              comm[len - 1] = '\0';
+          }
+          fclose(f);
+        }
+
+        snprintf(path, sizeof(path), "/proc/%s/cmdline", e->d_name);
+        f = fopen(path, "r");
+        if (f) {
+          size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+          if (n > 0) {
+            buf[n] = '\0';
+            for (size_t i = 0; i < n; i++)
+              if (buf[i] == '\0') buf[i] = ' ';
+            size_t len = strlen(buf);
+            while (len > 0 && buf[len - 1] == ' ')
+              buf[--len] = '\0';
+            snprintf(cmdline, sizeof(cmdline), "%s", buf);
+          }
+          fclose(f);
+        }
+
+        snprintf(path, sizeof(path), "/proc/%s/status", e->d_name);
+        f = fopen(path, "r");
+        if (f) {
+          while (fgets(buf, sizeof(buf), f)) {
+            if (strncmp(buf, "State:", 6) == 0) {
+              char *s = buf + 7;
+              while (*s == ' ' || *s == '\t') s++;
+              size_t len = strlen(s);
+              if (len > 0 && s[len - 1] == '\n')
+                s[len - 1] = '\0';
+              snprintf(state, sizeof(state), "%s", s);
+            }
+            if (strncmp(buf, "VmRSS:", 6) == 0) {
+              sscanf(buf + 6, "%lu", &vm_rss);
+            }
+            if (strncmp(buf, "Threads:", 8) == 0) {
+              sscanf(buf + 8, "%d", &threads);
+            }
+            if (strncmp(buf, "PPid:", 5) == 0) {
+              sscanf(buf + 5, "%d", &ppid);
+            }
+          }
+          fclose(f);
+        }
+
+        snprintf(path, sizeof(path), "/proc/%s/stat", e->d_name);
+        f = fopen(path, "r");
+        if (f) {
+          if (fgets(buf, sizeof(buf), f)) {
+            int dummy;
+            char dummy_s[64];
+            sscanf(buf, "%d %s %c %d %d %d %d %d %*u %*u %*u %*u %*u %lu %lu",
+                   &dummy, dummy_s, dummy_s, &dummy, &dummy, &dummy,
+                   &dummy, &dummy, &utime, &stime);
+          }
+          fclose(f);
+        }
+
+        if (cmdline[0]) {
+          s_write_fmt("  PID %5d  %s  [%s]  %4lu kB  %d thr  PPID %d  CPU %lu+%lu\n",
+                      pid, comm, state, vm_rss, threads, ppid, utime, stime);
+          s_write_fmt("           %s\n", cmdline);
+        } else {
+          s_write_fmt("  PID %5d  %s  [%s]  %4lu kB  %d thr  PPID %d  CPU %lu+%lu\n",
+                      pid, comm, state, vm_rss, threads, ppid, utime, stime);
+        }
+      }
+      closedir(d);
+    }
+  }
+
+  s_write_ln("");
   s_write_header("/proc Entries");
   {
     DIR *d = opendir("/proc");
