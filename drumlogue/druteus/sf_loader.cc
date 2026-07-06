@@ -149,16 +149,16 @@ void sf_load_step(uint32_t frames) {
       break;
     }
     case SF_LOAD_READ: {
-      // Read the entire file in one call — the state machine advances
-      // one state per sf_load_step() invocation, so a chunked loop
-      // would exit the READ state after the first 128 KB chunk and hand
-      // an incomplete buffer to TSF_LOAD.  A single fread blocks for
-      // <1 ms on a local SSD even for a 4 MB SF2, which is acceptable.
+      // Read in 128 KB chunks per callback to avoid blocking the audio
+      // thread on slow UBIFS NAND reads.  A 4.3 MB SF2 takes ~34 frames
+      // (~181 ms) to load but never blocks buffer delivery.
+      static constexpr size_t kChunkSize = 131072;  // 128 KB
       if (buf_pos >= buf_size)
         break;
-      size_t n = fread(soundfont_buf, 1, buf_size, fp);
-      if (n < buf_size && !feof(fp)) {
-        // Real I/O error — discard partial buffer.
+      size_t remaining = buf_size - buf_pos;
+      size_t chunk = (remaining > kChunkSize) ? kChunkSize : remaining;
+      size_t n = fread(soundfont_buf + buf_pos, 1, chunk, fp);
+      if (n == 0 && !feof(fp)) {
         fclose(fp);
         fp = nullptr;
         free(soundfont_buf);
@@ -168,7 +168,7 @@ void sf_load_step(uint32_t frames) {
         state.store(SF_LOAD_IDLE, std::memory_order_relaxed);
         break;
       }
-      buf_pos = n;  // actual bytes read; auto-advance moves to CLOSE
+      buf_pos += n;
       break;
     }
     case SF_LOAD_CLOSE: {
@@ -216,7 +216,10 @@ void sf_load_step(uint32_t frames) {
   }
 
   uint32_t cur = state.load(std::memory_order_relaxed);
-  if (cur != SF_LOAD_IDLE && cur != SF_LOAD_FINISHED) {
+  // Don't auto-advance from READ state while chunked loading is in
+  // progress — we stay in SF_LOAD_READ until buf_pos reaches buf_size.
+  if (cur != SF_LOAD_IDLE && cur != SF_LOAD_FINISHED &&
+      !(cur == SF_LOAD_READ && buf_pos < buf_size)) {
     state.store(cur + 1, std::memory_order_relaxed);
   }
 }
