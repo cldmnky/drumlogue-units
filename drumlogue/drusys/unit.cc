@@ -209,6 +209,41 @@ __unit_callback int8_t unit_init(const unit_runtime_desc_t *desc) {
   s_scan_dir("/tmp", 0, 2);
   s_scan_dir("/var/lib/drumlogued", 0, 3);
   s_scan_dir("/var/lib/drumlogued/userfs", 0, 4);
+  s_scan_dir("/usr/local/share/drumlogued", 0, 2);
+  s_scan_dir("/usr/bin", 0, 1);
+  s_scan_dir("/usr/lib", 0, 1);
+  s_scan_dir("/lib", 0, 1);
+  s_scan_dir("/dev", 0, 1);
+
+  s_write_ln("");
+  s_write_header("Root Filesystem (/)");
+  {
+    DIR *d = opendir("/");
+    if (d) {
+      struct dirent *e;
+      while ((e = readdir(d)) != nullptr) {
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)
+          continue;
+        if (strcmp(e->d_name, "proc") == 0 ||
+            strcmp(e->d_name, "sys") == 0)
+          continue;
+        char full[512];
+        snprintf(full, sizeof(full), "/%s", e->d_name);
+        struct stat st;
+        if (stat(full, &st) == 0) {
+          if      (S_ISDIR(st.st_mode)) s_write_fmt("  d /%s/\n", e->d_name);
+          else if (S_ISLNK(st.st_mode)) s_write_fmt("  l /%s ->\n", e->d_name);
+          else if (S_ISREG(st.st_mode)) s_write_fmt("    /%s (%ld)\n", e->d_name, (long)st.st_size);
+        } else {
+          s_write_fmt("  ? /%s\n", e->d_name);
+        }
+      }
+      closedir(d);
+    }
+  }
+
+  s_write_ln("");
+  s_write_header("Kernel Boot Arguments");
 
   s_write_ln("");
   s_write_header("Running Processes");
@@ -350,6 +385,55 @@ __unit_callback int8_t unit_init(const unit_runtime_desc_t *desc) {
           fscanf(f, "%d", &temp);
           s_write_fmt("%s: %d.%03d C\n", e->d_name, temp / 1000, temp % 1000);
           fclose(f);
+        }
+      }
+      closedir(d);
+    }
+  }
+
+  s_write_ln("");
+  s_write_header("Kernel Boot Arguments");
+  s_copy_file("/proc/cmdline", "cmdline");
+
+  s_write_header("drumlogued Environment");
+  {
+    FILE *f = fopen("/proc/102/environ", "r");
+    if (f) {
+      char buf[4096];
+      size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+      if (n > 0) {
+        buf[n] = '\0';
+        for (size_t i = 0; i < n; i++)
+          if (buf[i] == '\0') buf[i] = '\n';
+        s_write_ln(buf);
+      }
+      fclose(f);
+    } else {
+      s_write_ln("  (not accessible)");
+    }
+  }
+
+  s_write_header("drumlogued Resource Limits");
+  s_copy_file("/proc/102/limits", "PID 102 limits");
+
+  s_write_header("Network Interfaces");
+  s_copy_file("/proc/net/dev", "/proc/net/dev");
+
+  s_write_header("ALSA Audio Devices");
+  {
+    DIR *d = opendir("/proc/asound");
+    if (d) {
+      struct dirent *e;
+      while ((e = readdir(d)) != nullptr) {
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)
+          continue;
+        s_write_fmt("  /proc/asound/%s\n", e->d_name);
+        if (e->d_name[0] == 'c' && e->d_name[1] >= '0' && e->d_name[1] <= '9') {
+          char path[128];
+          snprintf(path, sizeof(path), "/proc/asound/%s/pcm0p/info", e->d_name);
+          s_copy_file(path, path);
+          snprintf(path, sizeof(path), "/proc/asound/%s/pcm0p/sub0/hw_params", e->d_name);
+          s_copy_file(path, path);
         }
       }
       closedir(d);
