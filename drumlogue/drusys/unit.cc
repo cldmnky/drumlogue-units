@@ -334,9 +334,6 @@ __unit_callback int8_t unit_init(const unit_runtime_desc_t *desc) {
   }
 
   s_write_ln("");
-  s_write_header("Kernel Boot Arguments");
-
-  s_write_ln("");
   s_write_header("Running Processes");
   {
     DIR *d = opendir("/proc");
@@ -483,8 +480,66 @@ __unit_callback int8_t unit_init(const unit_runtime_desc_t *desc) {
   }
 
   s_write_ln("");
+  s_write_header("SysFS Class Overview");
+  {
+    DIR *d = opendir("/sys/class");
+    if (d) {
+      struct dirent *e;
+      while ((e = readdir(d)) != nullptr) {
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)
+          continue;
+        s_write_fmt("  /sys/class/%s\n", e->d_name);
+        char sub[256];
+        snprintf(sub, sizeof(sub), "/sys/class/%s", e->d_name);
+        DIR *sd = opendir(sub);
+        if (sd) {
+          struct dirent *se;
+          while ((se = readdir(sd)) != nullptr) {
+            if (strcmp(se->d_name, ".") == 0 || strcmp(se->d_name, "..") == 0)
+              continue;
+            s_write_fmt("    %s\n", se->d_name);
+          }
+          closedir(sd);
+        }
+      }
+      closedir(d);
+    }
+  }
+
   s_write_header("Kernel Boot Arguments");
   s_copy_file("/proc/cmdline", "cmdline");
+
+  s_write_header("System Configuration (/etc)");
+  s_copy_file("/etc/inittab", "inittab");
+  s_copy_file("/etc/profile", "profile");
+  s_copy_file("/etc/globals", "globals");
+  s_copy_file("/etc/globals2", "globals2");
+  s_copy_file("/etc/chain", "chain");
+  s_copy_file("/etc/mdev.conf", "mdev.conf");
+  s_copy_file("/etc/passwd", "passwd");
+  s_copy_file("/etc/group", "group");
+
+  s_write_header("Device Tree");
+  s_copy_file("/proc/device-tree/model", "model");
+  s_copy_file("/proc/device-tree/compatible", "compatible");
+  {
+    DIR *d = opendir("/proc/device-tree");
+    if (d) {
+      struct dirent *e;
+      while ((e = readdir(d)) != nullptr) {
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)
+          continue;
+        s_write_fmt("  /proc/device-tree/%s\n", e->d_name);
+      }
+      closedir(d);
+    }
+  }
+
+  s_write_header("Boot Directory (/boot)");
+  s_scan_dir("/boot", 0, 2);
+
+  s_write_header("Kernel Modules");
+  s_copy_file("/proc/modules", "/proc/modules");
 
   s_write_header("drumlogued Environment");
   {
