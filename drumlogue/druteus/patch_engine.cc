@@ -42,6 +42,18 @@ float cached_xfade_lo = 0.0f;
 float cached_xfade_hi = 1.0f;
 float cached_xfade_span = 0.0f;
 
+static int s_tsf_voice_pool_size() {
+  int v = Params[param_max_voices];
+  if (v < 1) v = 1;
+  if (v > 16) v = 16;
+  return patch_has_secondary ? v * 2 : v;
+}
+
+static void s_apply_tsf_voice_pool_size() {
+  if (soundfont != nullptr)
+    tsf_set_max_voices(soundfont, s_tsf_voice_pool_size());
+}
+
 void s_load_patch(uint16_t patch_idx) {
   if (patch_idx >= PROTEUS_PATCH_COUNT)
     return;
@@ -114,6 +126,8 @@ void s_load_patch(uint16_t patch_idx) {
     patch_tune_secondary = 0.0f;
   }
 
+  s_apply_tsf_voice_pool_size();
+
   cached_xfade_center = current_patch.crossfadebalance / kMidiMax;
   cached_xfade_switch_point = current_patch.switchpoint / kMidiMax;
   cached_xfade_width = current_patch.crossfadeamount > 0
@@ -126,7 +140,6 @@ void s_load_patch(uint16_t patch_idx) {
 void s_apply_params() {
   if (soundfont == nullptr)
     return;
-  tsf_set_max_voices(soundfont, Params[param_max_voices]);
   s_load_patch(Params[param_preset]);
 
   // Apply the latest user-set TSF channel state (volume/pan/fine-tune)
