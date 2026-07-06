@@ -588,6 +588,24 @@ __unit_callback int8_t unit_init(const unit_runtime_desc_t *desc) {
 
   s_write_ln("");
   s_write_header("Binary Analysis");
+
+  s_write_header("System Identity");
+  s_copy_file("/VERSION", "/VERSION");
+  s_copy_file("/linuxrc", "/linuxrc");
+  s_scan_dir("/fw", 0, 2);
+  s_scan_dir("/fs", 0, 2);
+
+  s_write_header("File Integrity (checksums)");
+  {
+    struct stat st;
+    if (stat("/proc/config.gz", &st) == 0)
+      s_write_fmt("  /proc/config.gz exists (%ld bytes, gzip compressed) — use 'zcat' to read\n", (long)st.st_size);
+    else
+      s_write_ln("  /proc/config.gz: (not found)");
+  }
+  s_copy_file("/checksums", "/checksums (first 1000 bytes)");
+
+  s_write_header("Binary Analysis");
   s_write_file_hash("/usr/bin/drumlogued", "  drumlogued");
   s_write_file_hex_head("/usr/bin/drumlogued", "drumlogued ELF header", 512);
   s_write_file_strings("/usr/bin/drumlogued", "drumlogued", 8);
