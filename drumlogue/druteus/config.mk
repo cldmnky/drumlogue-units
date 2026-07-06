@@ -32,21 +32,19 @@ ULIBS   = -lm
 USE_CWARN   = -W -Wall -Wextra -Wno-unused-local-typedefs -Wno-unused-parameter
 USE_CXXWARN = -W -Wall -Wextra -Wno-ignored-qualifiers -Wno-unused-local-typedefs -Wno-unused-parameter
 
-# Preprocessor defines.  USE_NEON enables NEON codecs in common/neon_dsp.h
-# and simd_utils.h.  PERF_MON enables cycle-counting instrumentation for
-# profiling render cost on hardware.
-# NOTE: -mfpu=neon -mfloat-abi=hard are already set by the SDK Makefile
-# (OPT += -mfpu=neon-vfpv4 -mfloat-abi=hard); do NOT repeat them here.
-# NOTE: -ffast-math was removed — it enables -ffinite-math-only which
-# replaces standard powf/expf/log with __finite variants that break TSF's
-# IEEE assumptions (e.g. log(0) in envelope/gain calculations).
-UDEFS = -DUSE_NEON
-UDEFS += -DPERF_MON
-CXXSRC += $(COMMON_SRC_PATH)/perf_mon.cc
-UDEFS += -O2
-
-# Conditional QEMU ARM override — test-unit.sh passes __QEMU_ARM__=1 so
-# perf_mon.h uses std::chrono instead of the real ARM DWT register.
-ifeq ($(__QEMU_ARM__),1)
-  UDEFS += -D__QEMU_ARM__
+# Performance monitoring — enabled via: ./build.sh druteus build PERF_MON=1
+# PERF_MON reads ARM DWT PMCCNTR (0xE0001004) which requires the debug
+# unit to be enabled by firmware.  Default to OFF for production builds
+# to avoid bus faults.  For QEMU: PERF_MON=1 __QEMU_ARM__=1
+ifeq ($(PERF_MON),1)
+  UDEFS = -DPERF_MON
+  CXXSRC += $(COMMON_SRC_PATH)/perf_mon.cc
+  ifeq ($(__QEMU_ARM__),1)
+    UDEFS += -D__QEMU_ARM__
+  endif
+else
+  UDEFS =
 endif
+
+UDEFS += -DUSE_NEON
+UDEFS += -O2
