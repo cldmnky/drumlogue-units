@@ -36,3 +36,4 @@ extern int32_t Params[param_num];
 void params_set(uint8_t index, int32_t value);
 int32_t params_get(uint8_t index);
 const char *params_get_str(uint8_t index, int32_t value);
+const char *unit_get_perf_display();
