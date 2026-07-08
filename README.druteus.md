@@ -31,7 +31,7 @@ A SoundFont (SF2) sample player for the Korg drumlogue, featuring the complete E
 5. Safely eject the drumlogue and restart it
 6. The synth will appear as "DRUTEUS" in the Synth slot selection
 
-**Recommended**: Bundle `Proteus1_Instruments.sf2` and `Proteus1_Presets.sf2` in `Programs/` for the full 442-patch experience.
+**Recommended**: Bundle `Proteus1_Instruments.sf2` in `Programs/` for the full 442-patch experience.
 
 ## Parameters
 
@@ -130,7 +130,6 @@ Place `.sf2` files in `/var/lib/drumlogued/userfs/Programs` on the drumlogue. Th
 
 For the full Proteus/1 experience, include:
 - `Proteus1_Instruments.sf2` — 126 instrument building blocks (auto-selected at startup)
-- `Proteus1_Presets.sf2` — 129 factory preset patches (optional, patches are also embedded)
 
 Download from [musical-artifacts.com](https://musical-artifacts.com/artifacts/764).
 
