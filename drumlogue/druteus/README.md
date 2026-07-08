@@ -40,6 +40,7 @@ Druteus is a SoundFont (SF2) sample player that recreates the E-mu Proteus/1 dua
 5. The synth appears as **"DRUTEUS"** in the Synth slot selection
 
 **Recommended**: Bundle `Proteus1_Instruments.sf2` (4.3 MB) in `Programs/` for the full 442-patch experience.
+Download from [musical-artifacts.com](https://musical-artifacts.com/artifacts/764).
 
 ---
 
@@ -177,6 +178,8 @@ Place `.sf2` files in `/var/lib/drumlogued/userfs/Programs`. The unit scans this
 For the full Proteus/1 experience:
 - `Proteus1_Instruments.sf2` (4.3 MB) — 126 instrument building blocks (auto-selected at startup)
 - `Proteus1_Presets.sf2` (4.2 MB) — 129 factory preset patches (optional, patches embedded)
+
+Download the SF2 files from [musical-artifacts.com](https://musical-artifacts.com/artifacts/764).
 
 ---
 
