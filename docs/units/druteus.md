@@ -109,10 +109,11 @@ Druteus has **24 parameters** across **6 pages**.
 ## Installation
 
 1. Download `druteus.drmlgunit` from the [releases page](https://github.com/cldmnky/drumlogue-units/releases)
-2. Copy your `.sf2` files to `Programs/` on the drumlogue
-3. Copy `druteus.drmlgunit` to `Units/Synth/`
-4. Safely eject and restart
-5. Select **"DRUTEUS"** in the Synth slot
+2. Download `Proteus1_Instruments.sf2` (4.3 MB) from [musical-artifacts.com](https://musical-artifacts.com/artifacts/764)
+3. Copy the `.sf2` file to `Programs/` on the drumlogue
+4. Copy `druteus.drmlgunit` to `Units/Synth/`
+5. Safely eject and restart
+6. Select **"DRUTEUS"** in the Synth slot
 
 **Recommended SF2 files:** `Proteus1_Instruments.sf2` (4.3 MB) for the full 442-patch library.
 
