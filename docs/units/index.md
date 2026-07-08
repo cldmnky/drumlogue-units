@@ -41,6 +41,16 @@ Browse all available drumlogue units. Each unit can be downloaded and installed 
     </div>
   </a>
   
+  <a href="{{ site.baseurl }}/units/druteus/" class="unit-list-item">
+    <div class="unit-icon">🎹</div>
+    <div class="unit-info">
+      <h3>Druteus Synth</h3>
+      <span class="unit-type-badge synth">Synthesizer</span>
+      <span class="unit-version">v0.1.0</span>
+      <p>E-mu Proteus/1 SF2 soundfont player with 442 factory presets, dual-layer voice engine, AHDSR envelopes, crossfade/keyboard splits, LFO modulation, and DSP effects. 16-voice polyphonic synth powered by TinySoundFont.</p>
+    </div>
+  </a>
+  
   <a href="{{ site.baseurl }}/units/drupiter-synth/" class="unit-list-item">
     <div class="unit-icon">🪐</div>
     <div class="unit-info">
