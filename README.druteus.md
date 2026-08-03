@@ -26,7 +26,7 @@ A SoundFont (SF2) sample player for the Korg drumlogue, featuring the complete E
 
 1. Download `Proteus1_Instruments.sf2` (4.3 MB) from [musical-artifacts.com](https://musical-artifacts.com/artifacts/764)
 2. Copy the `.sf2` file to the `Programs/` folder on the drumlogue (via USB mass storage)
-3. Download `druteus.drmlgunit`
+3. Download [`druteus-v0.1.0.drmlgunit`](https://github.com/cldmnky/drumlogue-units/releases/download/druteus/v0.1.0/druteus-v0.1.0.drmlgunit)
 4. Copy the `.drmlgunit` file to the `Units/Synth/` folder on the drumlogue
 5. Safely eject the drumlogue and restart it
 6. The synth will appear as "DRUTEUS" in the Synth slot selection

@@ -34,7 +34,7 @@ Druteus is a SoundFont (SF2) sample player that recreates the E-mu Proteus/1 dua
 ## Installation
 
 1. Copy your `.sf2` files to the `Programs/` folder on the drumlogue (via USB mass storage)
-2. Download `druteus.drmlgunit`
+2. Download `druteus-v0.1.0.drmlgunit` from the v0.1.0 release
 3. Copy the `.drmlgunit` file to `Units/Synth/` on the drumlogue
 4. Safely eject the drumlogue and restart
 5. The synth appears as **"DRUTEUS"** in the Synth slot selection
@@ -197,7 +197,7 @@ NEON SIMD and float-precision TSF lowpass (vs double) reduce per-voice CPU by 40
 
 ### Unit doesn't load
 
-- Ensure file is named `druteus.drmlgunit`
+- Ensure the downloaded file has the `.drmlgunit` extension
 - Check file is in `Units/Synth/`, not a subdirectory
 - Power cycle the drumlogue
 - Verify drumlogue firmware is up to date
@@ -242,7 +242,7 @@ NEON SIMD and float-precision TSF lowpass (vs double) reduce per-voice CPU by 40
 
 ## Version History
 
-**v0.1.0** (2026-07-08)
+**v0.1.0** (2026-08-03)
 - SF2 SoundFont playback via TinySoundFont
 - 442 Proteus/1 factory presets with dual-layer voice engine
 - Per-patch AHDSR envelopes and LFO modulation matrix

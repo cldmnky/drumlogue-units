@@ -40,6 +40,13 @@ Jupiter-8 inspired polyphonic/monophonic synthesizer with dual DCOs, multi-mode 
 
 [Documentation](https://cldmnky.github.io/drumlogue-units/units/drupiter-synth/) • [Download](https://github.com/cldmnky/drumlogue-units/releases/tag/drupiter-synth/v1.2.0)
 
+### Druteus Synth (v0.1.0)
+E-mu Proteus/1 SoundFont player with 442 factory patches, dual-layer voice architecture, modulation, effects, and 16-voice polyphony.
+
+**Features:** SF2 playback • 442 Proteus/1 patches • Dual layers • AHDSR envelopes • Crossfade/splits • Chorus/reverb • Trance gate • User LFO
+
+[Documentation](https://cldmnky.github.io/drumlogue-units/units/druteus/) • [Download](https://github.com/cldmnky/drumlogue-units/releases/tag/druteus/v0.1.0)
+
 ---
 
 ## 🚀 Quick Start for Users
@@ -126,6 +133,7 @@ drumlogue-units/
 │   ├── elementish-synth/              # Elementish synthesizer
 │   ├── pepege-synth/                  # PPG wavetable synth
 │   ├── drupiter-synth/                # Jupiter-8 synth
+│   ├── druteus/                       # Proteus/1 SoundFont synth
 │   └── common/                        # Shared DSP utilities
 ├── eurorack/                          # Mutable Instruments (submodule)
 ├── logue-sdk/                         # Korg SDK (submodule)

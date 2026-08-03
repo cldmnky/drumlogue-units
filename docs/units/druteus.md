@@ -7,6 +7,8 @@ version: v0.1.0
 icon: 🎹
 tagline: E-mu Proteus/1 SF2 soundfont player with 442 factory presets
 description: Polyphonic SoundFont player recreating the E-mu Proteus/1 with dual-layer voice architecture, per-patch AHDSR envelopes, crossfade/keyboard splits, LFO modulation, DSP effects, and trance gate — all in a 16-voice synth.
+filename: druteus-v0.1.0.drmlgunit
+download_url: https://github.com/cldmnky/drumlogue-units/releases/download/druteus/v0.1.0/druteus-v0.1.0.drmlgunit
 permalink: /units/druteus/
 ---
 
@@ -108,10 +110,10 @@ Druteus has **24 parameters** across **6 pages**.
 
 ## Installation
 
-1. Download `druteus.drmlgunit` from the [releases page](https://github.com/cldmnky/drumlogue-units/releases)
+1. Download `druteus-v0.1.0.drmlgunit` from the [v0.1.0 release](https://github.com/cldmnky/drumlogue-units/releases/tag/druteus/v0.1.0)
 2. Download `Proteus1_Instruments.sf2` (4.3 MB) from [musical-artifacts.com](https://musical-artifacts.com/artifacts/764)
 3. Copy the `.sf2` file to `Programs/` on the drumlogue
-4. Copy `druteus.drmlgunit` to `Units/Synth/`
+4. Copy `druteus-v0.1.0.drmlgunit` to `Units/Synth/`
 5. Safely eject and restart
 6. Select **"DRUTEUS"** in the Synth slot
 
@@ -172,10 +174,22 @@ Use TGATE (1–32 steps) synced to drumlogue tempo for gate patterns on sustaine
 
 ---
 
+## Download
+
+<div class="download-section">
+  <a href="https://github.com/cldmnky/drumlogue-units/releases/download/druteus/v0.1.0/druteus-v0.1.0.drmlgunit" class="download-button">
+    Download Druteus v0.1.0
+  </a>
+  <p class="download-info">File: druteus-v0.1.0.drmlgunit</p>
+</div>
+
+---
+
 ## Documentation
 
 - [README.md](https://github.com/cldmnky/drumlogue-units/blob/main/drumlogue/druteus/README.md) — full documentation
 - [README.druteus.md](https://github.com/cldmnky/drumlogue-units/blob/main/README.druteus.md) — overview at repo root
+- [RELEASE_NOTES.md](https://github.com/cldmnky/drumlogue-units/blob/main/drumlogue/druteus/RELEASE_NOTES.md) — v0.1.0 release notes
 
 ---
 
