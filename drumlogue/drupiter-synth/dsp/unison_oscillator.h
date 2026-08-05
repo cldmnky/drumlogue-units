@@ -171,9 +171,9 @@ public:
 #endif
         
         // Scale by voice count to prevent clipping (same for both paths)
-        float scale = 1.0f / sqrtf(static_cast<float>(num_voices_));
-        *left *= scale;
-        *right *= scale;
+        // OPTIMIZATION: precomputed when the voice count changes
+        *left *= scale_;
+        *right *= scale_;
     }
     
     /**
@@ -196,6 +196,9 @@ private:
     float base_freq_;                     // Center frequency
     float detune_cents_;                  // Detune amount in cents
     float stereo_spread_;                 // Stereo width (0-1)
+    float scale_;                         // 1/sqrt(num_voices_) mixing scale (cached)
+    JupiterDCO::Waveform waveform_;       // Current waveform (change detection)
+    float pulse_width_;                   // Current pulse width (change detection)
     
     /**
      * @brief Calculate detune ratios using golden ratio spread
@@ -206,6 +209,11 @@ private:
      * @brief Calculate pan positions using golden ratio spiral
      */
     void CalculatePanPositions();
+    
+    /**
+     * @brief Recompute the cached mixing scale from the voice count
+     */
+    void UpdateScale();
     
     /**
      * @brief Convert cents to frequency ratio

@@ -84,7 +84,12 @@ float UnisonRenderer::RenderUnison(
     freq2 *= pitch_mod_ratio;
     
     // Apply pitch bend to DCO2 (matches unison_freq behavior)
-    freq2 *= smoothed_pitch_bend;
+    // BUGFIX: was multiplying by the raw semitone value, which zeroed the
+    // frequency at center bend and produced wrong ratios otherwise
+    if (smoothed_pitch_bend != 0.0f) {
+        const float pitch_bend_ratio = semitones_to_ratio(smoothed_pitch_bend);
+        freq2 *= pitch_bend_ratio;
+    }
 
     synth.GetDCO2().SetFrequency(freq2);
     float dco2_out = synth.GetDCO2().Process();

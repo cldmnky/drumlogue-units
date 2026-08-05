@@ -4,6 +4,8 @@ set -e
 # Simple test script for drumlogue units in QEMU ARM emulation
 # Usage: ./test-unit.sh <unit-name> [--profile] [--perf-mon]
 # Example: ./test-unit.sh clouds-revfx --profile --perf-mon
+# Extra args can be passed to the unit host via EXTRA_ARGS (space separated):
+#   EXTRA_ARGS="--hold-notes --no-rand-params" ./test-unit.sh drupiter-synth --profile
 
 UNIT_NAME="$1"
 PROFILE_FLAG=""
@@ -58,8 +60,21 @@ elif [ ! -f "$UNIT_FILE" ]; then
     exit 1
 fi
 
-# Check if ARM host exists
+# Check if ARM host exists and is up to date (source files newer than binary)
+HOST_SOURCES="unit_host.c wav_file.c sdk_stubs.c unit_host.h wav_file.h sdk_stubs.h Makefile.arm"
+HOST_STALE=0
 if [ ! -f "unit_host_arm" ]; then
+    HOST_STALE=1
+else
+    for src in $HOST_SOURCES; do
+        if [ "$src" -nt "unit_host_arm" ]; then
+            HOST_STALE=1
+            break
+        fi
+    done
+fi
+
+if [ "$HOST_STALE" -eq 1 ]; then
     echo "⚙️  Building ARM unit host..."
     # Use appropriate Makefile based on OS
     if [[ "$(uname -s)" == "Darwin" ]]; then
@@ -74,7 +89,16 @@ fi
 # Check if test signals exist (skip if only testing presets)
 if [ -z "$TEST_PRESETS_FLAG" ] && [ ! -f "$INPUT_WAV" ]; then
     echo "⚙️  Generating test signals..."
-    python3 generate_signals.py
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        # macOS: generate inside container (host may lack numpy/soundfile)
+        podman run --rm --entrypoint bash \
+            -v "$(pwd):/workspace:Z" \
+            -w /workspace \
+            ubuntu:22.04 \
+            -c 'apt-get update -qq && apt-get install -y -qq python3 python3-numpy python3-soundfile >/dev/null 2>&1 && python3 generate_signals.py'
+    else
+        python3 generate_signals.py
+    fi
 fi
 
 # Create output directory
@@ -90,7 +114,8 @@ echo ""
 # Run test - different approach for macOS (podman) vs Linux (native)
 if [[ "$(uname -s)" == "Darwin" ]]; then
     # macOS: Use Podman container with qemu-user-static
-    podman run --rm -it \
+    # Note: -i (not -it) so this works from make and CI without a TTY
+    podman run --rm -i \
         -v "$(pwd):/workspace:Z" \
         -v "$(pwd)/../..:/repo:ro,Z" \
         -w /workspace \
@@ -105,7 +130,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
             /repo/drumlogue/${UNIT_NAME}/${UNIT_FILE_NAME}.drmlgunit \
             /workspace/${INPUT_WAV} \
             /workspace/${OUTPUT_WAV} \
-            --verbose $PROFILE_FLAG $PERF_MON_FLAG
+            --verbose $PROFILE_FLAG $PERF_MON_FLAG $EXTRA_ARGS
     "
 else
     # Linux: Use native qemu-arm directly
@@ -114,7 +139,7 @@ else
         ../../drumlogue/${UNIT_NAME}/${UNIT_FILE_NAME}.drmlgunit \
         ./${INPUT_WAV} \
         ./${OUTPUT_WAV} \
-        --verbose $PROFILE_FLAG $PERF_MON_FLAG
+        --verbose $PROFILE_FLAG $PERF_MON_FLAG $EXTRA_ARGS
 fi
 
 if [ $? -eq 0 ]; then

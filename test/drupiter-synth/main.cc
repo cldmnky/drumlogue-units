@@ -2468,6 +2468,86 @@ static bool TestCatchableValueFloat() {
 }
 
 // ============================================================================
+// Hub Multi-Select: destination switching, value restore, catch re-basing
+// ============================================================================
+
+static bool TestHubMultiSelect() {
+    std::cout << "\n--- Hub Multi-Select (destination switching) Test ---" << std::endl;
+    
+    DrupiterSynth synth;
+    unit_runtime_desc_t desc = {};
+    desc.api = UNIT_API_INIT(0, 1);
+    desc.samplerate = 48000;
+    desc.frames_per_buffer = 64;
+    desc.input_channels = 0;
+    desc.output_channels = 2;
+    if (synth.Init(&desc) != k_unit_err_none) {
+        std::cout << "    ERROR: Synth init failed" << std::endl;
+        return false;
+    }
+    
+    // 1. Select S MODE (dest 14) and set POLY (UI 50 -> clamped 1)
+    synth.SetParameter(DrupiterSynth::PARAM_MOD_HUB, MOD_SYNTH_MODE);
+    synth.SetParameter(DrupiterSynth::PARAM_MOD_AMT, 50);
+    if (synth.GetParameter(DrupiterSynth::PARAM_MOD_AMT) != 50 ||
+        synth.GetAllocator().GetMode() != dsp::SYNTH_MODE_POLYPHONIC) {
+        std::cout << "    ERROR: S MODE=50 should be POLY (value="
+                  << synth.GetParameter(DrupiterSynth::PARAM_MOD_AMT)
+                  << ", mode=" << (int)synth.GetAllocator().GetMode() << ")" << std::endl;
+        return false;
+    }
+    
+    // 2. Switch to UNI DET (dest 15) and set 30
+    synth.SetParameter(DrupiterSynth::PARAM_MOD_HUB, MOD_UNISON_DETUNE);
+    synth.SetParameter(DrupiterSynth::PARAM_MOD_AMT, 30);
+    if (synth.GetParameter(DrupiterSynth::PARAM_MOD_AMT) != 30) {
+        std::cout << "    ERROR: UNI DET value not stored (got "
+                  << synth.GetParameter(DrupiterSynth::PARAM_MOD_AMT) << ")" << std::endl;
+        return false;
+    }
+    
+    // 3. Switch back to S MODE: the per-destination value must restore to 50
+    //    and the mode must remain POLY
+    synth.SetParameter(DrupiterSynth::PARAM_MOD_HUB, MOD_SYNTH_MODE);
+    if (synth.GetParameter(DrupiterSynth::PARAM_MOD_AMT) != 50) {
+        std::cout << "    ERROR: S MODE value not restored on switch-back (got "
+                  << synth.GetParameter(DrupiterSynth::PARAM_MOD_AMT) << ")" << std::endl;
+        return false;
+    }
+    if (synth.GetAllocator().GetMode() != dsp::SYNTH_MODE_POLYPHONIC) {
+        std::cout << "    ERROR: mode changed while switching destinations" << std::endl;
+        return false;
+    }
+    
+    // 4. Catch re-basing: an immediate MOD AMT turn after a switch must apply
+    //    (no stale knob-catch state from the previous destination)
+    synth.SetParameter(DrupiterSynth::PARAM_MOD_AMT, 100);
+    if (synth.GetParameter(DrupiterSynth::PARAM_MOD_AMT) != 100 ||
+        synth.GetAllocator().GetMode() != dsp::SYNTH_MODE_UNISON) {
+        std::cout << "    ERROR: post-switch turn not applied (value="
+                  << synth.GetParameter(DrupiterSynth::PARAM_MOD_AMT) << ")" << std::endl;
+        return false;
+    }
+    
+    // 5. Preset load must preserve the selected destination's hub value
+    //    (previously SetParameter(MOD_AMT, 0) clobbered it to 0)
+    synth.LoadPreset(0);  // Init preset: MOD_HUB=MOD_VCF_TYPE, hub[VCF_TYPE]=1 (LP24)
+    {
+        uint8_t dest = synth.GetCurrentPreset().params[DrupiterSynth::PARAM_MOD_HUB];
+        int32_t expected = synth.GetCurrentPreset().hub_values[dest];
+        if (synth.GetParameter(DrupiterSynth::PARAM_MOD_AMT) != expected) {
+            std::cout << "    ERROR: preset load clobbered hub value for dest "
+                      << (int)dest << " (expected " << expected << ", got "
+                      << synth.GetParameter(DrupiterSynth::PARAM_MOD_AMT) << ")" << std::endl;
+            return false;
+        }
+    }
+    
+    std::cout << "    PASSED: Hub multi-select value restore, catch re-basing, preset load" << std::endl;
+    return true;
+}
+
+// ============================================================================
 // JP-8 Phase 6: Performance & Stability Tests
 // ============================================================================
 
@@ -2932,6 +3012,9 @@ int main(int argc, char** argv) {
         ok = false;
     }
     if (!TestCatchableValueFloat()) {
+        ok = false;
+    }
+    if (!TestHubMultiSelect()) {
         ok = false;
     }
     

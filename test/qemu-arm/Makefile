@@ -13,7 +13,7 @@ else
 endif
 
 # Define the targets to delegate
-.PHONY: all help install-podman check-podman podman-build podman-test test-unit podman-shell generate-signals performance-test clean status setup which-makefile
+.PHONY: all help install-podman check-podman podman-build podman-test test-unit perf-test podman-shell generate-signals performance-test clean status setup which-makefile
 
 # Delegate all targets to the appropriate Makefile
 all:
@@ -23,7 +23,7 @@ all:
 	$(MAKE) -f $(MAKEFILE_TO_USE) all
 
 # Delegate common targets
-help install-podman check-podman podman-build podman-test test-unit podman-shell generate-signals performance-test clean status:
+help install-podman check-podman podman-build podman-test test-unit perf-test podman-shell generate-signals performance-test clean status:
 	$(MAKE) -f $(MAKEFILE_TO_USE) $@
 
 # Quick setup for new users (macOS)

@@ -31,6 +31,12 @@ public:
     // Lookup table sizes
     static constexpr int kTanhTableSize = 512;        // Tanh[-4,4] with 512 entries
     static constexpr int kKbdTrackingTableSize = 128;  // One entry per MIDI note
+
+    // Coefficient recompute threshold (Hz). Modulation sweeps move the cutoff
+    // continuously; recomputing the filter coefficients at the full sample
+    // rate is the dominant polyphonic CPU cost. Quantizing updates to 1 Hz
+    // steps is inaudible and matches the mono path gating in drupiter_synth.cc.
+    static constexpr float kCutoffUpdateThresholdHz = 1.0f;
     
     /**
      * @brief Filter modes

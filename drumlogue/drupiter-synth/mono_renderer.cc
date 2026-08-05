@@ -57,12 +57,23 @@ float MonoRenderer::RenderMono(
     synth.GetDCO2().SetFrequency(freq2);
 
     // Only process DCO2 if it's audible (level > 0) or needed for XMOD
-    const bool dco2_needed = (dco2_level > kMinModulation) || (xmod_depth > kMinModulation);
+    // BUGFIX: also run DCO2 as the sync master when SYNC is enabled, even if
+    // its level is zero - otherwise the SYNC parameter had no audible effect
+    const bool sync_enabled = synth.GetSyncMode() != 0;
+    const bool dco2_needed = (dco2_level > kMinModulation) || (xmod_depth > kMinModulation) || sync_enabled;
 
     float dco2_out = 0.0f;
     if (dco2_needed) {
         // Process DCO2 first to get fresh output for FM
         dco2_out = synth.GetDCO2().Process();
+
+        // Hard sync (DCO1 slave to DCO2 master): reset DCO1 phase when DCO2 wraps
+        // Note: Sync disabled when XMOD is active (Jupiter-8 processing order)
+        if (sync_enabled && xmod_depth <= kMinModulation) {
+            if (synth.GetDCO2().DidWrap()) {
+                synth.GetDCO1().ResetPhase();
+            }
+        }
 
         // Cross-modulation (DCO2 . DCO1 FM) - Jupiter-8 style
         // Only apply FM if XMOD depth is significant

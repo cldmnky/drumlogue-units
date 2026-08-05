@@ -46,6 +46,8 @@ typedef struct {
     bool profile;               // Enable CPU profiling
     bool perf_mon;              // Enable PERF_MON output (requires unit built with PERF_MON=1)
     bool test_presets;          // Test preset loading/switching
+    bool hold_notes;            // Keep notes held (no note_off between triggers)
+    bool no_rand_params;        // Disable random parameter variations during profiling
 } unit_host_config_t;
 
 /**
@@ -58,6 +60,7 @@ typedef struct {
     uint32_t param_values[24];  // Current parameter values
     bool unit_initialized;      // Unit initialization state
     unit_profiling_stats_t profile_stats; // CPU profiling statistics
+    uint32_t buffer_size;       // Buffer size in frames used for processing
 } unit_host_state_t;
 
 /**
