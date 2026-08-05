@@ -32,7 +32,10 @@ UnisonOscillator::UnisonOscillator()
     , sample_rate_(48000.0f)
     , base_freq_(440.0f)
     , detune_cents_(10.0f)
-    , stereo_spread_(0.7f) {
+    , stereo_spread_(0.7f)
+    , scale_(1.0f / sqrtf(7.0f))
+    , waveform_(JupiterDCO::WAVEFORM_SAW)
+    , pulse_width_(0.5f) {
     memset(voice_detunes_, 0, sizeof(voice_detunes_));
     memset(voice_pans_, 0, sizeof(voice_pans_));
 }
@@ -48,6 +51,7 @@ void UnisonOscillator::Init(float sample_rate, uint8_t num_voices) {
     if (num_voices > kMaxVoices) num_voices = kMaxVoices;
     if ((num_voices & 1) == 0) num_voices++;  // Make odd
     num_voices_ = num_voices;
+    UpdateScale();
     
     // Initialize all oscillators
     for (uint8_t i = 0; i < kMaxVoices; i++) {
@@ -75,12 +79,19 @@ void UnisonOscillator::SetFrequency(float freq_hz) {
 }
 
 void UnisonOscillator::SetWaveform(JupiterDCO::Waveform waveform) {
+    // OPTIMIZATION: skip re-propagation when the waveform is unchanged
+    // (called once per audio frame from UnisonRenderer)
+    if (waveform == waveform_) return;
+    waveform_ = waveform;
     for (uint8_t i = 0; i < num_voices_; i++) {
         oscillators_[i].SetWaveform(waveform);
     }
 }
 
 void UnisonOscillator::SetPulseWidth(float pw) {
+    // OPTIMIZATION: skip re-propagation when the value is unchanged
+    if (fabsf(pw - pulse_width_) < 1e-4f) return;
+    pulse_width_ = pw;
     for (uint8_t i = 0; i < num_voices_; i++) {
         oscillators_[i].SetPulseWidth(pw);
     }
@@ -138,8 +149,7 @@ void UnisonOscillator::CalculateDetuneRatios() {
     }
 }
 
-void UnisonOscillator::CalculatePanPositions() {
-    // Pan voices using golden angle spiral (like sunflower seeds)
+void UnisonOscillator::CalculatePanPositions() {    // Pan voices using golden angle spiral (like sunflower seeds)
     // This creates natural stereo spread without periodic patterns
     //
     // Golden angle ≈ 137.5° creates optimal non-repeating distribution
@@ -153,6 +163,11 @@ void UnisonOscillator::CalculatePanPositions() {
     
     // Center voice always stays centered
     voice_pans_[0] = 0.0f;
+}
+
+void UnisonOscillator::UpdateScale() {
+    // Precompute the mixing scale so Process() avoids sqrtf() per sample
+    scale_ = 1.0f / sqrtf(static_cast<float>(num_voices_));
 }
 
 }  // namespace dsp

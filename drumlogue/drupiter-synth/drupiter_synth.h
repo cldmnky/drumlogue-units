@@ -384,6 +384,12 @@ public:
      */
     dsp::JupiterDCO& GetDCO2() { return dco2_; }
 
+    /**
+     * @brief Get current sync mode (for renderers)
+     * @return 0=OFF, 1=SOFT, 2=HARD
+     */
+    uint8_t GetSyncMode() const { return sync_mode_; }
+
 private:
     // Voice allocator (Hoover v2.0)
     dsp::VoiceAllocator allocator_;
@@ -595,6 +601,13 @@ private:
      * @return Render setup struct
      */
     RenderSetup PrepareRenderSetup(uint32_t frames);
+    
+    /**
+     * @brief Render a single chunk of up to kMaxFrames frames
+     * @param out Output buffer (stereo interleaved)
+     * @param frames Number of frames (must be <= kMaxFrames)
+     */
+    void RenderChunk(float* out, uint32_t frames);
     
     /**
      * @brief Process per-frame modulation

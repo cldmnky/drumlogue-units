@@ -277,6 +277,7 @@ int unit_host_process_wav(const char* input_path, const char* output_path,
         state->profile_stats.render_count = 0;
         state->profile_stats.total_audio_time = 0.0;
     }
+    state->buffer_size = config->buffer_size;
     
     // For profiling: parameter change tracking for synths
     uint32_t param_change_interval = config->sample_rate;  // Change parameters every 1 second
@@ -321,7 +322,8 @@ int unit_host_process_wav(const char* input_path, const char* output_path,
         
         // For synth units, trigger MIDI notes at intervals
         if (is_synth && total_frames >= next_note_trigger && note_index < num_notes) {
-            if (g_callbacks.unit_note_off && note_triggered) {
+            // Skip note_off when holding notes (e.g., to stress polyphonic mode)
+            if (g_callbacks.unit_note_off && note_triggered && !config->hold_notes) {
                 // Send note off for previous note
                 g_callbacks.unit_note_off(current_note);
             }
@@ -348,7 +350,8 @@ int unit_host_process_wav(const char* input_path, const char* output_path,
         }
         
         // For profiling synths: Change random parameters at intervals
-        if (config->profile && is_synth && total_frames >= next_param_change && 
+        if (config->profile && is_synth && !config->no_rand_params && 
+            total_frames >= next_param_change && 
             param_change_count < max_param_changes) {
             // Change 3-5 random parameters
             uint32_t num_params = state->unit_header->num_params;
@@ -774,13 +777,25 @@ void unit_host_print_perf_mon(unit_host_state_t* state) {
     typedef uint32_t (*get_min_cycles_func)(uint8_t);
     typedef uint32_t (*get_frame_count_func)(uint8_t);
     
-    // Load function pointers (mangled C++ names for dsp::PerfMon static methods)
-    get_counter_count_func get_count = (get_counter_count_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon15GetCounterCountEv");
-    get_counter_name_func get_name = (get_counter_name_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon14GetCounterNameEh");
-    get_average_cycles_func get_avg = (get_average_cycles_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon17GetAverageCyclesEh");
-    get_peak_cycles_func get_peak = (get_peak_cycles_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon14GetPeakCyclesEh");
-    get_min_cycles_func get_min = (get_min_cycles_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon13GetMinCyclesEh");
-    get_frame_count_func get_frames = (get_frame_count_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon13GetFrameCountEh");
+    // Load function pointers.
+    // Preferred: C-linkage export wrappers (perf_mon_get_*) provided by
+    // drumlogue/common/perf_mon.cc when built with PERF_MON=1.
+    // Fallback: mangled C++ names for dsp::PerfMon static methods.
+    get_counter_count_func get_count = (get_counter_count_func)dlsym(state->unit_handle, "perf_mon_get_counter_count");
+    get_counter_name_func get_name = (get_counter_name_func)dlsym(state->unit_handle, "perf_mon_get_counter_name");
+    get_average_cycles_func get_avg = (get_average_cycles_func)dlsym(state->unit_handle, "perf_mon_get_average_cycles");
+    get_peak_cycles_func get_peak = (get_peak_cycles_func)dlsym(state->unit_handle, "perf_mon_get_peak_cycles");
+    get_min_cycles_func get_min = (get_min_cycles_func)dlsym(state->unit_handle, "perf_mon_get_min_cycles");
+    get_frame_count_func get_frames = (get_frame_count_func)dlsym(state->unit_handle, "perf_mon_get_frame_count");
+
+    if (!get_count) {
+        get_count = (get_counter_count_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon15GetCounterCountEv");
+        get_name = (get_counter_name_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon14GetCounterNameEh");
+        get_avg = (get_average_cycles_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon17GetAverageCyclesEh");
+        get_peak = (get_peak_cycles_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon14GetPeakCyclesEh");
+        get_min = (get_min_cycles_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon13GetMinCyclesEh");
+        get_frames = (get_frame_count_func)dlsym(state->unit_handle, "_ZN3dsp7PerfMon13GetFrameCountEh");
+    }
     
     // Check if PERF_MON symbols exist
     if (!get_count || !get_name || !get_avg || !get_peak || !get_min || !get_frames) {
@@ -816,7 +831,16 @@ void unit_host_print_perf_mon(unit_host_state_t* state) {
     printf("%-16s %12s %12s %12s %10s %12s\n", 
            "────────────────", "──────────", "──────────", "──────────", "────────", "───────────");
     
+    // Per-sample counters (DCO/VCF) are measured once per sample frame, while
+    // per-buffer counters (Effects/RenderTotal) are measured once per render
+    // call (possibly once per internal chunk when the unit chunks large
+    // callbacks). Normalize each against the appropriate budget.
+    const uint32_t render_count = state->profile_stats.render_count;
+    const uint32_t buffer_frames = (state->buffer_size > 0) ? state->buffer_size : 256;
+    double cycles_per_buffer = CYCLES_PER_SAMPLE * buffer_frames;
+    
     uint32_t total_avg_cycles = 0;
+    bool all_per_sample = true;
     
     for (uint8_t i = 0; i < counter_count; i++) {
         const char* name = get_name(i);
@@ -827,7 +851,21 @@ void unit_host_print_perf_mon(unit_host_state_t* state) {
         
         if (frames == 0) continue;  // Skip unused counters
         
-        double percent_of_budget = (avg_cycles / CYCLES_PER_SAMPLE) * 100.0;
+        // Per-buffer counters are measured once per render call (or once per
+        // internal chunk when the unit chunks large callbacks). Per-sample
+        // counters are measured once per sample frame, i.e. ~buffer_size per
+        // render call or more. Discriminate by the measurement/render ratio.
+        bool per_buffer = false;
+        double budget = CYCLES_PER_SAMPLE;
+        if (render_count > 0) {
+            double ratio = (double)frames / render_count;
+            if (ratio >= 1.0 && ratio <= 64.0) {
+                per_buffer = true;
+                all_per_sample = false;
+                budget = cycles_per_buffer / ratio;
+            }
+        }
+        double percent_of_budget = (avg_cycles / budget) * 100.0;
         
         printf("%-16s %12u %12u %12u %10u %11.2f%%\n",
                name ? name : "<unnamed>",
@@ -843,25 +881,34 @@ void unit_host_print_perf_mon(unit_host_state_t* state) {
     printf("%-16s %12s %12s %12s %10s %12s\n", 
            "────────────────", "──────────", "──────────", "──────────", "────────", "───────────");
     
-    double total_percent = (total_avg_cycles / CYCLES_PER_SAMPLE) * 100.0;
-    printf("%-16s %12u %12s %12s %10s %11.2f%%", 
-           "TOTAL", total_avg_cycles, "─", "─", "─", total_percent);
+    printf("%-16s %12u %12s %12s %10s", 
+           "TOTAL", total_avg_cycles, "─", "─", "─");
     
-    // Assessment
-    if (total_percent < 50.0) {
-        printf(" ✅ Excellent\n");
-    } else if (total_percent < 80.0) {
-        printf(" ⚠️  Good\n");
-    } else if (total_percent < 100.0) {
-        printf(" ⚠️  Heavy\n");
+    if (all_per_sample) {
+        double total_percent = (total_avg_cycles / CYCLES_PER_SAMPLE) * 100.0;
+        printf(" %11.2f%%", total_percent);
+        
+        // Assessment
+        if (total_percent < 50.0) {
+            printf(" ✅ Excellent\n");
+        } else if (total_percent < 80.0) {
+            printf(" ⚠️  Good\n");
+        } else if (total_percent < 100.0) {
+            printf(" ⚠️  Heavy\n");
+        } else {
+            printf(" ❌ OVERLOAD\n");
+        }
     } else {
-        printf(" ❌ OVERLOAD\n");
+        // Mixed per-sample and per-buffer counters: % is not meaningful
+        printf(" %11s\n", "(mixed)");
     }
     
     printf("\n");
     printf("Notes:\n");
-    printf("  • Cycle counts are measured using ARM cycle counters\n");
-    printf("  • %% of budget assumes %.0f cycles available per sample\n", CYCLES_PER_SAMPLE);
+    printf("  • Per-sample counters (DCO, VCF) are %% of one sample budget (%.0f cycles)\n", CYCLES_PER_SAMPLE);
+    printf("  • Per-buffer counters (Effects, RenderTotal) are %% of one %u-frame buffer budget (%.0f cycles)\n",
+           buffer_frames, cycles_per_buffer);
+    printf("  • Use the host CPU profiling report above for the overall real-time assessment\n");
     printf("  • Actual performance depends on CPU frequency and load\n");
     printf("\n");
     printf("═══════════════════════════════════════════════════════════════\n");
@@ -945,6 +992,8 @@ int unit_host_parse_args(int argc, char* argv[], unit_host_config_t* config) {
         fprintf(stderr, "  --channels <1|2>        Output channels (default: 2)\n");
         fprintf(stderr, "  --test-presets          Test preset loading/switching\n");
         fprintf(stderr, "  --profile               Enable CPU profiling\n");
+        fprintf(stderr, "  --hold-notes            Keep notes held (no note_off between triggers)\n");
+        fprintf(stderr, "  --no-rand-params        Disable random parameter variations during profiling\n");
         fprintf(stderr, "  --verbose               Verbose output\n");
         return UNIT_HOST_ERR_ARGS;
     }
@@ -985,6 +1034,10 @@ int unit_host_parse_args(int argc, char* argv[], unit_host_config_t* config) {
             config->profile = true;
         } else if (strcmp(argv[i], "--perf-mon") == 0) {
             config->perf_mon = true;
+        } else if (strcmp(argv[i], "--hold-notes") == 0) {
+            config->hold_notes = true;
+        } else if (strcmp(argv[i], "--no-rand-params") == 0) {
+            config->no_rand_params = true;
         } else if (strcmp(argv[i], "--verbose") == 0) {
             config->verbose = true;
         }

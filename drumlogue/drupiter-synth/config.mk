@@ -86,6 +86,9 @@ UNISON_MAX_DETUNE ?= 50
 ifeq ($(PERF_MON),1)
   UDEFS = -DPERF_MON
   CXXSRC += ../common/perf_mon.cc
+  # Keep symbols so the QEMU ARM host can read PERF_MON counters via dlsym
+  # (the SDK Makefile strips unless DEBUG is set, and DEBUG adds -DDEBUG prints)
+  override STRIP := true
   # For QEMU ARM testing, also define __QEMU_ARM__ to use chrono instead of hardware registers
   ifeq ($(__QEMU_ARM__),1)
     UDEFS += -D__QEMU_ARM__

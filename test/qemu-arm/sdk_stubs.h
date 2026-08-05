@@ -101,8 +101,8 @@ typedef struct unit_param {
     uint8_t frac : 4;       // fractional bits / decimals according to frac_mode
     uint8_t frac_mode : 1;  // 0: fixed point, 1: decimal
     uint8_t reserved : 3;
-    char name[14];          // UNIT_PARAM_NAME_LEN (13) + 1 for null = 14
-} unit_param_t;  // 24 bytes
+    char name[13];          // UNIT_PARAM_NAME_LEN is 12, +1 for null = 13 (verified against runtime.h)
+} unit_param_t;  // 23 bytes
 #pragma pack(pop)
 
 // Unit header (matches logue SDK - must match EXACTLY including packing and types)

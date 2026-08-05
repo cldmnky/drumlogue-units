@@ -197,12 +197,17 @@ void JupiterVCF::SetCutoff(float freq_hz) {
 }
 
 void JupiterVCF::SetCutoffModulated(float freq_hz) {
-    float new_cutoff = ClampCutoff(freq_hz);
-    // Phase 6: Parameter change detection - only mark dirty if cutoff actually changed
-    if (fabsf(new_cutoff - prev_cutoff_hz_) > 1e-6f) {
+    const float new_cutoff = ClampCutoff(freq_hz);
+    // Track the latest requested cutoff for change detection.
+    // Only recompute coefficients when the cutoff moved materially
+    // (1 Hz quantized), so continuous modulation sweeps do not trigger
+    // a full coefficient recalculation on every sample.
+    if (fabsf(new_cutoff - prev_cutoff_hz_) > kCutoffUpdateThresholdHz) {
         cutoff_hz_ = new_cutoff;
         prev_cutoff_hz_ = new_cutoff;
         coefficients_dirty_ = true;
+    } else {
+        prev_cutoff_hz_ = new_cutoff;
     }
 }
 

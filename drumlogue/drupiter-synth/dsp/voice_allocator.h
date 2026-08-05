@@ -111,7 +111,16 @@ public:
 		}
 	}
 
-	bool IsAnyVoiceActive() const { return active_voices_ > 0; }
+    // Scans voices (active_voices_ counter is not maintained); only called on
+    // parameter changes, never in the audio render loop.
+    bool IsAnyVoiceActive() const {
+        for (uint8_t i = 0; i < max_voices_; ++i) {
+            if (voices_[i].active || voices_[i].env_amp.IsActive()) {
+                return true;
+            }
+        }
+        return false;
+    }
 	const Voice& GetVoice(uint8_t idx) const { return voices_[idx]; }
 	Voice& GetVoiceMutable(uint8_t idx) { return voices_[idx]; }
 	SynthMode GetMode() const { return mode_; }

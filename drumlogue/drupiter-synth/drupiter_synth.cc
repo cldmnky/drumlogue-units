@@ -285,10 +285,19 @@ void DrupiterSynth::Render(float* out, uint32_t frames) {
     // Safety: ensure output buffer and internal buffers can handle the request
     if (!out || frames == 0) return;
     
-    // CRITICAL: Limit frames to our buffer size to prevent overflow
-    if (frames > kMaxFrames) {
-        frames = kMaxFrames;
+    // BUGFIX: process arbitrarily large callbacks in bounded chunks instead of
+    // silently truncating them. The drumlogue runtime uses 64-frame buffers,
+    // but hosts may request more (e.g. the QEMU test host uses 256).
+    uint32_t processed = 0;
+    while (processed < frames) {
+        const uint32_t chunk = (frames - processed > kMaxFrames) ? kMaxFrames : (frames - processed);
+        RenderChunk(out + processed * 2, chunk);
+        processed += chunk;
     }
+}
+
+void DrupiterSynth::RenderChunk(float* out, uint32_t frames) {
+    if (!out || frames == 0 || frames > kMaxFrames) return;
     
     // Check buffer guard on entry (detect any previous overflow)
     if (buffer_guard_ != 0xDEADBEEFDEADBEEF) {
@@ -400,6 +409,12 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             // This allows switching between MOD HUB options and remembering each value
             if (v < MOD_NUM_DESTINATIONS) {
                 mod_hub_.SetValueForDest(v, current_preset_.hub_values[v]);
+                // BUGFIX: re-base the shared knob catch on the newly selected
+                // destination's value. Otherwise the first MOD AMT turn after a
+                // switch compares the knob against the *previous* destination's
+                // value, causing random hold/catch behavior when hopping
+                // between MOD HUB options.
+                catch_mod_amt_.Init(current_preset_.hub_values[v]);
             }
             
             current_preset_.params[id] = v;
@@ -411,13 +426,15 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             int32_t caught_v = catch_mod_amt_.Update(v);
             const int32_t actual_value = mod_hub_.SetValueAndGetClamped(caught_v);
             
-            // Store the ORIGINAL UI value (0-100), not the clamped value
-            // This is critical for proper restoration when switching destinations
+            // Store the EFFECTIVE 0-100 value (post knob-catch), not the raw
+            // knob position. While the knob is catching, the raw value has not
+            // been applied; storing it would make the destination jump when
+            // restored after switching MOD HUB options.
             {
                 uint8_t dest = current_preset_.params[PARAM_MOD_HUB];
                 if (dest < MOD_NUM_DESTINATIONS) {
-                    // Store original 0-100 value for restoration later
-                    current_preset_.hub_values[dest] = v;  // Store original, not clamped
+                    // Store effective 0-100 value for restoration later
+                    current_preset_.hub_values[dest] = caught_v;
                     
                     // Apply specific destinations to DSP components immediately
                     switch (dest) {
@@ -879,16 +896,27 @@ void DrupiterSynth::LoadPreset(uint8_t preset_id) {
     xmod_depth_ = current_preset_.params[PARAM_XMOD] / 100.0f;
     sync_mode_ = current_preset_.params[PARAM_SYNC];
     
-    // Restore MOD HUB values from preset (source of truth for hub state)
-    // Must be done BEFORE applying parameters
+    // Apply all parameters to DSP components
+    for (uint8_t i = 0; i < PARAM_COUNT; ++i) {
+        SetParameter(i, current_preset_.params[i]);
+    }
+    
+    // BUGFIX: restore MOD HUB values AFTER the parameter loop. Factory presets
+    // keep PARAM_MOD_AMT at 0 ("amount in hub_values"), so SetParameter(MOD_AMT)
+    // above overwrites the selected destination's value with 0 and destroys
+    // the preset's real modulation/synth-mode setting (e.g. Init preset loaded
+    // VCF TYPE 0 instead of its stored 1). Hub state must win over the dummy
+    // MOD_AMT param value.
     mod_hub_.SetDestination(current_preset_.params[PARAM_MOD_HUB]);
     for (uint8_t dest = 0; dest < MOD_NUM_DESTINATIONS; ++dest) {
         mod_hub_.SetValueForDest(dest, current_preset_.hub_values[dest]);
     }
-    
-    // Apply all parameters to DSP components
-    for (uint8_t i = 0; i < PARAM_COUNT; ++i) {
-        SetParameter(i, current_preset_.params[i]);
+    // Re-base the knob catch on the restored destination value
+    {
+        uint8_t dest = current_preset_.params[PARAM_MOD_HUB];
+        if (dest < MOD_NUM_DESTINATIONS) {
+            catch_mod_amt_.Init(current_preset_.hub_values[dest]);
+        }
     }
     
     // Initialize effect and LFO settings from preset (critical for preset load)
@@ -1042,9 +1070,12 @@ DrupiterSynth::RenderSetup DrupiterSynth::PrepareRenderSetup(uint32_t frames) {
     setup.vca_kybd = mod_hub_.GetValueNormalizedUnipolar(MOD_VCA_KYBD);
     
     // Update synthesis mode and allocator settings
+    // BUGFIX: guard against switching mode while notes are playing, matching
+    // the SetParameter path - otherwise an S MODE change flips the mode
+    // mid-note and glitches voices/envelopes.
     const uint8_t synth_mode_value = mod_hub_.GetValue(MOD_SYNTH_MODE);
     const dsp::SynthMode synth_mode = static_cast<dsp::SynthMode>(synth_mode_value < 3 ? synth_mode_value : 0);
-    if (synth_mode != current_mode_) {
+    if (synth_mode != current_mode_ && !allocator_.IsAnyVoiceActive()) {
         current_mode_ = synth_mode;
         allocator_.SetMode(current_mode_);
     }

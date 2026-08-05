@@ -36,6 +36,8 @@ static uint8_t cached_dco1_wave = 255;  // Cache to avoid redundant SetWaveform 
 static uint8_t cached_dco2_wave = 255;
 static float cached_inv_voice_count = 1.0f;  // Pre-calculated reciprocal of voice count
 static uint8_t cached_active_voice_count = 0;
+static float cached_resonance = -1.0f;      // Cache to avoid redundant SetResonance calls
+static int cached_vcf_mode = -1;            // Cache to avoid redundant SetMode calls
 
 // Map DCO1 UI parameter value (0-4) to waveform enum
 // DCO1 waveforms: SAW(0), SQR(1), PUL(2), TRI(3), SAW_PWM(4)
@@ -238,9 +240,18 @@ float PolyphonicRenderer::RenderVoices(
         const float voice_cutoff_modulated = voice_cutoff_base * fast_pow2(voice_total_mod);
 
         // Set per-voice filter parameters and process
+        // OPTIMIZATION: SetResonance/SetMode only mark dirty on change, but
+        // avoid the per-voice-per-sample call overhead entirely by caching
+        // (resonance and mode only change when parameters change).
+        if (resonance != cached_resonance) {
+            cached_resonance = resonance;
+            voice_mut.vcf.SetResonance(resonance);
+        }
+        if (static_cast<int>(vcf_mode) != cached_vcf_mode) {
+            cached_vcf_mode = static_cast<int>(vcf_mode);
+            voice_mut.vcf.SetMode(vcf_mode);
+        }
         voice_mut.vcf.SetCutoffModulated(voice_cutoff_modulated);
-        voice_mut.vcf.SetResonance(resonance);
-        voice_mut.vcf.SetMode(vcf_mode);
 
         float voice_filtered = voice_hpf_out;
         if (vcf_cutoff_param < 100) {
@@ -251,8 +262,10 @@ float PolyphonicRenderer::RenderVoices(
         float voice_output = voice_filtered * voice_env;
 
         // Apply velocity scaling to VCA amplitude (soft hits quieter, loud hits louder)
-        // Map velocity 0-127 to VCA multiplier 0.2-1.0 (soft hits still audible)
-        const float voice_vca_gain = 0.2f + (voice.velocity / 127.0f) * 0.8f;  // 0.2 to 1.0
+        // BUGFIX: voice.velocity is already normalized 0.0-1.0 (VelocityToFloat);
+        // dividing by 127 again clamped the gain to ~0.2 with no audible range.
+        // Map normalized velocity to VCA multiplier 0.2-1.0 (soft hits still audible)
+        const float voice_vca_gain = 0.2f + voice.velocity * 0.8f;  // 0.2 to 1.0
         voice_output *= voice_vca_gain;
 
         // Add filtered, velocity-scaled voice to mix

@@ -107,9 +107,11 @@ private:
         std::cout << "Synth initialized successfully\n";
 
         // Set synthesis mode via hub control (not default voice allocator)
-        // MOD_SYNTH_MODE = 14, values: 0=MONO, 1=POLY, 2=UNISON
+        // MOD_SYNTH_MODE = 14. The hub maps UI values 0-100 onto the
+        // destination range (0-2), so mode = value * 50: 0=MONO, 50=POLY,
+        // 100=UNISON.
         const uint8_t synth_mode = (voice_count == 1) ? 0 : 1;  // MONO for 1 voice, POLY for 2+ voices
-        synth_.SetHubValue(14, synth_mode);  // MOD_SYNTH_MODE
+        synth_.SetHubValue(14, synth_mode * 50);  // MOD_SYNTH_MODE
 
         // Reset performance counters
         PERF_MON_RESET();
