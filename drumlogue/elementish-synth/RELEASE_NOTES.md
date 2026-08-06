@@ -1,5 +1,31 @@
 # Elementish Synth - Release Notes
 
+## v1.3.1
+
+Preset-transition fix.
+
+### Bug Fixes
+
+- **Preset load no longer kills the playing voice:** `LoadPreset()` now resets
+  the voice runtime state (envelope segments, exciter/sample-player state) and
+  retriggers the currently held note with the new preset, so a preset switch
+  while a note is held continues to sound instead of dying out after the stale
+  envelope completes
+- **Blown preset (4) is audible again:** its SPACE value was below the blow
+  tube's oscillation threshold, leaving it near-silent; raised to 80
+- **Quartic attack table ends at 1.0** (the table was truncated at ~0.43, so
+  attack never reached full level)
+- **Sequencer preset changes** now stop active subdivisions and drop pending
+  notes (voice boundary), matching `LoadPreset`
+
+### Regression Test
+
+- `--preset-retrigger-test`: holds a note into its decay tail, loads every
+  other factory preset, and verifies the voice keeps sounding with finite
+  output (all 56 transitions)
+
+---
+
 ## v1.3.0
 
 Review-fix release.

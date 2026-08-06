@@ -209,6 +209,35 @@ public:
         particle_delay_ = 0;
     }
     
+    // Reset only the transient/voice state so a note can be retriggered cleanly.
+    // Preserves all parameter values (levels, timbres, modes) that were set via
+    // SetBow/SetBlow/SetStrike/Set*Timbre/SetStrikeSample/SetStrikeMode etc.
+    void ResetRuntime() {
+        strike_amp_ = 0.0f;
+        bow_filter_.Reset();
+        blow_filter_.Reset();
+        strike_filter_.Reset();
+        tube_.Init();
+        sample_player_.ResetRuntime();
+        granular_player_.Reset();
+        blow_player_.Reset();
+        blow_player_.SetTable(kBlowNoiseTable, 512);
+        blow_player_.SetPitch(blow_timbre_);
+        blow_player_.SetPosition(0.5f);
+        blow_player_.SetDensity(blow_flow_);
+        blow_envelope_ = 0.0f;
+        
+        // Plectrum mode state
+        plectrum_delay_ = 0;
+        plectrum_damp_ = 0.0f;
+        plectrum_impulse_ = 0.0f;
+        
+        // Particles mode state
+        particle_state_ = 0.5f;
+        particle_range_ = 1.0f;
+        particle_delay_ = 0;
+    }
+    
     void SetBow(float level) { bow_level_ = Clamp(level, 0.0f, 1.0f); }
     void SetBlow(float level) { blow_level_ = Clamp(level, 0.0f, 1.0f); }
     void SetStrike(float level) { strike_level_ = Clamp(level, 0.0f, 1.0f); }

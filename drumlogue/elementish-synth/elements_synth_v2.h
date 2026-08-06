@@ -356,6 +356,7 @@ public:
         
         // Apply coarse tuning, fine tuning, and pitch bend
         current_note_ = note;
+        current_velocity_ = velocity;
         
 #ifdef ELEMENTS_LIGHTWEIGHT
         // Trigger sequencer subdivisions (pattern step triggers note burst)
@@ -382,6 +383,7 @@ public:
 
     void GateOn(uint8_t velocity) {
         // Gate messages from drumlogue pattern sequencer use current_note_ as base
+        current_velocity_ = velocity;
 #ifdef ELEMENTS_LIGHTWEIGHT
         // Trigger sequencer subdivisions (pattern step triggers note burst)
         if (sequencer_.IsEnabled()) {
@@ -437,13 +439,25 @@ public:
     void LoadPreset(uint8_t idx) {
         preset_index_ = idx;
         
+        // Capture the held note so it can be retriggered with the new preset.
+        uint8_t retrigger_note = current_note_;
+        uint8_t retrigger_velocity = current_velocity_;
+        bool retrigger = note_active_;
+#ifdef ELEMENTS_LIGHTWEIGHT
+        bool sequencer_enabled = false;
+        sequencer_enabled = sequencer_.IsEnabled();
+#endif
+        
 #ifdef ELEMENTS_LIGHTWEIGHT
         // Clear any pending sequencer notes so a preset switch can't trigger
         // notes that were queued by the previous preset.
         sequencer_.Reset();
 #endif
+        note_active_ = false;
+        
         // Reset DSP state before applying new preset to ensure clean transition
         synth_.Reset();
+        synth_.ResetVoice();
         
 #ifdef ELEMENTS_LIGHTWEIGHT
         // Lightweight preset format:
@@ -481,8 +495,10 @@ public:
             case 4: // Blown - Breathy wind instrument
                 // Pure blow excitation, tube-like geometry
                 // Slow attack for breath buildup, AR envelope
+                // space=80 keeps the tube in self-oscillation (the blow path
+                // only becomes audible above a threshold at low space values)
                 setPresetParams(0, 100, 0, 0,  0, -20, 0, 0,
-                               -35, -5, -10, 5,  0, 50, 100, 0,
+                               -35, -5, -10, 5,  0, 80, 100, 0,
                                45, 35, 50, 2,  0, 0, 0, 64);
                 break;
             case 5: // Marimba - Wooden mallet percussion
@@ -566,6 +582,22 @@ public:
                 break;
         }
 #endif
+        
+        // Retrigger the held note with the new preset's voice configuration so
+        // the sound continues instead of dying out with the stale envelope.
+        if (retrigger) {
+#ifdef ELEMENTS_LIGHTWEIGHT
+            if (sequencer_enabled) {
+                sequencer_.Trigger(retrigger_note, retrigger_velocity);
+            } else {
+                synth_.NoteOn(ClampedTunedNote((float)retrigger_note), retrigger_velocity);
+                note_active_ = true;
+            }
+#else
+            synth_.NoteOn(ClampedTunedNote((float)retrigger_note), retrigger_velocity);
+            note_active_ = true;
+#endif
+        }
     }
 
     uint8_t getPresetIndex() const {
@@ -876,6 +908,7 @@ private:
 #endif
     
     uint8_t current_note_ = 60;
+    uint8_t current_velocity_ = 100;
     uint8_t preset_index_ = 0;
     uint32_t tempo_ = 120 << 16;
     
