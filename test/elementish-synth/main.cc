@@ -1519,6 +1519,64 @@ int main(int argc, char* argv[]) {
     return 0;
   }
 
+  // Regression test: loading a preset while a note is held must retrigger the
+  // note so the sound continues (long-decay presets used to die out with a
+  // stale envelope segment after the switch).
+  if (strcmp(argv[1], "--preset-retrigger-test") == 0) {
+    const int sample_rate = 48000;
+    const int block_size = 64;
+    std::vector<float> block(block_size * 2);
+    bool all_ok = true;
+
+    for (int from = 0; from < kNumPresets && all_ok; ++from) {
+      for (int to = 0; to < kNumPresets; ++to) {
+        if (from == to) continue;
+
+        ElementsSynth synth;
+        unit_runtime_desc_t runtime = {
+          .target = 0, .api = 0, .samplerate = 48000,
+          .frames_per_buffer = 64, .input_channels = 0, .output_channels = 2,
+          .padding = {0, 0}
+        };
+        if (synth.Init(&runtime) != k_unit_err_none) {
+          fprintf(stderr, "init failed\n");
+          return 1;
+        }
+        synth.LoadPreset(static_cast<uint8_t>(from));
+
+        // Hold a note, let it enter the decay tail.
+        synth.NoteOn(60, 100);
+        for (int s = 0; s < 2 * sample_rate; s += block_size) {
+          synth.Render(block.data(), block_size);
+        }
+
+        // Load a new preset while the note is still held.
+        synth.LoadPreset(static_cast<uint8_t>(to));
+
+        // The voice must keep sounding under the new preset (no NoteOff sent).
+        float peak_after = 0.0f;
+        bool nonfinite = false;
+        for (int s = 0; s < 3 * sample_rate; s += block_size) {
+          synth.Render(block.data(), block_size);
+          for (size_t i = 0; i < block.size(); ++i) {
+            float v = block[i];
+            if (v != v || v > 1e4f || v < -1e4f) nonfinite = true;
+            float a = v < 0.0f ? -v : v;
+            if (a > peak_after) peak_after = a;
+          }
+        }
+
+        bool ok = !nonfinite && peak_after > 1e-3f;
+        all_ok = all_ok && ok;
+        printf("preset %d -> %d: peak_after=%.5f %s\n",
+               from, to, peak_after, ok ? "OK" : "FAIL");
+      }
+    }
+
+    printf("%s\n", all_ok ? "Preset retrigger test passed!" : "Preset retrigger test FAILED");
+    return all_ok ? 0 : 1;
+  }
+
   // Parse arguments
   std::string output_path;
   int preset_idx = -1;

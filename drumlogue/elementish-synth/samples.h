@@ -4291,6 +4291,12 @@ public:
         playing_ = true;
     }
     
+    // Reset playback state without touching the selected sample or pitch.
+    void ResetRuntime() {
+        phase_ = 0;
+        playing_ = false;
+    }
+    
     float Process() {
         if (!playing_) return 0.0f;
         

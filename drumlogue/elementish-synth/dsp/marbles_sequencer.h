@@ -233,7 +233,15 @@ public:
         if (preset < 0 || preset >= SEQ_NUM_PRESETS) {
             preset = SEQ_OFF;
         }
-        preset_ = static_cast<SeqPreset>(preset);
+        SeqPreset new_preset = static_cast<SeqPreset>(preset);
+        if (new_preset != preset_) {
+            // Changing the preset is a voice boundary: stop any active
+            // subdivision sequence and drop pending notes so the old
+            // pattern cannot ring into the new one.
+            Release();
+            phase_ = 0.0f;
+        }
+        preset_ = new_preset;
         enabled_ = (preset_ != SEQ_OFF);
         UpdateClockRate();
     }

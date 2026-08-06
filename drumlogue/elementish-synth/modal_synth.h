@@ -539,6 +539,19 @@ public:
 #endif
     }
     
+    // Reset the voice state (exciters, sample player, envelopes) without
+    // touching any parameter values. Used when switching presets so a stale
+    // envelope segment or half-finished sample cannot continue under the new
+    // configuration.
+    void ResetVoice() {
+        exciter_.ResetRuntime();
+        env_.ResetRuntime();
+#ifndef ELEMENTS_LIGHTWEIGHT
+        filter_env_.ResetRuntime();
+#endif
+        velocity_ = 1.0f;
+    }
+    
 private:
     void updateEnvelope() {
         // Apply current envelope mode with stored parameters

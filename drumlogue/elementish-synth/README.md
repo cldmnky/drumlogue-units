@@ -196,6 +196,15 @@ See `eurorack/README.md` for Mutable Instruments licensing details.
 
 ## Version History
 
+### v1.3.1
+
+- Fix: loading a preset while a note is held now resets the voice state and
+  retriggers the note, so the sound continues instead of dying out when the
+  previous envelope segment completes
+- Fix: Blown preset (4) is audible again (tube oscillation threshold)
+- Fix: quartic attack table now reaches 1.0
+- New: `--preset-retrigger-test` regression test (56 preset transitions)
+
 ### v1.3.0
 
 - Fix: sequencer notes can no longer ring out after note-off / all-notes-off /
