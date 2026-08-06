@@ -1577,6 +1577,57 @@ int main(int argc, char* argv[]) {
     return all_ok ? 0 : 1;
   }
 
+  // Regression test: BOW=90 must remain finite and audible across repeated
+  // note transitions. The native ARM64 build previously filled the reverb
+  // tank with NaNs and the output sanitizer turned the voice into silence.
+  if (strcmp(argv[1], "--bow-stability-test") == 0) {
+    const int sample_rate = 48000;
+    const int block_size = 64;
+    const int test_notes[] = {36, 48, 60, 72, 84, 60, 48, 36, 72, 55, 67, 79};
+    const size_t note_count = sizeof(test_notes) / sizeof(test_notes[0]);
+    const int note_samples = (10 * sample_rate) / static_cast<int>(note_count);
+    const int gate_samples = note_samples * 4 / 5;
+    std::vector<float> block(block_size * 2);
+    unit_runtime_desc_t runtime = {
+      .target = 0, .api = 0, .samplerate = 48000,
+      .frames_per_buffer = 64, .input_channels = 0, .output_channels = 2,
+      .padding = {0, 0}
+    };
+    ElementsSynth synth;
+    if (synth.Init(&runtime) != k_unit_err_none) return 1;
+    synth.LoadPreset(0);
+    synth.setParameter(0, 90);  // BOW
+
+    bool all_ok = true;
+    for (size_t n = 0; n < note_count; ++n) {
+      synth.NoteOn(static_cast<uint8_t>(test_notes[n]), 100);
+      float peak = 0.0f;
+      bool note_off_sent = false;
+      int rendered = 0;
+      while (rendered < note_samples) {
+        if (!note_off_sent && rendered >= gate_samples) {
+          synth.NoteOff(static_cast<uint8_t>(test_notes[n]));
+          note_off_sent = true;
+        }
+        synth.Render(block.data(), block_size);
+        for (float value : block) {
+          if (value != value || value > 1.0e4f || value < -1.0e4f) {
+            all_ok = false;
+          }
+          const float magnitude = value < 0.0f ? -value : value;
+          if (magnitude > peak) peak = magnitude;
+        }
+        rendered += block_size;
+      }
+      const bool note_ok = peak > 1.0e-3f;
+      all_ok = all_ok && note_ok;
+      printf("bow note %d: peak=%.5f %s\n",
+             test_notes[n], peak, note_ok ? "OK" : "FAIL");
+    }
+    printf("%s\n", all_ok ? "BOW stability test passed!" : "BOW stability test FAILED");
+    return all_ok ? 0 : 1;
+  }
+
   // Parse arguments
   std::string output_path;
   int preset_idx = -1;

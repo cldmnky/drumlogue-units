@@ -336,7 +336,10 @@ public:
         float sum_center = 0.0f;
         float sum_side = 0.0f;
         
-#ifdef USE_NEON
+// The vectorized resonator path is intentionally opt-in. Its stateful SVF /
+// bow feedback path can produce NaNs on note transitions; keep the rest of the
+// unit's NEON buffer helpers enabled while using the guarded scalar path here.
+#if defined(USE_NEON) && defined(ELEMENTISH_USE_NEON_RESONATOR)
         // NEON-optimized mode processing: 4 modes at a time
         // Using Structure-of-Arrays (SoA) layout for direct SIMD loads
         float32x4_t exc_vec = vdupq_n_f32(excitation);
@@ -514,9 +517,15 @@ public:
         // Use moderate gain to leave headroom for filter and envelope
         out_center = sum_center * 4.0f;
         out_side = (sum_side - sum_center) * 4.0f * space_;
+
+#ifdef UNIT_HOST_NATIVE
+        debug_last_center_ = out_center;
+        debug_last_side_ = out_side;
+        debug_num_modes_ = num_modes;
+#endif
         
         // Soft clamp to avoid harsh clipping
-#ifdef USE_NEON
+#if defined(USE_NEON) && defined(ELEMENTISH_USE_NEON_RESONATOR)
         // Use NEON FastTanh for both channels with clamping for |x| > 4
         float32x2_t input = {out_center * 0.5f, out_side * 0.5f};
         const float32x2_t k27_2 = vdup_n_f32(27.0f);
@@ -573,6 +582,14 @@ public:
         previous_position_ = position_;
         bow_signal_ = 0.0f;
     }
+
+    float DebugBowSignal() const { return bow_signal_; }
+
+#ifdef UNIT_HOST_NATIVE
+    float DebugLastCenter() const { return debug_last_center_; }
+    float DebugLastSide() const { return debug_last_side_; }
+    size_t DebugNumModes() const { return debug_num_modes_; }
+#endif
     
 private:
     // Update a single mode's coefficients
@@ -786,6 +803,12 @@ private:
     float cached_brightness_;   // Last computed brightness
     float cached_damping_;      // Last computed damping
     size_t cached_num_modes_;   // Cached number of active modes
+
+#ifdef UNIT_HOST_NATIVE
+    float debug_last_center_ = 0.0f;
+    float debug_last_side_ = 0.0f;
+    size_t debug_num_modes_ = 0;
+#endif
 };
 
 // ============================================================================

@@ -12,6 +12,10 @@
 #include <cstring>
 #include <cmath>
 
+#ifdef UNIT_HOST_NATIVE
+#include <cstdio>
+#endif
+
 #include "unit.h"
 #include "perf_mon.h"
 #include "modal_synth.h"
@@ -43,45 +47,45 @@ public:
 
     int8_t Init(const unit_runtime_desc_t* desc) {
         runtime_desc_ = desc;
-        
+    
         // Initialize synth
         synth_.Init();
-        
+    
         PERF_MON_INIT();
         perf_counter_ = PERF_MON_REGISTER("ElementishRender");
-        
+    
         // Set up default parameters (matching header.c)
         // Page 1: Exciter Mix
         params_[0] = 0;    // BOW
         params_[1] = 0;    // BLOW
         params_[2] = 100;  // STRIKE
         params_[3] = 0;    // MALLET (bipolar: -64 to +63)
-        
+    
         // Page 2: Exciter Timbre
         params_[4] = 0;    // BOW TIMBRE (bipolar)
         params_[5] = 0;    // FLOW (bipolar) - was BLOW TIMBRE
         params_[6] = 0;    // STK MODE (SAMPLE)
         params_[7] = 0;    // DENSITY (bipolar)
-        
+    
         // Page 3: Resonator
         params_[8] = 0;    // GEOMETRY (bipolar)
         params_[9] = 0;    // BRIGHTNESS (bipolar)
         params_[10] = 0;   // DAMPING (bipolar)
         params_[11] = 0;   // POSITION (bipolar)
-        
+    
 #ifdef ELEMENTS_LIGHTWEIGHT
         // Page 4 (lightweight): Model, Space, Volume, Deja Vu
         params_[12] = 0;   // MODEL
         params_[13] = 70;  // SPACE (0-127, default 70 = ~55% stereo width)
         params_[14] = 100; // VOLUME (0-127, default 100 = ~79%)
         params_[15] = 0;   // DEJA VU
-        
+    
         // Page 5: Envelope
         params_[16] = 5;   // ATTACK
         params_[17] = 40;  // DECAY
         params_[18] = 40;  // RELEASE
         params_[19] = 0;   // CONTOUR (ADR)
-        
+    
         // Page 6: Tuning & Sequencer
         params_[20] = 0;   // COARSE (bipolar: -64 to +63)
         params_[21] = 0;   // FINE (bipolar: -64 to +63 = -100 to +100 cents)
@@ -93,33 +97,33 @@ public:
         params_[13] = 0;   // RESONANCE
         params_[14] = 64;  // FLT ENV (filter envelope amount)
         params_[15] = 0;   // MODEL
-        
+    
         // Page 5: Envelope
         params_[16] = 5;   // ATTACK
         params_[17] = 40;  // DECAY
         params_[18] = 40;  // RELEASE
         params_[19] = 0;   // CONTOUR (ADR)
-        
+    
         // Page 6: LFO
         params_[20] = 40;  // LFO RATE
         params_[21] = 0;   // LFO DEPTH (off by default)
         params_[22] = 0;   // LFO PRESET (OFF)
         params_[23] = 0;   // COARSE (bipolar: -64 to +63)
 #endif
-        
+    
         // Apply initial parameters
         for (int i = 0; i < kNumParams; ++i) {
             applyParameter(i);
         }
-        
+    
         // Force resonator to recalculate coefficients with new parameters
         synth_.ForceResonatorUpdate();
-        
+    
 #ifdef ELEMENTS_LIGHTWEIGHT
         // Initialize sequencer (only in lightweight mode)
         sequencer_.Init(48000.0f);  // drumlogue sample rate
 #endif
-        
+    
         initialized_ = true;
         return k_unit_err_none;
     }
@@ -142,7 +146,7 @@ public:
     void Render(float* out, uint32_t frames) {
         PROFILE_RENDER_BEGIN();
         PERF_MON_START(perf_counter_);
-        
+    
         // Safety: if not initialized, output silence
         if (!initialized_) {
             for (uint32_t i = 0; i < frames * 2; ++i) {
@@ -152,12 +156,12 @@ public:
             PROFILE_RENDER_END();
             return;
         }
-        
+    
 #ifdef ELEMENTS_LIGHTWEIGHT
         // Process Marbles sequencer (generates internal note events)
         if (sequencer_.IsEnabled()) {
             sequencer_.Process(frames);
-            
+        
             uint8_t note, velocity;
             while (sequencer_.GetNextNote(&note, &velocity)) {
                 // Apply fine tune and pitch bend only: the sequencer already
@@ -167,18 +171,18 @@ public:
             }
         }
 #endif
-        
+    
         // Process audio with static buffers
         static constexpr uint32_t kMaxFrames = 128;
         static float out_l[kMaxFrames];
         static float out_r[kMaxFrames];
-        
+    
         uint32_t frames_remaining = frames;
         uint32_t out_idx = 0;
-        
+    
         while (frames_remaining > 0) {
             uint32_t process_frames = (frames_remaining > kMaxFrames) ? kMaxFrames : frames_remaining;
-            
+        
 #ifdef USE_NEON
             // NEON-optimized buffer clearing (4 floats per iteration)
             modal::neon::ClearStereoBuffers(out_l, out_r, process_frames);
@@ -189,16 +193,16 @@ public:
                 out_r[i] = 0.0f;
             }
 #endif
-            
+        
             // Call synth - this is where bad values might come from
             synth_.Process(out_l, out_r, process_frames);
-            
+        
 #ifdef USE_NEON
             // NEON-optimized sanitize (NaN removal) and clamp
             // Single-pass protection for both channels
             modal::neon::SanitizeAndClamp(out_l, 0.95f, process_frames);
             modal::neon::SanitizeAndClamp(out_r, 0.95f, process_frames);
-            
+        
             // NEON-optimized stereo interleaving to output
             modal::neon::InterleaveStereo(out_l, out_r, &out[out_idx], process_frames);
             out_idx += process_frames * 2;
@@ -207,37 +211,87 @@ public:
             for (uint32_t i = 0; i < process_frames; ++i) {
                 float l = out_l[i];
                 float r = out_r[i];
-                
+            
                 // 1. Check for NaN using bit pattern (most reliable)
                 union { float f; uint32_t u; } ul, ur;
                 ul.f = l;
                 ur.f = r;
-                
+            
                 // NaN has exponent all 1s and non-zero mantissa
                 // Inf has exponent all 1s and zero mantissa
                 // Both have (exp & 0x7F800000) == 0x7F800000
                 bool l_bad = ((ul.u & 0x7F800000) == 0x7F800000);
                 bool r_bad = ((ur.u & 0x7F800000) == 0x7F800000);
-                
+            
                 if (l_bad) l = 0.0f;
                 if (r_bad) r = 0.0f;
-                
+            
                 // 2. Clamp to very conservative range
                 if (l > 0.95f) l = 0.95f;
                 if (l < -0.95f) l = -0.95f;
                 if (r > 0.95f) r = 0.95f;
                 if (r < -0.95f) r = -0.95f;
-                
+            
                 out[out_idx++] = l;
                 out[out_idx++] = r;
             }
 #endif
-            
+        
             frames_remaining -= process_frames;
         }
-        
+    
         PERF_MON_END(perf_counter_);
         PROFILE_RENDER_END();
+
+#ifdef UNIT_HOST_NATIVE
+        ++debug_render_count_;
+        float peak = 0.0f;
+        bool nonfinite = false;
+        for (uint32_t i = 0; i < frames * 2; ++i) {
+            const float sample = out[i];
+            if (!std::isfinite(sample)) {
+                nonfinite = true;
+                continue;
+            }
+            const float magnitude = std::fabs(sample);
+            if (magnitude > peak) peak = magnitude;
+        }
+
+        const bool audible = peak > 1.0e-4f;
+        if (nonfinite || (debug_was_audible_ && !audible)) {
+            std::fprintf(stderr,
+                         "[Elementish] render=%llu peak=%.7f finite=%s "
+                         "env=%.7f bow=%.7f res=%.7f side=%.7f modes=%u "
+                         "wet=%.7f wetfinite=%s level=%.3f model=%d "
+                         "note=%u velocity=%u active=%s\n",
+                         static_cast<unsigned long long>(debug_render_count_),
+                         peak, nonfinite ? "no" : "yes",
+                         synth_.DebugEnvelopeValue(), synth_.DebugBowSignal(),
+                         synth_.DebugResonatorCenter(), synth_.DebugResonatorSide(),
+                         synth_.DebugResonatorModes(), synth_.DebugReverbWet(),
+                         synth_.DebugReverbNonfinite() ? "no" : "yes",
+                         synth_.DebugOutputLevel(), synth_.DebugModel(),
+                         current_note_, current_velocity_,
+                         note_active_ ? "yes" : "no");
+            std::fflush(stderr);
+        }
+        if ((debug_render_count_ % 64u) == 0u) {
+            std::fprintf(stderr,
+                         "[Elementish] render=%llu peak=%.7f env=%.7f "
+                         "bow=%.7f res=%.7f side=%.7f modes=%u wet=%.7f "
+                         "wetfinite=%s level=%.3f model=%d note=%u active=%s\n",
+                         static_cast<unsigned long long>(debug_render_count_),
+                         peak, synth_.DebugEnvelopeValue(),
+                         synth_.DebugBowSignal(), synth_.DebugResonatorCenter(),
+                         synth_.DebugResonatorSide(), synth_.DebugResonatorModes(),
+                         synth_.DebugReverbWet(),
+                         synth_.DebugReverbNonfinite() ? "no" : "yes",
+                         synth_.DebugOutputLevel(), synth_.DebugModel(), current_note_,
+                         note_active_ ? "yes" : "no");
+            std::fflush(stderr);
+        }
+        debug_was_audible_ = audible;
+#endif
     }
 
     void setParameter(uint8_t id, int32_t value) {
@@ -353,11 +407,21 @@ public:
             NoteOff(note);
             return;
         }
-        
+    
+#ifdef UNIT_HOST_NATIVE
+        {
+            extern bool s_elementish_note_active;
+            extern uint8_t s_elementish_current_note;
+            extern float s_elementish_env_value;
+            s_elementish_note_active = true;
+            s_elementish_current_note = note;
+            s_elementish_env_value = synth_.DebugEnvelopeValue();
+        }
+#endif
         // Apply coarse tuning, fine tuning, and pitch bend
         current_note_ = note;
         current_velocity_ = velocity;
-        
+    
 #ifdef ELEMENTS_LIGHTWEIGHT
         // Trigger sequencer subdivisions (pattern step triggers note burst)
         if (sequencer_.IsEnabled()) {
@@ -366,13 +430,23 @@ public:
             return;
         }
 #endif
-        
+    
         synth_.NoteOn(ClampedTunedNote((float)note), velocity);
         note_active_ = true;
     }
 
+#ifdef UNIT_HOST_NATIVE
+    float DebugEnvelopeValue() const { return synth_.DebugEnvelopeValue(); }
+#endif
+
     void NoteOff(uint8_t note) {
         if (note == current_note_) {
+#ifdef UNIT_HOST_NATIVE
+            {
+                extern bool s_elementish_note_active;
+                s_elementish_note_active = false;
+            }
+#endif
 #ifdef ELEMENTS_LIGHTWEIGHT
             sequencer_.Release();
 #endif
@@ -392,7 +466,7 @@ public:
             return;
         }
 #endif
-        
+    
         synth_.NoteOn(ClampedTunedNote((float)current_note_), velocity);
         note_active_ = true;
     }
@@ -438,7 +512,7 @@ public:
 
     void LoadPreset(uint8_t idx) {
         preset_index_ = idx;
-        
+    
         // Capture the held note so it can be retriggered with the new preset.
         uint8_t retrigger_note = current_note_;
         uint8_t retrigger_velocity = current_velocity_;
@@ -447,18 +521,18 @@ public:
         bool sequencer_enabled = false;
         sequencer_enabled = sequencer_.IsEnabled();
 #endif
-        
+    
 #ifdef ELEMENTS_LIGHTWEIGHT
         // Clear any pending sequencer notes so a preset switch can't trigger
         // notes that were queued by the previous preset.
         sequencer_.Reset();
 #endif
         note_active_ = false;
-        
+    
         // Reset DSP state before applying new preset to ensure clean transition
         synth_.Reset();
         synth_.ResetVoice();
-        
+    
 #ifdef ELEMENTS_LIGHTWEIGHT
         // Lightweight preset format:
         // bow, blow, strike, mallet, bowT, blwT, stkMode, granD,
@@ -582,7 +656,7 @@ public:
                 break;
         }
 #endif
-        
+    
         // Retrigger the held note with the new preset's voice configuration so
         // the sound continues instead of dying out with the stale envelope.
         if (retrigger) {
@@ -633,7 +707,7 @@ public:
 
 private:
     static constexpr int kNumParams = 24;
-    
+
 #ifdef ELEMENTS_LIGHTWEIGHT
     // Preset function for ELEMENTS_LIGHTWEIGHT mode
     // Page 4: MODEL, SPACE, VOLUME, DEJA_VU
@@ -650,41 +724,41 @@ private:
         params_[1] = blow;
         params_[2] = strike;
         params_[3] = mallet;
-        
+    
         // Page 2: Exciter Timbre
         params_[4] = bowT;
         params_[5] = blwT;
         params_[6] = stkMode;
         params_[7] = granD;
-        
+    
         // Page 3: Resonator
         params_[8] = geo;
         params_[9] = bright;
         params_[10] = damp;
         params_[11] = pos;
-        
+    
         // Page 4: Model, Space, Volume, Deja Vu (Lightweight)
         params_[12] = model;
         params_[13] = space;
         params_[14] = volume;
         params_[15] = dejaVu;
-        
+    
         // Page 5: Envelope (ADR)
         params_[16] = atk;
         params_[17] = dec;
         params_[18] = rel;
         params_[19] = envMode;
-        
+    
         // Page 6: Tuning & Sequencer (Lightweight)
         params_[20] = coarse;
         params_[21] = fine;
         params_[22] = seq;
         params_[23] = spread;
-        
+    
         for (int i = 0; i < kNumParams; ++i) {
             applyParameter(i);
         }
-        
+    
         // Force resonator to recalculate coefficients with new preset values
         synth_.ForceResonatorUpdate();
     }
@@ -701,52 +775,52 @@ private:
         params_[1] = blow;
         params_[2] = strike;
         params_[3] = mallet;
-        
+    
         // Page 2: Exciter Timbre
         params_[4] = bowT;
         params_[5] = blwT;
         params_[6] = stkMode;
         params_[7] = granD;
-        
+    
         // Page 3: Resonator
         params_[8] = geo;
         params_[9] = bright;
         params_[10] = damp;
         params_[11] = pos;
-        
+    
         // Page 4: Filter & Model
         params_[12] = cutoff;
         params_[13] = reso;
         params_[14] = fltEnv;
         params_[15] = model;
-        
+    
         // Page 5: Envelope (ADR)
         params_[16] = atk;
         params_[17] = dec;
         params_[18] = rel;
         params_[19] = envMode;
-        
+    
         // Page 6: LFO
         params_[20] = lfoRt;
         params_[21] = lfoDepth;
         params_[22] = lfoPre;
         params_[23] = coarse;
-        
+    
         for (int i = 0; i < kNumParams; ++i) {
             applyParameter(i);
         }
-        
+    
         // Force resonator to recalculate coefficients with new preset values
         synth_.ForceResonatorUpdate();
     }
 #endif
-    
+
     void applyParameter(uint8_t id) {
         // For unipolar params (0-127): norm = value / 127
         // For bipolar params (-64 to +63): norm = (value + 64) / 127
         float norm = (float)params_[id] / 127.0f;  // Default for unipolar
         float bipolar_norm = (float)(params_[id] + 64) / 127.0f;  // For bipolar params
-        
+    
         switch (id) {
             // Page 1: Exciter Mix
             case 0: // BOW (unipolar)
@@ -761,7 +835,7 @@ private:
             case 3: // MALLET (enum 0-5, selects strike sample)
                 synth_.SetStrikeSample(params_[id]);
                 break;
-                
+            
             // Page 2: Exciter Timbre
             case 4: // BOW TIMBRE (bipolar)
                 synth_.SetBowTimbre(bipolar_norm);
@@ -776,7 +850,7 @@ private:
             case 7: // GRANULAR DENSITY (bipolar)
                 synth_.SetGranularDensity(bipolar_norm);
                 break;
-                
+            
             // Page 3: Resonator (all bipolar)
             case 8: // GEOMETRY
                 synth_.SetStructure(bipolar_norm);
@@ -790,7 +864,7 @@ private:
             case 11: // POSITION
                 synth_.SetPosition(bipolar_norm);
                 break;
-                
+            
 #ifdef ELEMENTS_LIGHTWEIGHT
             // Page 4 (Lightweight): Model, Space, Volume
             case 12: // MODEL
@@ -805,7 +879,7 @@ private:
             case 15: // DEJA VU (0-127 -> 0.0-1.0, relocated from page 6)
                 sequencer_.SetDejaVu(norm);
                 break;
-            
+        
             // Page 5: Envelope
             case 16: // ATTACK
                 synth_.SetAttack(norm);
@@ -819,7 +893,7 @@ private:
             case 19: // CONTOUR (ENV MODE)
                 synth_.SetEnvMode(params_[id]);
                 break;
-            
+        
             // Page 6: Tuning & Sequencer
             case 20: // COARSE (bipolar: -64 to +63 maps to -24 to +24 semitones)
                 coarse_tune_ = (float)params_[id] * 24.0f / 63.0f;
@@ -850,7 +924,7 @@ private:
             case 15: // MODEL
                 synth_.SetModel(params_[id]);
                 break;
-                
+            
             // Page 5: Envelope
             case 16: // ATTACK
                 synth_.SetAttack(norm);
@@ -864,7 +938,7 @@ private:
             case 19: // CONTOUR (ENV MODE)
                 synth_.SetEnvMode(params_[id]);
                 break;
-                
+            
             // Page 6: LFO
             case 20: // LFO RATE
                 synth_.SetLfoRate(norm);
@@ -902,21 +976,26 @@ private:
     const unit_runtime_desc_t* runtime_desc_;  // Cached for potential future use
     modal::ModalSynth synth_;
     int32_t params_[kNumParams];
-    
+
 #ifdef ELEMENTS_LIGHTWEIGHT
     marbles::MarblesSequencer sequencer_;
 #endif
-    
+
     uint8_t current_note_ = 60;
     uint8_t current_velocity_ = 100;
     uint8_t preset_index_ = 0;
     uint32_t tempo_ = 120 << 16;
-    
+
     float coarse_tune_ = 0.0f;
     float fine_tune_ = 0.0f;    // -1 to +1 semitone (±100 cents)
     float pitch_bend_ = 0.0f;
     bool note_active_ = false;
     uint8_t perf_counter_ = 0xFF;
-    
+
+#ifdef UNIT_HOST_NATIVE
+    uint64_t debug_render_count_ = 0;
+    bool debug_was_audible_ = false;
+#endif
+
     bool initialized_;
 };

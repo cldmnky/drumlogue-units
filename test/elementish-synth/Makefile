@@ -92,7 +92,7 @@ install-deps-linux:
 	sudo apt-get install libsndfile1-dev
 
 # Test targets
-.PHONY: test test-preset test-notes test-pattern test-analyze test-compare test-profile test-all test-quick test-sequencer test-patterns
+.PHONY: test test-preset test-notes test-pattern test-analyze test-compare test-profile test-all test-quick test-sequencer test-patterns test-bow-stability
 
 # Quick sanity test
 test: $(TARGET)
@@ -212,6 +212,10 @@ test-quick: $(TARGET)
 	./$(TARGET) --compare-modes --note 60 --duration 1
 	@echo "Quick tests passed!"
 
+test-bow-stability: $(TARGET)
+	@echo "=== BOW Stability Regression Test ($(BUILD_MODE) mode) ==="
+	./$(TARGET) --bow-stability-test
+
 # Comprehensive test suite
 test-all: $(TARGET)
 	@echo "╔══════════════════════════════════════════════════════════════════════════════╗"
@@ -245,6 +249,9 @@ ifeq ($(BUILD_MODE),lightweight)
 	@$(MAKE) test-patterns
 	@echo ""
 endif
+	@echo "=== Phase 9: BOW Stability ==="
+	@$(MAKE) test-bow-stability
+	@echo ""
 	@echo "=== Cleanup: Removing generated WAV files ==="
 	@rm -f *.wav
 	@echo "Removed all .wav files"

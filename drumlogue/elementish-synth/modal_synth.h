@@ -105,9 +105,9 @@ class ModalSynth {
 public:
     enum Model { kModal, kString, kMultiString };
     static constexpr uint32_t kMaxProcessFrames = 128;
-    
+
     ModalSynth() : model_(kModal), pitch_(60.0f), output_level_(0.8f) {}
-    
+
     void Init() {
         exciter_.Reset();
         resonator_.SetFrequency(MidiToFrequency(60.0f));
@@ -118,15 +118,15 @@ public:
 #ifndef ELEMENTS_LIGHTWEIGHT
         filter_.Reset();
 #endif
-        
+    
         env_.SetADSR(0.001f, 0.2f, 0.0f, 0.3f);
 #ifndef ELEMENTS_LIGHTWEIGHT
         filter_env_.SetADSR(0.001f, 0.3f, 0.3f, 0.2f);
-        
+    
         filter_.SetCutoff(8000.0f);
 #endif
     }
-    
+
     // Exciter controls
     void SetBow(float v) { exciter_.SetBow(v); }
     void SetBlow(float v) { exciter_.SetBlow(v); }
@@ -135,17 +135,17 @@ public:
     void SetBlowTimbre(float v) { exciter_.SetBlowTimbre(v); }
     void SetBlowFlow(float v) { exciter_.SetBlowFlow(v); }
     void SetStrikeTimbre(float v) { exciter_.SetStrikeTimbre(v); }
-    
+
     // Strike sample: 0=mallet_soft, 1=mallet_med, 2=mallet_hard, 3=plectrum, 4=stick, 5=bow_attack
     void SetStrikeSample(int idx) { exciter_.SetStrikeSample(idx); }
-    
+
     // Strike mode: 0=Sample, 1=Granular, 2=Noise
     void SetStrikeMode(int mode) { exciter_.SetStrikeMode(mode); }
-    
+
     // Granular controls (for granular strike mode)
     void SetGranularPosition(float v) { exciter_.SetGranularPosition(v); }
     void SetGranularDensity(float v) { exciter_.SetGranularDensity(v); }
-    
+
     // Resonator controls
     void SetStructure(float v) { 
         structure_base_ = v;
@@ -169,13 +169,13 @@ public:
         string_.SetDamping(v);
         multi_string_.SetDamping(v);
     }
-    
+
     // Dispersion control (piano-like inharmonicity, String/MultiString only)
     void SetDispersion(float v) {
         string_.SetDispersion(v);
         multi_string_.SetDispersion(v);
     }
-    
+
     void SetPosition(float v) { 
         position_base_ = v;
         resonator_.SetPosition(v);
@@ -183,7 +183,7 @@ public:
         string_.SetPosition(v);
         multi_string_.SetPosition(v);
     }
-    
+
     // Set the oscillator frequency without re-triggering the envelope.
     // Used for live pitch bend and retuning of a held note.
     void SetFrequency(float freq) {
@@ -193,7 +193,7 @@ public:
         multi_string_.SetFrequency(freq);
         exciter_.SetBlowFrequency(freq);
     }
-    
+
     // Filter controls
 #ifndef ELEMENTS_LIGHTWEIGHT
     void SetFilterCutoff(float v) {
@@ -208,7 +208,7 @@ public:
     void SetFilterResonance(float v) { (void)v; }
     void SetFilterEnvAmount(float v) { (void)v; }
 #endif
-    
+
     // Envelope controls (using MultistageEnvelope)
     void SetAttack(float v) { 
         attack_time_ = 0.001f + v * 2.0f;
@@ -226,43 +226,43 @@ public:
         release_time_ = 0.01f + v * 5.0f;
         updateEnvelope();
     }
-    
+
     // Envelope mode: 0=ADR, 1=AD, 2=AR, 3=AD-Loop
     void SetEnvMode(int mode) {
         env_mode_ = mode;
         updateEnvelope();
     }
-    
+
     // Model selection: 0=Modal, 1=String, 2=MultiString
     void SetModel(int m) { 
         if (m == 0) model_ = kModal;
         else if (m == 1) model_ = kString;
         else model_ = kMultiString;
     }
-    
+
     // Stereo space control (Elements-style).
     // Drives raw exciter bleed, stereo spread, reverb amount and reverb time,
     // mirroring the original Elements "space" metaparameter.
     void SetSpace(float v) { 
         space_ = Clamp(v, 0.0f, 1.0f);
         resonator_.SetSpace(space_);
-        
+    
         // Raw exciter bleed (Elements: 1.0 at space<0.05, fading to 0 by 0.1).
         float raw_gain = space_ <= 0.05f ? 1.0f :
             (space_ <= 0.1f ? 2.0f - space_ * 20.0f : 0.0f);
         raw_gain_ = raw_gain;
-        
+    
         // Reverb amount ramps in above 50% space; time follows the amount.
         float reverb_amount = space_ >= 0.5f ? (space_ - 0.5f) * 2.0f : 0.0f;
         float reverb_time = 0.35f + 1.2f * reverb_amount;
-        
+    
         reverb_.set_amount(reverb_amount);
         reverb_.set_time(reverb_time);
         reverb_.set_diffusion(0.625f);
         reverb_.set_lp(0.7f);
         reverb_.set_input_gain(0.2f);
     }
-    
+
     // Force resonator coefficient update (call after bulk parameter changes)
     void ForceResonatorUpdate() {
         resonator_.ForceUpdate();
@@ -273,12 +273,12 @@ public:
         // 0.1 Hz to 20 Hz, exponential scaling
         lfo_rate_ = 0.1f * std::pow(200.0f, v);
     }
-    
+
     void SetLfoDepth(float v) {
         // 0 to 1 mapped to 0% to 100% modulation depth
         lfo_depth_ = Clamp(v, 0.0f, 1.0f);
     }
-    
+
     void SetLfoPreset(int preset) {
         // Presets combine shape and destination
         // 0=OFF, 1=TRI>CUT, 2=SIN>GEO, 3=SQR>POS, 4=TRI>BRI, 5=SIN>SPC, 6=SAW>CUT
@@ -326,44 +326,60 @@ public:
     void SetLfoDepth(float v) { (void)v; }
     void SetLfoPreset(int preset) { (void)preset; }
 #endif
-    
+
     void SetOutputLevel(float v) { output_level_ = v; }
-    
+
     void NoteOn(uint8_t note, uint8_t velocity) {
+        // If a previous note is still ringing, briefly damp the resonator
+        // to avoid a click/distortion from the instant frequency change.
+        if (env_.IsActive()) {
+            // Quick 32-sample fade of resonator state before retriggering.
+            float saved_vel = velocity_;
+            velocity_ = 0.0f;
+            float dummy_l, dummy_r;
+            for (int i = 0; i < 32; ++i) {
+                Process(&dummy_l, &dummy_r, 1);
+            }
+            velocity_ = saved_vel;
+            resonator_.Reset();
+            string_.Reset();
+            multi_string_.Reset();
+        }
+    
         pitch_ = (float)note;
         float freq = MidiToFrequency(pitch_);
-        
+    
         resonator_.SetFrequency(freq);
         resonator_.Update();
         string_.SetFrequency(freq);
         multi_string_.SetFrequency(freq);
-        
+    
         // Set blow frequency for tube resonance (tracks pitch)
         exciter_.SetBlowFrequency(freq);
-        
+    
         exciter_.Trigger();
         env_.Trigger();
 #ifndef ELEMENTS_LIGHTWEIGHT
         filter_env_.Trigger();
 #endif
-        
+    
         // Use exponential velocity curve for more musical dynamics
         velocity_ = GetVelocityGain(velocity);
     }
-    
+
     void NoteOff() {
         env_.Release();
 #ifndef ELEMENTS_LIGHTWEIGHT
         filter_env_.Release();
 #endif
     }
-    
+
     void Process(float* out_l, float* out_r, uint32_t frames) {
 #ifndef ELEMENTS_LIGHTWEIGHT
         // LFO control rate divisor - update every 32 samples (~1.5kHz control rate)
         static constexpr int kLfoUpdateRate = 32;
 #endif
-        
+    
         for (uint32_t i = 0; i < frames; ++i) {
 #ifndef ELEMENTS_LIGHTWEIGHT
             // Update LFO at control rate (not audio rate) to save CPU
@@ -371,7 +387,7 @@ public:
                 // Update LFO phase
                 lfo_phase_ += lfo_rate_ * kLfoUpdateRate / kSampleRate;
                 if (lfo_phase_ >= 1.0f) lfo_phase_ -= 1.0f;
-                
+            
                 // Generate LFO waveform based on shape
                 float lfo;
                 switch (lfo_shape_) {
@@ -406,7 +422,7 @@ public:
                         lfo = 0.0f;
                         break;
                 }
-                
+            
                 // Apply LFO depth and to destination
                 float lfo_mod = lfo * lfo_depth_ * 0.5f;
                 switch (lfo_dest_) {
@@ -432,16 +448,16 @@ public:
             }
             lfo_counter_ = (lfo_counter_ + 1) & (kLfoUpdateRate - 1);
 #endif  // ELEMENTS_LIGHTWEIGHT
-            
+        
             // Generate excitation
             PROFILE_EXCITER_BEGIN();
             float exc = exciter_.Process() * velocity_;
             PROFILE_EXCITER_END();
             raw_ = exc;
-            
+        
             // Get bow strength for resonator bowing
             float bow_strength = exciter_.GetBowStrength() * velocity_;
-            
+        
             // Resonate with stereo output
             float center, side;
             if (model_ == kModal) {
@@ -467,7 +483,7 @@ public:
                 // Gain compensation: MSTRING is ~15.7dB quieter than MODAL
                 center *= 6.0f;
             }
-            
+        
 #ifndef ELEMENTS_LIGHTWEIGHT
             // Apply filter with envelope modulation (only if LFO not targeting cutoff)
             PROFILE_FILTER_BEGIN();
@@ -477,7 +493,7 @@ public:
                 cutoff = Clamp(cutoff, 20.0f, 18000.0f);
                 filter_.SetCutoff(cutoff);
             }
-            
+        
             // Filter center channel (side is already difference signal)
             float filtered_center = filter_.Process(center);
             PROFILE_FILTER_END();
@@ -485,36 +501,36 @@ public:
             // No filter in lightweight mode - pass through directly
             float filtered_center = center;
 #endif
-            
+        
             // Apply amplitude envelope
             float amp = env_.Process() * output_level_;
-            
+        
             // Convert mid-side to left-right with soft limiting
             // L = center + side, R = center - side
             float mid = FastTanh(filtered_center) * amp;
             float side_scaled = side * amp;
-            
+        
             float out_left = mid + side_scaled;
             float out_right = mid - side_scaled;
-            
+        
             // Raw exciter bleed (Elements SPACE metaparameter): at very low
             // space values the raw exciter signal is mixed into the output.
             out_left += raw_ * raw_gain_ * 0.15f;
             out_right += raw_ * raw_gain_ * 0.15f;
-            
+        
             // Soft limit final output to prevent clipping
             out_left = FastTanh(out_left);
             out_right = FastTanh(out_right);
-            
+        
             // Robust NaN/Inf protection (NaN != NaN trick)
             if (out_left != out_left) out_left = 0.0f;
             if (out_right != out_right) out_right = 0.0f;
-            
+        
             dry_buffer_[i] = out_left;
             out_l[i] = out_left;
             out_r[i] = out_right;
         }
-        
+    
         // Elements-style reverb: wet tail is added to one channel and
         // subtracted from the other to create a stereo reverb field.
         static float wet_buffer[kMaxProcessFrames];
@@ -528,7 +544,7 @@ public:
             out_r[i] = FastTanh(r);
         }
     }
-    
+
     void Reset() {
         resonator_.Reset();
         string_.Reset();
@@ -538,7 +554,7 @@ public:
         filter_.Reset();
 #endif
     }
-    
+
     // Reset the voice state (exciters, sample player, envelopes) without
     // touching any parameter values. Used when switching presets so a stale
     // envelope segment or half-finished sample cannot continue under the new
@@ -551,7 +567,21 @@ public:
 #endif
         velocity_ = 1.0f;
     }
-    
+
+#ifdef UNIT_HOST_NATIVE
+    float DebugEnvelopeValue() const { return env_.value(); }
+    float DebugBowSignal() const { return resonator_.DebugBowSignal(); }
+    float DebugResonatorCenter() const { return resonator_.DebugLastCenter(); }
+    float DebugResonatorSide() const { return resonator_.DebugLastSide(); }
+    uint32_t DebugResonatorModes() const {
+        return static_cast<uint32_t>(resonator_.DebugNumModes());
+    }
+    float DebugReverbWet() const { return reverb_.DebugLastWet(); }
+    bool DebugReverbNonfinite() const { return reverb_.DebugNonfinite(); }
+    float DebugOutputLevel() const { return output_level_; }
+    int DebugModel() const { return static_cast<int>(model_); }
+#endif
+
 private:
     void updateEnvelope() {
         // Apply current envelope mode with stored parameters
@@ -599,7 +629,7 @@ private:
     MultistageEnvelope filter_env_;
 #endif
     MultistageEnvelope env_;
-    
+
     Model model_;
     float pitch_;
     float velocity_ = 1.0f;
@@ -612,14 +642,14 @@ private:
     float filter_cutoff_base_ = 8000.0f;
     float filter_env_amount_ = 0.5f;  // Default filter envelope amount (gives character to plucks)
 #endif
-    
+
     // Envelope parameters
     int env_mode_ = 0;
     float attack_time_ = 0.001f;
     float decay_time_ = 0.1f;
     float sustain_level_ = 0.7f;
     float release_time_ = 0.3f;
-    
+
 #ifndef ELEMENTS_LIGHTWEIGHT
     // LFO parameters
     float lfo_rate_ = 1.0f;
@@ -631,7 +661,7 @@ private:
     float lfo_random_value_ = 0.0f;  // For RND (sample & hold) waveform
     uint32_t lfo_random_state_ = 12345;  // Random state for S&H
 #endif
-    
+
     // Base values for LFO modulation targets
     float structure_base_ = 0.5f;
     float position_base_ = 0.5f;
