@@ -9,11 +9,22 @@
 #include <cstddef>
 #include <cstdint>
 
+#ifdef UNIT_HOST_NATIVE
+#include <cstdio>
+#endif
+
 #include "unit.h"                // Common definitions for all units
 #include "elements_synth_v2.h"   // Enhanced modal synth wrapper
 
 static ElementsSynth s_synth_instance;       // Synth instance
 static unit_runtime_desc_t s_runtime_desc;   // Cached runtime descriptor
+
+#ifdef UNIT_HOST_NATIVE
+// Debug state shared with unit.cc note_on/note_off logging
+bool s_elementish_note_active = false;
+uint8_t s_elementish_current_note = 60;
+float s_elementish_env_value = 0.0f;
+#endif
 
 // ---- Callback entry points from drumlogue runtime ----------------------------------------------
 
@@ -28,6 +39,11 @@ __unit_callback int8_t unit_init(const unit_runtime_desc_t * desc) {
     return k_unit_err_api_version;
 
   s_runtime_desc = *desc;  // Cache runtime descriptor
+
+#ifdef UNIT_HOST_NATIVE
+  std::fprintf(stderr, "[Elementish] unit_init rate=%u frames=%u target=0x%08x api=0x%08x\n",
+               desc->samplerate, desc->frames_per_buffer, desc->target, desc->api);
+#endif
 
   return s_synth_instance.Init(desc);
 }
@@ -51,9 +67,16 @@ __unit_callback void unit_suspend() {
 __unit_callback void unit_render(const float * in, float * out, uint32_t frames) {
   (void)in;  // Elements is a synth, doesn't process external input in basic mode
   s_synth_instance.Render(out, frames);
+#ifdef UNIT_HOST_NATIVE
+  s_elementish_env_value = s_synth_instance.DebugEnvelopeValue();
+#endif
 }
 
 __unit_callback void unit_set_param_value(uint8_t id, int32_t value) {
+#ifdef UNIT_HOST_NATIVE
+  std::fprintf(stderr, "[Elementish] param id=%u value=%ld\n",
+               id, static_cast<long>(value));
+#endif
   s_synth_instance.setParameter(id, value);
 }
 
@@ -74,22 +97,46 @@ __unit_callback void unit_set_tempo(uint32_t tempo) {
 }
 
 __unit_callback void unit_note_on(uint8_t note, uint8_t velocity) {
+#ifdef UNIT_HOST_NATIVE
+  {
+    extern bool s_elementish_note_active;
+    extern uint8_t s_elementish_current_note;
+    extern float s_elementish_env_value;
+    std::fprintf(stderr, "[Elementish] note_on note=%u velocity=%u (prev_active=%s prev_note=%u prev_env=%.4f)\n",
+                 note, velocity,
+                 s_elementish_note_active ? "yes" : "no",
+                 s_elementish_current_note,
+                 s_elementish_env_value);
+  }
+#endif
   s_synth_instance.NoteOn(note, velocity);
 }
 
 __unit_callback void unit_note_off(uint8_t note) {
+#ifdef UNIT_HOST_NATIVE
+  std::fprintf(stderr, "[Elementish] note_off note=%u\n", note);
+#endif
   s_synth_instance.NoteOff(note);
 }
 
 __unit_callback void unit_gate_on(uint8_t velocity) {
+#ifdef UNIT_HOST_NATIVE
+  std::fprintf(stderr, "[Elementish] gate_on velocity=%u\n", velocity);
+#endif
   s_synth_instance.GateOn(velocity);
 }
 
 __unit_callback void unit_gate_off() {
+#ifdef UNIT_HOST_NATIVE
+  std::fprintf(stderr, "[Elementish] gate_off\n");
+#endif
   s_synth_instance.GateOff();
 }
 
 __unit_callback void unit_all_note_off() {
+#ifdef UNIT_HOST_NATIVE
+  std::fprintf(stderr, "[Elementish] all_note_off\n");
+#endif
   s_synth_instance.AllNoteOff();
 }
 
@@ -106,6 +153,9 @@ __unit_callback void unit_aftertouch(uint8_t note, uint8_t aftertouch) {
 }
 
 __unit_callback void unit_load_preset(uint8_t idx) {
+#ifdef UNIT_HOST_NATIVE
+  std::fprintf(stderr, "[Elementish] load_preset index=%u\n", idx);
+#endif
   s_synth_instance.LoadPreset(idx);
 }
 
@@ -116,4 +166,3 @@ __unit_callback uint8_t unit_get_preset_index() {
 __unit_callback const char * unit_get_preset_name(uint8_t idx) {
   return ElementsSynth::getPresetName(idx);
 }
-
