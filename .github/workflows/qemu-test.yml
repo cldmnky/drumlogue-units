@@ -17,13 +17,49 @@ on:
       - 'eurorack/**'
       - 'test/qemu-arm/**'
       - 'logue-sdk/**'
+      - 'logue-sdk/docker/**'
       - 'build.sh'
       - '.github/workflows/qemu-test.yml'
   workflow_dispatch:
 
 jobs:
+  # Rebuilds and pushes the SDK container image to GHCR so the per-commit
+  # unit builds can pull the cached image instead of rebuilding it every run.
+  # Runs on main/master pushes that touch the SDK docker sources, or manually.
+  build-sdk-image:
+    name: Build & Push SDK Image
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push SDK image
+        run: ./build.sh --build-image --push
+        env:
+          ENGINE: podman
+          IMAGE_REGISTRY: ghcr.io/${{ github.repository }}
+
   build-units:
     name: Build Units
+    needs: build-sdk-image
+    # Run even when build-sdk-image is skipped (PRs, non-main branches) or
+    # failed - the GHCR pull step falls back to a local build in that case.
+    if: always()
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -49,15 +85,23 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h
       
-      - name: Build SDK container image
-        run: ./build.sh --build-image
-        env:
-          ENGINE: podman
+      - name: Get SDK image (GHCR cache or local build)
+        id: sdk-image
+        run: |
+          if podman pull ghcr.io/${{ github.repository }}/logue-sdk-dev-env:latest 2>/dev/null; then
+            echo "Using cached SDK image from GHCR"
+            echo "image=ghcr.io/${{ github.repository }}/logue-sdk-dev-env:latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "No cached SDK image found, building locally"
+            ./build.sh --build-image
+            echo "image=localhost/logue-sdk-dev-env:latest" >> "$GITHUB_OUTPUT"
+          fi
       
       - name: Build ${{ matrix.unit }}
         run: ./build.sh ${{ matrix.unit }}
         env:
           ENGINE: podman
+          IMAGE: ${{ steps.sdk-image.outputs.image }}
       
       - name: Upload unit artifact
         uses: actions/upload-artifact@v4
@@ -91,6 +135,19 @@ jobs:
         run: |
           sudo apt-get update
           sudo dpkg --add-architecture armhf
+          # Ubuntu noble does not publish armhf indexes on the standard
+          # archive (404 on archive/security.ubuntu.com), which made
+          # apt-get update fail with exit code 100. Restrict the runner's
+          # built-in sources to amd64 and add armhf via ports.ubuntu.com.
+          sudo grep -rIl '^Types: deb' /etc/apt/sources.list.d/ 2>/dev/null | while read -r f; do
+            grep -q '^Architectures:' "$f" || sudo sed -i '/^Types: deb/a Architectures: amd64' "$f"
+          done
+          echo "Types: deb" | sudo tee /etc/apt/sources.list.d/armhf-ports.sources >/dev/null
+          echo "URIs: http://ports.ubuntu.com/ubuntu-ports/" | sudo tee -a /etc/apt/sources.list.d/armhf-ports.sources >/dev/null
+          echo "Suites: noble noble-updates noble-backports" | sudo tee -a /etc/apt/sources.list.d/armhf-ports.sources >/dev/null
+          echo "Components: main universe" | sudo tee -a /etc/apt/sources.list.d/armhf-ports.sources >/dev/null
+          echo "Architectures: armhf" | sudo tee -a /etc/apt/sources.list.d/armhf-ports.sources >/dev/null
+          echo "Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg" | sudo tee -a /etc/apt/sources.list.d/armhf-ports.sources >/dev/null
           sudo apt-get update
           sudo apt-get install -y \
             gcc-arm-linux-gnueabihf \
@@ -105,6 +162,12 @@ jobs:
             python3-numpy \
             python3-scipy \
             make
+          # Make the armhf runtime libraries visible to qemu's -L sysroot
+          # (/usr/arm-linux-gnueabihf) - libsndfile is not part of the
+          # cross-toolchain sysroot
+          if [ -d /usr/arm-linux-gnueabihf/lib ] && [ -d /usr/lib/arm-linux-gnueabihf ]; then
+            sudo cp -rn /usr/lib/arm-linux-gnueabihf/. /usr/arm-linux-gnueabihf/lib/ 2>/dev/null || true
+          fi
       
       - name: Build ARM unit host
         working-directory: test/qemu-arm
