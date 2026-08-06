@@ -21,14 +21,14 @@ This port features:
 
 - **Three excitation types:**
   - BOW: Continuous friction/bowing with adjustable timbre
-  - BLOW: Granular noise/breath with flow control
+  - BLOW: Granular sample-player breath (noise wavetable scan, Elements-style) with flow control
   - STRIKE: Percussive impacts (sample, granular, noise, plectrum, or particle modes)
 - **Physical resonator** with 8 spectral modes
 - **Three resonator models:**
   - MODAL: Classic Elements 8-partial modal resonator
-  - STRING: Karplus-Strong string synthesis
-  - MSTRING: 5 sympathetic strings for rich harmonic content
-- **Stereo width control** via SPACE parameter
+  - STRING: Karplus-Strong string synthesis (geometry → dispersion, position → pickup)
+  - MSTRING: 5 sympathetic strings tuned to an Elements chord selected by geometry
+- **Elements-style SPACE metaparameter:** raw exciter bleed, stereo width, reverb amount and reverb time
 
 ### Exciter Options
 
@@ -43,7 +43,7 @@ This port features:
 | Parameter | Description |
 |-----------|-------------|
 | BOW | Bow exciter level (continuous friction) |
-| BLOW | Blow/breath exciter level (granular noise) |
+| BLOW | Blow/breath exciter level (granular sample-player) |
 | STRIKE | Strike/percussion level |
 | MALLET | Mallet type - 12 variants (see Exciter Options above) |
 
@@ -52,7 +52,7 @@ This port features:
 | Parameter | Description |
 |-----------|-------------|
 | BOW TIM | Bow friction/texture (bipolar: smooth↔rough) |
-| FLOW | Air turbulence for blow exciter (bipolar) |
+| FLOW | Air turbulence for blow exciter: sets granular restart density and pitch (bipolar) |
 | STK MOD | Strike mode (SAMPLE/GRANULAR/NOISE/PLECTRUM/PARTICLE) |
 | DENSITY | Granular density (bipolar, active in GRANULAR/PARTICLE modes) |
 
@@ -60,19 +60,19 @@ This port features:
 
 | Parameter | Description |
 |-----------|-------------|
-| GEOMETRY | Structure shape (bipolar: string→bar→membrane→plate→bell) |
+| GEOMETRY | Structure shape (bipolar). MODAL: partials; STRING: dispersion; MSTRING: chord selection |
 | BRIGHT | High-frequency mode damping (bipolar: wood↔glass) |
 | DAMPING | Energy dissipation/decay time (bipolar) |
-| POSITION | Excitation point on surface (bipolar, affects harmonics) |
+| POSITION | Excitation point (bipolar, affects harmonics; applied to all three models) |
 
-### Page 4: Model & Space
+### Page 4: Model, Space, Volume
 
 | Parameter | Description |
 |-----------|-------------|
 | MODEL | Resonator model (MODAL/STRING/MSTRING) |
-| SPACE | Stereo width (0=mono, 127=wide) |
+| SPACE | Elements space metaparameter: exciter bleed, stereo width, reverb amount/time |
 | VOLUME | Output level |
-| — | (unused) |
+| DEJA VU | Sequence looping amount for the Marbles sequencer (0=random, 127=locked loop) |
 
 ### Page 5: Envelope
 
@@ -83,27 +83,27 @@ This port features:
 | RELEASE | Envelope release time |
 | CONTOUR | Envelope mode (ADR/AD/AR/LOOP) |
 
-### Page 6: Tuning
+### Page 6: Tuning & Sequencer
 
 | Parameter | Description |
 |-----------|-------------|
 | COARSE | Pitch coarse tune (bipolar: -24 to +24 semitones) |
 | FINE | Pitch fine tune (bipolar: -100 to +100 cents) |
-| — | (unused) |
-| — | (unused) |
+| SEQ | Marbles sequencer preset (OFF, rates, scales) |
+| SPREAD | Sequencer note range (0=narrow, 127=wide) |
 
-## Presets
+## Presets (Lightweight mode)
 
 | # | Name | Description |
 |---|------|-------------|
 | 0 | Init | Clean starting point (strike only) |
 | 1 | Bowed Str | Bowed string with sustain |
 | 2 | Bell | Metallic bell percussion |
-| 3 | Wobble | Wobble bass |
-| 4 | Blown Tube | Wind/breath instrument |
-| 5 | Shimmer | Ambient shimmer |
-| 6 | Pluck Str | Plucked string (STRING model) |
-| 7 | Drone | Evolving drone pad |
+| 3 | Pluck | Plectrum plucked string |
+| 4 | Blown | Breathy wind instrument (granular blow) |
+| 5 | Marimba | Wooden mallet percussion |
+| 6 | String | Karplus-Strong plucked string |
+| 7 | Drone | Evolving multi-string drone |
 
 ## Technical Details
 
@@ -120,8 +120,9 @@ The synth supports two build configurations:
 **Lightweight Mode (default):** `ELEMENTS_LIGHTWEIGHT`
 
 - Removes LFO and Moog filter for maximum performance
-- Page 4: MODEL, SPACE, VOLUME
-- Page 6: COARSE, FINE tuning
+- Page 4: MODEL, SPACE, VOLUME, DEJA VU
+- Page 5: ATTACK, DECAY, RELEASE, CONTOUR
+- Page 6: COARSE, FINE, SEQ, SPREAD
 - Recommended for drumlogue hardware
 
 **Full Mode:** (disable `ELEMENTS_LIGHTWEIGHT` in config.mk)
@@ -189,9 +190,27 @@ See `eurorack/README.md` for Mutable Instruments licensing details.
   - Easter egg mode (Ominous voice)
   - CV/Gate inputs (handled by drumlogue)
   - LED metering
+- The reverb is a compact fixed-size Schroeder network, not the original
+  FDN-based Elements reverb
 - Lightweight mode removes filter and LFO for performance
 
 ## Version History
+
+### v1.3.0
+
+- Fix: sequencer notes can no longer ring out after note-off / all-notes-off /
+  panic / preset change
+- Fix: tuned MIDI notes are clamped to the valid range before conversion
+- Fix: malformed quartic attack envelope lookup table (was non-monotonic and
+  overshooting) replaced with a correct t⁴ curve
+- Fix: pitch bend now bends the currently held note
+- Fix: interval-scale sequencer quantization no longer wraps to wrong octaves
+- Fix: STRING/MSTRING now respond to GEOMETRY (dispersion / chord) and POSITION
+- Fix: BLOW exciter now uses an Elements-style granular sample-player source
+- Fix: SPACE now drives raw exciter bleed, stereo spread, and a reverb tail
+- Fix: FINE tuning re-exposed on page 6 (DEJA VU moved to page 4)
+- Fix: lightweight test CLI parameter mapping (model no longer corrupted by
+  --cutoff/--resonance)
 
 ### v1.0.0
 

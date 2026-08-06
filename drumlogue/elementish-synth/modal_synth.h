@@ -17,6 +17,7 @@
 #include "dsp/envelope.h"
 #include "dsp/exciter.h"
 #include "dsp/resonator.h"
+#include "dsp/reverb.h"
 #ifndef ELEMENTS_LIGHTWEIGHT
 #include "dsp/filter.h"
 #endif
@@ -103,6 +104,7 @@ namespace modal {
 class ModalSynth {
 public:
     enum Model { kModal, kString, kMultiString };
+    static constexpr uint32_t kMaxProcessFrames = 128;
     
     ModalSynth() : model_(kModal), pitch_(60.0f), output_level_(0.8f) {}
     
@@ -112,6 +114,7 @@ public:
         resonator_.Update();
         string_.SetFrequency(MidiToFrequency(60.0f));
         multi_string_.SetFrequency(MidiToFrequency(60.0f));
+        reverb_.Init();
 #ifndef ELEMENTS_LIGHTWEIGHT
         filter_.Reset();
 #endif
@@ -130,6 +133,7 @@ public:
     void SetStrike(float v) { exciter_.SetStrike(v); }
     void SetBowTimbre(float v) { exciter_.SetBowTimbre(v); }
     void SetBlowTimbre(float v) { exciter_.SetBlowTimbre(v); }
+    void SetBlowFlow(float v) { exciter_.SetBlowFlow(v); }
     void SetStrikeTimbre(float v) { exciter_.SetStrikeTimbre(v); }
     
     // Strike sample: 0=mallet_soft, 1=mallet_med, 2=mallet_hard, 3=plectrum, 4=stick, 5=bow_attack
@@ -147,6 +151,10 @@ public:
         structure_base_ = v;
         resonator_.SetStructure(v);
         resonator_.Update();  // Apply immediately for live parameter changes
+        // STRING/MSTRING: geometry becomes dispersion (single string) and
+        // chord selection (multi-string), matching the original Elements.
+        string_.SetStructure(v);
+        multi_string_.SetChord(v);
     }
     void SetBrightness(float v) { 
         brightness_base_ = v;
@@ -172,6 +180,18 @@ public:
         position_base_ = v;
         resonator_.SetPosition(v);
         resonator_.Update();  // Apply immediately for live parameter changes
+        string_.SetPosition(v);
+        multi_string_.SetPosition(v);
+    }
+    
+    // Set the oscillator frequency without re-triggering the envelope.
+    // Used for live pitch bend and retuning of a held note.
+    void SetFrequency(float freq) {
+        resonator_.SetFrequency(freq);
+        resonator_.Update();
+        string_.SetFrequency(freq);
+        multi_string_.SetFrequency(freq);
+        exciter_.SetBlowFrequency(freq);
     }
     
     // Filter controls
@@ -220,15 +240,27 @@ public:
         else model_ = kMultiString;
     }
     
-    // Multi-string detuning amount (0=unison, 1=full chorus)
-    void SetMultiStringDetune(float v) {
-        multi_string_.SetDetuneAmount(Clamp(v, 0.0f, 1.0f));
-    }
-    
-    // Stereo space control (Elements-style)
+    // Stereo space control (Elements-style).
+    // Drives raw exciter bleed, stereo spread, reverb amount and reverb time,
+    // mirroring the original Elements "space" metaparameter.
     void SetSpace(float v) { 
         space_ = Clamp(v, 0.0f, 1.0f);
-        resonator_.SetSpace(v);
+        resonator_.SetSpace(space_);
+        
+        // Raw exciter bleed (Elements: 1.0 at space<0.05, fading to 0 by 0.1).
+        float raw_gain = space_ <= 0.05f ? 1.0f :
+            (space_ <= 0.1f ? 2.0f - space_ * 20.0f : 0.0f);
+        raw_gain_ = raw_gain;
+        
+        // Reverb amount ramps in above 50% space; time follows the amount.
+        float reverb_amount = space_ >= 0.5f ? (space_ - 0.5f) * 2.0f : 0.0f;
+        float reverb_time = 0.35f + 1.2f * reverb_amount;
+        
+        reverb_.set_amount(reverb_amount);
+        reverb_.set_time(reverb_time);
+        reverb_.set_diffusion(0.625f);
+        reverb_.set_lp(0.7f);
+        reverb_.set_input_gain(0.2f);
     }
     
     // Force resonator coefficient update (call after bulk parameter changes)
@@ -382,19 +414,17 @@ public:
                         filter_.SetCutoff(filter_cutoff_base_ * (1.0f + lfo_mod));
                         break;
                     case 2: // GEOMETRY
-                        resonator_.SetStructure(Clamp(structure_base_ + lfo_mod * 0.5f, 0.0f, 1.0f));
-                        resonator_.Update();
+                        SetStructure(Clamp(structure_base_ + lfo_mod * 0.5f, 0.0f, 1.0f));
                         break;
                     case 3: // POSITION
-                        resonator_.SetPosition(Clamp(position_base_ + lfo_mod * 0.5f, 0.0f, 1.0f));
-                        resonator_.Update();
+                        SetPosition(Clamp(position_base_ + lfo_mod * 0.5f, 0.0f, 1.0f));
                         break;
                     case 4: // BRIGHTNESS
                         resonator_.SetBrightness(Clamp(brightness_base_ + lfo_mod * 0.5f, 0.0f, 1.0f));
                         resonator_.Update();
                         break;
                     case 5: // SPACE
-                        resonator_.SetSpace(Clamp(space_ + lfo_mod * 0.5f, 0.0f, 1.0f));
+                        SetSpace(Clamp(space_ + lfo_mod * 0.5f, 0.0f, 1.0f));
                         break;
                     default:
                         break;
@@ -407,6 +437,7 @@ public:
             PROFILE_EXCITER_BEGIN();
             float exc = exciter_.Process() * velocity_;
             PROFILE_EXCITER_END();
+            raw_ = exc;
             
             // Get bow strength for resonator bowing
             float bow_strength = exciter_.GetBowStrength() * velocity_;
@@ -466,6 +497,11 @@ public:
             float out_left = mid + side_scaled;
             float out_right = mid - side_scaled;
             
+            // Raw exciter bleed (Elements SPACE metaparameter): at very low
+            // space values the raw exciter signal is mixed into the output.
+            out_left += raw_ * raw_gain_ * 0.15f;
+            out_right += raw_ * raw_gain_ * 0.15f;
+            
             // Soft limit final output to prevent clipping
             out_left = FastTanh(out_left);
             out_right = FastTanh(out_right);
@@ -474,8 +510,22 @@ public:
             if (out_left != out_left) out_left = 0.0f;
             if (out_right != out_right) out_right = 0.0f;
             
+            dry_buffer_[i] = out_left;
             out_l[i] = out_left;
             out_r[i] = out_right;
+        }
+        
+        // Elements-style reverb: wet tail is added to one channel and
+        // subtracted from the other to create a stereo reverb field.
+        static float wet_buffer[kMaxProcessFrames];
+        reverb_.Process(dry_buffer_, wet_buffer, frames);
+        for (uint32_t i = 0; i < frames; ++i) {
+            float spread = 0.2f + space_ * 0.8f;
+            float wet = wet_buffer[i] * spread;
+            float l = out_l[i] + wet;
+            float r = out_r[i] - wet;
+            out_l[i] = FastTanh(l);
+            out_r[i] = FastTanh(r);
         }
     }
     
@@ -483,6 +533,7 @@ public:
         resonator_.Reset();
         string_.Reset();
         multi_string_.Reset();
+        reverb_.Reset();
 #ifndef ELEMENTS_LIGHTWEIGHT
         filter_.Reset();
 #endif
@@ -529,6 +580,7 @@ private:
     Resonator resonator_;
     String string_;
     MultiString multi_string_;
+    Reverb reverb_;
 #ifndef ELEMENTS_LIGHTWEIGHT
     MoogLadder filter_;
     MultistageEnvelope filter_env_;
@@ -540,6 +592,9 @@ private:
     float velocity_ = 1.0f;
     float output_level_;
     float space_ = 0.7f;  // Default stereo width 70%
+    float raw_gain_ = 0.0f;
+    float raw_ = 0.0f;    // Raw exciter signal for bleed (Elements space)
+    float dry_buffer_[kMaxProcessFrames];
 #ifndef ELEMENTS_LIGHTWEIGHT
     float filter_cutoff_base_ = 8000.0f;
     float filter_env_amount_ = 0.5f;  // Default filter envelope amount (gives character to plucks)

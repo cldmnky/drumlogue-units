@@ -923,6 +923,7 @@ public:
         damping_ = 0.5f;
         brightness_ = 0.5f;
         dispersion_ = 0.0f;
+        position_ = 0.5f;
         lp_state_ = 0.0f;
         dc_blocker_x_ = 0.0f;
         dc_blocker_y_ = 0.0f;
@@ -950,12 +951,30 @@ public:
         dispersion_filter_.Configure(freq_, dispersion_);
     }
     
+    // Alias for compatibility: geometry maps to dispersion for strings.
+    void SetStructure(float s) { SetDispersion(s); }
+    
+    // Excitation/pickup position on the string (Elements-style).
+    // position = 0.5 places the pickup at the center (fundamental); moving
+    // toward the ends scales the comb delay and suppresses low harmonics.
+    void SetPosition(float p) {
+        position_ = Clamp(p, 0.0f, 1.0f);
+        UpdateCoefficients();
+    }
+    
     float Process(float excitation) {
         // Protect against NaN input
         if (excitation != excitation) excitation = 0.0f;
         
-        // Read from delay line with linear interpolation
-        float read_pos = static_cast<float>(write_ptr_) - delay_samples_;
+        // Read from delay line with linear interpolation.
+        // The comb delay is position-scaled: total delay (base + position
+        // part) reproduces the fundamental, so the position comb sits on top
+        // of it like a pickup on the string.
+        float base = delay_samples_ * (1.0f - clamped_position_);
+        float comb_delay = delay_samples_ * clamped_position_;
+        if (comb_delay < 2.0f) comb_delay = 2.0f;
+        
+        float read_pos = static_cast<float>(write_ptr_) - base - comb_delay;
         if (read_pos < 0.0f) read_pos += kMaxDelay;
         
         int read_idx = static_cast<int>(read_pos);
@@ -1005,6 +1024,10 @@ private:
         if (delay_samples_ > kMaxDelay - 2) delay_samples_ = kMaxDelay - 2;
         if (delay_samples_ < 2) delay_samples_ = 2;
         
+        // Clamp the position so the pickup never sits exactly on the
+        // termination points (would collapse the comb delay to zero).
+        clamped_position_ = 0.5f - 0.48f * fabsf(position_ - 0.5f);
+        
         // Feedback coefficient for decay time
         // damping = 0 -> long decay (feedback ~0.9995)
         // damping = 1 -> short decay (feedback ~0.98)
@@ -1031,6 +1054,8 @@ private:
     float dc_blocker_x_, dc_blocker_y_;
     DispersionFilter dispersion_filter_;
     float freq_, damping_, brightness_, dispersion_;
+    float position_ = 0.5f;
+    float clamped_position_ = 0.5f;
 };
 
 // ============================================================================
@@ -1042,16 +1067,9 @@ class MultiString {
 public:
     static constexpr int kNumStrings = 5;
     
-    // Detuning ratios for sympathetic strings (in cents)
-    // String 0: main string (0 cents)
-    // Strings 1-4: sympathetic strings with subtle detuning for chorus effect
-    static constexpr float kDetuning[kNumStrings] = {
-        0.0f,    // Main string
-        -5.0f,   // Slightly flat
-        5.0f,    // Slightly sharp
-        -10.0f,  // More flat (creates beating)
-        10.0f    // More sharp
-    };
+    // Chord transpose tables (in semitones) from original Elements voice.cc.
+    // Geometry selects the chord; each of the 5 strings is tuned to one entry.
+    static const float kChords[11][kNumStrings];
     
     // Amplitude ratios for each string (main louder, sympathetics softer)
     static constexpr float kAmplitude[kNumStrings] = {
@@ -1070,7 +1088,7 @@ public:
         for (int i = 0; i < kNumStrings; ++i) {
             strings_[i].Reset();
         }
-        detune_amount_ = 0.5f;
+        chord_index_ = 0;
         freq_ = 220.0f;
     }
     
@@ -1098,10 +1116,22 @@ public:
         }
     }
     
-    // Control amount of detuning (0 = unison, 1 = full detuning)
-    void SetDetuneAmount(float amount) {
-        detune_amount_ = Clamp(amount, 0.0f, 1.0f);
-        UpdateFrequencies();
+    // Set pickup position for each string (Elements string position control)
+    void SetPosition(float p) {
+        for (int i = 0; i < kNumStrings; ++i) {
+            strings_[i].SetPosition(p);
+        }
+    }
+    
+    // Select chord from geometry (Elements RESONATOR_MODEL_STRINGS behavior).
+    // geometry 0-1 maps to chord index 0-10.
+    void SetChord(float geometry) {
+        int idx = static_cast<int>(Clamp(geometry, 0.0f, 1.0f) * 10.0f + 0.5f);
+        if (idx > 10) idx = 10;
+        if (idx != chord_index_) {
+            chord_index_ = idx;
+            UpdateFrequencies();
+        }
     }
     
     float Process(float excitation) {
@@ -1126,21 +1156,32 @@ public:
 private:
     void UpdateFrequencies() {
         for (int i = 0; i < kNumStrings; ++i) {
-            // Convert cents to frequency ratio: ratio = 2^(cents/1200)
-            float cents = kDetuning[i] * detune_amount_;
-            // More accurate cents to ratio: 2^(c/1200) ≈ 1 + c * 0.0005778
-            float ratio = 1.0f + cents * 0.0005778f;
-            strings_[i].SetFrequency(freq_ * ratio);
+            float transpose = kChords[chord_index_][i];
+            strings_[i].SetFrequency(freq_ * SemitonesToRatio(transpose));
         }
     }
     
     String strings_[kNumStrings];
     float freq_;
-    float detune_amount_;
+    int chord_index_;
+};
+
+// Elements chord table (voice.cc)
+const float MultiString::kChords[11][MultiString::kNumStrings] = {
+    { 0.0f, -12.0f, 0.0f, 0.01f, 12.0f },
+    { 0.0f, -12.0f, 3.0f, 7.0f,  10.0f },
+    { 0.0f, -12.0f, 3.0f, 7.0f,  12.0f },
+    { 0.0f, -12.0f, 3.0f, 7.0f,  14.0f },
+    { 0.0f, -12.0f, 3.0f, 7.0f,  17.0f },
+    { 0.0f, -12.0f, 7.0f, 12.0f, 19.0f },
+    { 0.0f, -12.0f, 4.0f, 7.0f,  17.0f },
+    { 0.0f, -12.0f, 4.0f, 7.0f,  14.0f },
+    { 0.0f, -12.0f, 4.0f, 7.0f,  12.0f },
+    { 0.0f, -12.0f, 4.0f, 7.0f,  11.0f },
+    { 0.0f, -12.0f, 5.0f, 7.0f,  12.0f },
 };
 
 // Out-of-class definitions for static constexpr arrays (required pre-C++17)
-constexpr float MultiString::kDetuning[MultiString::kNumStrings];
 constexpr float MultiString::kAmplitude[MultiString::kNumStrings];
 
 } // namespace modal

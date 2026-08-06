@@ -25,7 +25,7 @@ const __unit_header unit_header_t unit_header = {
     .api = UNIT_API_VERSION,                               // logue sdk API version against which unit was built
     .dev_id = 0x434C444DU,                                 // developer id ("CLDM")
     .unit_id = 0x00000002U,                                // unit id unique within dev_id scope
-    .version = 0x010200U,                                // v1.2.0 (major<<16 | minor<<8 | patch)
+    .version = 0x010300U,                                // v1.3.0 (major<<16 | minor<<8 | patch)
     .name = "Elementish",                                  // displayed name, 7-bit ASCII, max 13 chars
     .num_presets = 8,                                      // 8 presets: INIT + 7 crafted presets
     .num_params = 24,                                      // number of parameters (6 pages x 4)
@@ -45,7 +45,7 @@ const __unit_header unit_header_t unit_header = {
         // ==================== Page 2: Exciter Timbre ====================
         // BOW TIMBRE: Bow friction/smoothness (granularity of bow material)
         {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"BOW TIM"}},
-        // FLOW: Air turbulence/texture for blow (like scanning wavetable of noise)
+        // FLOW: Granular blow restart density/turbulence (Elements-style)
         {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"FLOW"}},
         // STK MODE: Strike synthesis mode
         {0, 4, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"STK MOD"}},
@@ -53,13 +53,13 @@ const __unit_header unit_header_t unit_header = {
         {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"DENSITY"}},
 
         // ==================== Page 3: Resonator ====================
-        // GEOMETRY: Structure shape (string→bar→membrane→plate→bell)
+        // GEOMETRY: Structure shape (MODAL: partials; STRING: dispersion; MSTRING: chord)
         {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"GEOMETRY"}},
         // BRIGHTNESS: High-freq mode damping (wood/nylon→glass/steel)
         {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"BRIGHT"}},
         // DAMPING: Energy dissipation rate (muting effect)
         {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"DAMPING"}},
-        // POSITION: Excitation point on surface (affects harmonics like PWM)
+        // POSITION: Excitation/pickup point (applies to all three models)
         {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"POSITION"}},
 
 #ifndef ELEMENTS_LIGHTWEIGHT
@@ -76,12 +76,12 @@ const __unit_header unit_header_t unit_header = {
         // ==================== Page 4: Model & Space (Lightweight) ====================
         // MODEL: Resonator model (MODAL/STRING/MSTRING)
         {0, 2, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"MODEL"}},
-        // SPACE: Stereo width (Elements signature parameter)
+        // SPACE: Elements space metaparameter (bleed, width, reverb)
         {0, 127, 0, 70, k_unit_param_type_none, 0, 0, 0, {"SPACE"}},
         // VOLUME: Unit output level
         {0, 127, 0, 100, k_unit_param_type_none, 0, 0, 0, {"VOLUME"}},
-        // Blank placeholder
-        {0, 0, 0, 0, k_unit_param_type_none, 0, 0, 0, {""}},
+        // DEJA VU: Sequence looping amount (0=random, 127=locked loop)
+        {0, 127, 0, 0, k_unit_param_type_none, 0, 0, 0, {"DEJA VU"}},
 #endif
 
         // ==================== Page 5: Envelope ====================
@@ -105,15 +105,15 @@ const __unit_header unit_header_t unit_header = {
         // COARSE: Pitch coarse tune (-24 to +24 semi)
         {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"COARSE"}}}};
 #else
-        // ==================== Page 6: Sequencer (Lightweight) ====================
+        // ==================== Page 6: Tuning & Sequencer (Lightweight) ====================
         // COARSE: Pitch coarse tune (-24 to +24 semitones)
         {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"COARSE"}},
+        // FINE: Pitch fine tune (-100 to +100 cents)
+        {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"FINE"}},
         // SEQ: Sequencer preset (rate + scale combination)
         {0, 15, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"SEQ"}},
         // SPREAD: Note range/spread amount (0=narrow, 127=wide)
-        {0, 127, 0, 64, k_unit_param_type_none, 0, 0, 0, {"SPREAD"}},
-        // DEJA VU: Sequence looping amount (0=random, 127=locked loop)
-        {0, 127, 0, 0, k_unit_param_type_none, 0, 0, 0, {"DEJA VU"}}}};
+        {0, 127, 0, 64, k_unit_param_type_none, 0, 0, 0, {"SPREAD"}}}};
 #endif
 
 
