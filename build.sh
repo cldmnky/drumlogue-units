@@ -4,6 +4,7 @@
 #   e.g.: ./build.sh clouds-revfx        # Build the unit
 #         ./build.sh clouds-revfx clean  # Clean the build
 #         ./build.sh --build-image       # Build the SDK container image
+#         ./build.sh --build-image --push  # Build + push to IMAGE_REGISTRY (GHCR)
 
 set -e
 
@@ -19,17 +20,42 @@ build_image() {
     cd "${SDK_DOCKER}"
     BUILD_ID=$(git rev-parse --short HEAD)
     VERSION=$(cat VERSION)
+
+    # Local tags (used by default)
+    local tags=(-t "logue-sdk-dev-env:${VERSION}" -t "logue-sdk-dev-env:latest")
+    # Registry tags (when IMAGE_REGISTRY is set, e.g. ghcr.io/user/repo)
+    # Tagged with the SDK build id so stale cached images can be identified.
+    if [ -n "${IMAGE_REGISTRY}" ]; then
+        tags+=(
+            -t "${IMAGE_REGISTRY}/logue-sdk-dev-env:${VERSION}-${BUILD_ID}"
+            -t "${IMAGE_REGISTRY}/logue-sdk-dev-env:latest"
+        )
+    fi
+
     $ENGINE build \
         --build-arg build="$BUILD_ID" \
         --build-arg version="$VERSION" \
-        -t "logue-sdk-dev-env:${VERSION}" \
-        -t "logue-sdk-dev-env:latest" \
+        "${tags[@]}" \
         .
     echo ">> SDK image built: logue-sdk-dev-env:${VERSION}"
+
+    # Push to the registry when requested (--push flag)
+    if [ "${PUSH_IMAGE:-0}" = "1" ]; then
+        if [ -z "${IMAGE_REGISTRY}" ]; then
+            echo ">> Error: --push requires IMAGE_REGISTRY to be set"
+            exit 1
+        fi
+        echo ">> Pushing SDK image to ${IMAGE_REGISTRY}..."
+        $ENGINE push "${IMAGE_REGISTRY}/logue-sdk-dev-env:${VERSION}-${BUILD_ID}"
+        $ENGINE push "${IMAGE_REGISTRY}/logue-sdk-dev-env:latest"
+    fi
 }
 
 # Handle --build-image flag
 if [ "$1" = "--build-image" ]; then
+    if [ "$2" = "--push" ]; then
+        PUSH_IMAGE=1
+    fi
     build_image
     exit 0
 fi
