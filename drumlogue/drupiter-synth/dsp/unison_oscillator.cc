@@ -34,7 +34,10 @@ UnisonOscillator::UnisonOscillator()
     , detune_cents_(10.0f)
     , stereo_spread_(0.7f)
     , scale_(1.0f / sqrtf(7.0f))
-    , waveform_(JupiterDCO::WAVEFORM_SAW)
+    // BUGFIX: must match the waveform Init() applies to the internal
+    // oscillators (WAVEFORM_SAW_PWM), otherwise the first SetWaveform(SAW)
+    // would early-return and never propagate.
+    , waveform_(JupiterDCO::WAVEFORM_SAW_PWM)
     , pulse_width_(0.5f) {
     memset(voice_detunes_, 0, sizeof(voice_detunes_));
     memset(voice_pans_, 0, sizeof(voice_pans_));

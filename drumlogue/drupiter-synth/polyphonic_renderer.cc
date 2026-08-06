@@ -102,6 +102,21 @@ float PolyphonicRenderer::RenderVoices(
     // OPTIMIZATION: Check HPF condition once before voice loop instead of per-voice
     const bool apply_hpf = hpf_alpha > 0.0f;
 
+    // OPTIMIZATION: resonance and mode only change when parameters change.
+    // Update ALL voices in a single pre-loop pass when they do, instead of
+    // calling the setters per voice per sample. (The cache must not be
+    // updated inside the voice loop, or only the first active voice would
+    // receive the new setting.)
+    if (resonance != cached_resonance || static_cast<int>(vcf_mode) != cached_vcf_mode) {
+        cached_resonance = resonance;
+        cached_vcf_mode = static_cast<int>(vcf_mode);
+        for (uint8_t v = 0; v < DRUPITER_MAX_VOICES; v++) {
+            dsp::Voice& voice_mut = synth.GetAllocator().GetVoiceMutable(v);
+            voice_mut.vcf.SetResonance(resonance);
+            voice_mut.vcf.SetMode(vcf_mode);
+        }
+    }
+
     // Render each active voice
     for (uint8_t v = 0; v < DRUPITER_MAX_VOICES; v++) {
         const dsp::Voice& voice = synth.GetAllocator().GetVoice(v);
@@ -239,18 +254,7 @@ float PolyphonicRenderer::RenderVoices(
         // Apply modulation to cutoff base
         const float voice_cutoff_modulated = voice_cutoff_base * fast_pow2(voice_total_mod);
 
-        // Set per-voice filter parameters and process
-        // OPTIMIZATION: SetResonance/SetMode only mark dirty on change, but
-        // avoid the per-voice-per-sample call overhead entirely by caching
-        // (resonance and mode only change when parameters change).
-        if (resonance != cached_resonance) {
-            cached_resonance = resonance;
-            voice_mut.vcf.SetResonance(resonance);
-        }
-        if (static_cast<int>(vcf_mode) != cached_vcf_mode) {
-            cached_vcf_mode = static_cast<int>(vcf_mode);
-            voice_mut.vcf.SetMode(vcf_mode);
-        }
+        // Set per-voice filter cutoff and process
         voice_mut.vcf.SetCutoffModulated(voice_cutoff_modulated);
 
         float voice_filtered = voice_hpf_out;

@@ -2589,8 +2589,54 @@ static bool TestVCFCoefficientCaching() {
     return true;
 }
 
-static bool TestDenormalHandling() {
-    // Verify that denormal flushing prevents ARM FPU performance spikes
+static bool TestSlowCutoffSweepAccumulates() {
+    // Regression test: SetCutoffModulated must accumulate small per-sample
+    // cutoff changes against the last APPLIED cutoff, otherwise slow
+    // modulation sweeps never cross the 1 Hz recompute threshold and the
+    // filter cutoff freezes.
+    std::cout << "\n--- Slow Cutoff Sweep Accumulation Test ---" << std::endl;
+    
+    dsp::JupiterVCF vcf;
+    vcf.Init(48000.0f);
+    vcf.SetResonance(0.0f);
+    vcf.SetMode(dsp::JupiterVCF::MODE_LP24);
+    
+    // 2 kHz test tone
+    float phase = 0.0f;
+    const float freq = 2000.0f;
+    
+    float early_energy = 0.0f;
+    float late_energy = 0.0f;
+    float cutoff = 100.0f;
+    
+    for (int i = 0; i < 20000; i++) {
+        phase += 2.0f * M_PI * freq / 48000.0f;
+        if (phase >= 2.0f * M_PI) phase -= 2.0f * M_PI;
+        const float input = 0.5f * sinf(phase);
+        
+        // Slow sweep: +0.5 Hz per sample. With per-request change detection
+        // the delta never exceeds 1 Hz and the filter would freeze at ~100 Hz;
+        // with accumulation the cutoff follows up to ~10 kHz.
+        cutoff += 0.5f;
+        vcf.SetCutoffModulated(cutoff);
+        
+        const float out = vcf.Process(input);
+        if (i < 2000) early_energy += fabsf(out);
+        if (i >= 18000) late_energy += fabsf(out);
+    }
+    
+    // Cutoff swept 100 Hz -> ~10 kHz; the 2 kHz tone must pass at the end
+    if (late_energy < 5.0f * early_energy) {
+        std::cout << "    ERROR: filter cutoff did not follow slow sweep "
+                  << "(early=" << early_energy << ", late=" << late_energy << ")" << std::endl;
+        return false;
+    }
+    
+    std::cout << "    PASSED: slow cutoff sweep accumulates and recomputes coefficients" << std::endl;
+    return true;
+}
+
+static bool TestDenormalHandling() {    // Verify that denormal flushing prevents ARM FPU performance spikes
     // by processing signals with very small amplitudes (denormal region)
     std::cout << "\n--- Denormal Handling Test ---" << std::endl;
     
@@ -2973,6 +3019,9 @@ int main(int argc, char** argv) {
 
     ok = true;
     if (!TestVCFCoefficientCaching()) {
+        ok = false;
+    }
+    if (!TestSlowCutoffSweepAccumulates()) {
         ok = false;
     }
     if (!TestDenormalHandling()) {
