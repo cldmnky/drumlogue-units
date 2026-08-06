@@ -139,11 +139,25 @@ public:
 
     /**
      * Called when note off received.
-     * Stops any remaining subdivisions.
+     * Stops any remaining subdivisions and drops pending queued notes so no
+     * sequencer-generated note can sound after the host requested silence.
      */
     void Release() {
         active_ = false;
         subdivisions_remaining_ = 0;
+        ClearNoteQueue();
+    }
+
+    /**
+     * Fully stop the sequencer (all-notes-off, panic, preset changes).
+     * Clears every pending note and resets playback state.
+     */
+    void Reset() {
+        Release();
+        phase_ = 0.0f;
+        base_note_ = 60;
+        base_velocity_ = 100;
+        loop_index_ = 0;
     }
 
     /**
@@ -196,7 +210,18 @@ public:
         *note = note_queue_[note_queue_read_].note;
         *velocity = note_queue_[note_queue_read_].velocity;
         note_queue_read_ = (note_queue_read_ + 1) % kNoteQueueSize;
+        if (note_queue_read_ == note_queue_write_) {
+            // Drain the queue so stale notes can never ring out later.
+            note_queue_read_ = 0;
+            note_queue_write_ = 0;
+        }
         return true;
+    }
+
+    // Drop all pending notes. Safe to call from any state.
+    void ClearNoteQueue() {
+        note_queue_read_ = 0;
+        note_queue_write_ = 0;
     }
 
     void SetBaseNote(uint8_t note) {
@@ -344,11 +369,31 @@ private:
         if (!scale || scale->length == 0) {
             return semitones;  // No quantization
         }
-        
-        // Find octave and position within octave
+
+        // Interval scales (octaves, fifths, fourths, triads) define absolute
+        // melodic offsets such as -12, +12, -5, +7. Reattaching a wrapped
+        // pitch class to an octave corrupts them (e.g. +11 -> 0 instead of
+        // +12), so select the nearest absolute offset directly.
+        if (IsIntervalScale()) {
+            int best = scale->notes[0];
+            int min_dist = 1000000;
+            for (int i = 0; i < scale->length; ++i) {
+                int note = scale->notes[i];
+                int dist = semitones - note;
+                if (dist < 0) dist = -dist;
+                if (dist < min_dist) {
+                    min_dist = dist;
+                    best = note;
+                }
+            }
+            return best;
+        }
+
+        // Pitch-class scales (major/minor/pentatonic/chromatic/seventh):
+        // find the closest note within an octave and preserve the input octave.
         int octave = 0;
         int semi = semitones;
-        
+
         if (semi >= 0) {
             octave = semi / 12;
             semi = semi % 12;
@@ -357,30 +402,44 @@ private:
             octave = (semi - 11) / 12;
             semi = semi - octave * 12;
         }
-        
+
         // Find closest scale degree
         int closest = scale->notes[0];
         int min_dist = 100;
-        
+
         for (int i = 0; i < scale->length; ++i) {
             int note = scale->notes[i];
             if (note < 0) note += 12;  // Handle negative offsets
             if (note >= 12) note -= 12;
-            
+
             int dist = semi - note;
             if (dist < 0) dist = -dist;
-            
+
             // Also check wrapping
             int dist_wrap = 12 - dist;
             if (dist_wrap < dist) dist = dist_wrap;
-            
+
             if (dist < min_dist) {
                 min_dist = dist;
                 closest = note;
             }
         }
-        
+
         return octave * 12 + closest;
+    }
+
+    // True when the active scale uses absolute out-of-octave offsets rather
+    // than a repeating pitch-class set.
+    bool IsIntervalScale() const {
+        switch (preset_) {
+            case SEQ_OCT:
+            case SEQ_5TH:
+            case SEQ_4TH:
+            case SEQ_TRI:
+                return true;
+            default:
+                return false;
+        }
     }
 
     const Scale* GetCurrentScale() {

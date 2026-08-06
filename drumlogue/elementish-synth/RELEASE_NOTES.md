@@ -1,5 +1,46 @@
 # Elementish Synth - Release Notes
 
+## v1.3.0
+
+Review-fix release.
+
+### Bug Fixes
+
+- **Sequencer note leak:** pending sequencer notes are dropped on note-off,
+  all-notes-off, panic and preset change, so no note can ring out after the
+  host requested silence
+- **MIDI tuning clamp:** tuned notes are clamped to [0, 127] before the
+  uint8_t conversion (out-of-range float casts are undefined behavior)
+- **Attack envelope:** the quartic lookup table was non-monotonic and
+  overshot 1.0; replaced with a correct, monotonic t⁴ curve
+- **Pitch bend:** now bends the currently held note, not just the next one
+- **Interval-scale quantization:** OCT/5TH/4TH/TRI no longer wrap to the wrong
+  octave (e.g. +11 now maps to +12 instead of +0)
+- **STRING/MSTRING resonator:** GEOMETRY now maps to dispersion (STRING) and
+  the Elements chord table (MSTRING); POSITION now controls the string pickup
+  for both models
+- **BLOW exciter:** rewritten as an Elements-style granular sample-player
+  source (noise wavetable scan) instead of plain filtered noise; FLOW sets
+  restart density
+- **SPACE metaparameter:** now drives raw exciter bleed, stereo spread, and a
+  reverb tail (reverb amount and time follow the original Elements mapping)
+- **FINE tuning:** re-exposed on page 6; DEJA VU moved to page 4
+- **Test CLI:** lightweight parameter IDs fixed (--model no longer corrupted
+  by --cutoff/--resonance); added --fine
+
+### Page 6 Parameter Changes (Lightweight Mode)
+
+| Parameter | Description |
+|-----------|-------------|
+| COARSE | Coarse tuning (±24 semitones) |
+| FINE | Fine tuning (±100 cents) |
+| SEQ | Sequencer preset (0-15) |
+| SPREAD | Note range (0-127) |
+
+DEJA VU moved to page 4 (slot after VOLUME).
+
+---
+
 ## v1.2.0 (December 2025)
 
 Generative sequencer release with Marbles-inspired note generation.

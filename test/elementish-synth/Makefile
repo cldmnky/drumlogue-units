@@ -48,6 +48,7 @@ DSP_DIR := $(DSP_SRC)/dsp
 # Include paths
 INCLUDES := -I$(DSP_SRC)
 INCLUDES += -I$(DSP_DIR)
+INCLUDES += -I$(DSP_SRC)/../common
 INCLUDES += -I.
 
 # Sources - elements-synth is header-only, so we only need main.cc

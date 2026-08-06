@@ -13,6 +13,7 @@
 #include <cmath>
 
 #include "unit.h"
+#include "perf_mon.h"
 #include "modal_synth.h"
 #include "dsp/neon_dsp.h"
 #include "dsp/marbles_sequencer.h"
@@ -46,6 +47,9 @@ public:
         // Initialize synth
         synth_.Init();
         
+        PERF_MON_INIT();
+        perf_counter_ = PERF_MON_REGISTER("ElementishRender");
+        
         // Set up default parameters (matching header.c)
         // Page 1: Exciter Mix
         params_[0] = 0;    // BOW
@@ -66,11 +70,11 @@ public:
         params_[11] = 0;   // POSITION (bipolar)
         
 #ifdef ELEMENTS_LIGHTWEIGHT
-        // Page 4 (lightweight): Model, Space, Volume
+        // Page 4 (lightweight): Model, Space, Volume, Deja Vu
         params_[12] = 0;   // MODEL
         params_[13] = 70;  // SPACE (0-127, default 70 = ~55% stereo width)
         params_[14] = 100; // VOLUME (0-127, default 100 = ~79%)
-        params_[15] = 0;   // Blank
+        params_[15] = 0;   // DEJA VU
         
         // Page 5: Envelope
         params_[16] = 5;   // ATTACK
@@ -78,11 +82,11 @@ public:
         params_[18] = 40;  // RELEASE
         params_[19] = 0;   // CONTOUR (ADR)
         
-        // Page 6: Tuning
+        // Page 6: Tuning & Sequencer
         params_[20] = 0;   // COARSE (bipolar: -64 to +63)
         params_[21] = 0;   // FINE (bipolar: -64 to +63 = -100 to +100 cents)
-        params_[22] = 0;   // Blank
-        params_[23] = 0;   // Blank
+        params_[22] = 0;   // SEQ (sequencer preset, 0 = OFF)
+        params_[23] = 64;  // SPREAD (0-127, default 64 = ~50%)
 #else
         // Page 4 (full): Filter & Model
         params_[12] = 127; // CUTOFF
@@ -125,6 +129,10 @@ public:
     }
 
     void Reset() {
+#ifdef ELEMENTS_LIGHTWEIGHT
+        sequencer_.Reset();
+#endif
+        note_active_ = false;
         synth_.Reset();
     }
 
@@ -133,12 +141,14 @@ public:
 
     void Render(float* out, uint32_t frames) {
         PROFILE_RENDER_BEGIN();
+        PERF_MON_START(perf_counter_);
         
         // Safety: if not initialized, output silence
         if (!initialized_) {
             for (uint32_t i = 0; i < frames * 2; ++i) {
                 out[i] = 0.0f;
             }
+            PERF_MON_END(perf_counter_);
             PROFILE_RENDER_END();
             return;
         }
@@ -150,11 +160,10 @@ public:
             
             uint8_t note, velocity;
             while (sequencer_.GetNextNote(&note, &velocity)) {
-                // Apply coarse transpose, fine tune, and pitch bend (matching NoteOn behavior)
-                float transposed = static_cast<float>(note) + coarse_tune_ + fine_tune_ + pitch_bend_;
-                if (transposed < 0.0f) transposed = 0.0f;
-                if (transposed > 127.0f) transposed = 127.0f;
-                synth_.NoteOn(static_cast<uint8_t>(transposed), velocity);
+                // Apply fine tune and pitch bend only: the sequencer already
+                // applies the coarse transpose internally, so applying it again
+                // here would transpose every generated note twice.
+                synth_.NoteOn(ClampedFineTunedNote(static_cast<float>(note)), velocity);
             }
         }
 #endif
@@ -227,6 +236,7 @@ public:
             frames_remaining -= process_frames;
         }
         
+        PERF_MON_END(perf_counter_);
         PROFILE_RENDER_END();
     }
 
@@ -284,8 +294,8 @@ public:
                 return env_names[value];
             }
         }
-        // SEQ parameter (id 21 in lightweight mode)
-        if (id == 21) {
+        // SEQ parameter (id 22 in lightweight mode)
+        if (id == 22) {
             return marbles::MarblesSequencer::GetPresetName(value);
         }
 #else
@@ -345,7 +355,6 @@ public:
         }
         
         // Apply coarse tuning, fine tuning, and pitch bend
-        float tuned_note = (float)note + coarse_tune_ + fine_tune_ + pitch_bend_;
         current_note_ = note;
         
 #ifdef ELEMENTS_LIGHTWEIGHT
@@ -357,7 +366,8 @@ public:
         }
 #endif
         
-        synth_.NoteOn((uint8_t)tuned_note, velocity);
+        synth_.NoteOn(ClampedTunedNote((float)note), velocity);
+        note_active_ = true;
     }
 
     void NoteOff(uint8_t note) {
@@ -365,14 +375,13 @@ public:
 #ifdef ELEMENTS_LIGHTWEIGHT
             sequencer_.Release();
 #endif
+            note_active_ = false;
             synth_.NoteOff();
         }
     }
 
     void GateOn(uint8_t velocity) {
         // Gate messages from drumlogue pattern sequencer use current_note_ as base
-        float tuned_note = (float)current_note_ + coarse_tune_ + fine_tune_ + pitch_bend_;
-        
 #ifdef ELEMENTS_LIGHTWEIGHT
         // Trigger sequencer subdivisions (pattern step triggers note burst)
         if (sequencer_.IsEnabled()) {
@@ -382,17 +391,22 @@ public:
         }
 #endif
         
-        synth_.NoteOn((uint8_t)tuned_note, velocity);
+        synth_.NoteOn(ClampedTunedNote((float)current_note_), velocity);
+        note_active_ = true;
     }
 
     void GateOff() {
 #ifdef ELEMENTS_LIGHTWEIGHT
         sequencer_.Release();
 #endif
+        note_active_ = false;
         synth_.NoteOff();
     }
 
     void AllNoteOff() {
+#ifdef ELEMENTS_LIGHTWEIGHT
+        sequencer_.Reset();
+#endif
         synth_.NoteOff();
         synth_.Reset();
     }
@@ -400,6 +414,14 @@ public:
     void PitchBend(uint16_t bend) {
         // bend is 0-16383, center is 8192
         pitch_bend_ = ((float)bend - 8192.0f) / 8192.0f * 2.0f;  // +/- 2 semitones
+        RetuneHeldNote();
+    }
+
+    // Re-apply the current tuning (coarse + fine + bend) to a held note.
+    // Called from PitchBend and from parameter changes while a note is active.
+    void RetuneHeldNote() {
+        if (!note_active_) return;
+        synth_.SetFrequency(modal::MidiToFrequency(ClampedTunedNote((float)current_note_)));
     }
 
     void ChannelPressure(uint8_t pressure) {
@@ -415,69 +437,74 @@ public:
     void LoadPreset(uint8_t idx) {
         preset_index_ = idx;
         
+#ifdef ELEMENTS_LIGHTWEIGHT
+        // Clear any pending sequencer notes so a preset switch can't trigger
+        // notes that were queued by the previous preset.
+        sequencer_.Reset();
+#endif
         // Reset DSP state before applying new preset to ensure clean transition
         synth_.Reset();
         
 #ifdef ELEMENTS_LIGHTWEIGHT
         // Lightweight preset format:
         // bow, blow, strike, mallet, bowT, blwT, stkMode, granD,
-        // geo, bright, damp, pos, model, space, volume,
-        // atk, dec, rel, envMode, coarse, fine
+        // geo, bright, damp, pos, model, space, volume, dejaVu,
+        // atk, dec, rel, envMode, coarse, fine, seq, spread
         switch (idx) {
             case 0: // Init - Clean percussive starting point
                 // Basic modal hit, neutral resonator, good for exploring
                 setPresetParams(0, 0, 100, 0,  0, 0, 0, 0,
-                               0, 0, 0, 0,  0, 64, 100,
-                               3, 45, 50, 0,  0, 0);
+                               0, 0, 0, 0,  0, 64, 100, 0,
+                               3, 45, 50, 0,  0, 0, 0, 64);
                 break;
             case 1: // Bowed Str - Expressive bowed string
                 // Full bow, warm geometry (string-like), moderate damping
                 // Slow attack for realistic bow articulation
                 setPresetParams(100, 0, 0, 0,  -20, 0, 0, 0,
-                               -50, -10, -25, -20,  0, 55, 100,
-                               35, 70, 75, 2,  0, 0);
+                               -50, -10, -25, -20,  0, 55, 100, 0,
+                               35, 70, 75, 2,  0, 0, 0, 64);
                 break;
             case 2: // Bell - Metallic bell/chime
                 // Strike with hard mallet, bright bell-like geometry
                 // Long sustain, minimal damping, wide stereo
                 setPresetParams(0, 0, 100, 4,  0, 0, 0, 0,
-                               55, 30, -55, 0,  0, 90, 100,
-                               1, 90, 95, 1,  0, 0);
+                               55, 30, -55, 0,  0, 90, 100, 0,
+                               1, 90, 95, 1,  0, 0, 0, 64);
                 break;
             case 3: // Pluck - Acoustic plucked string
                 // Plectrum excitation, string geometry, natural damping
                 // Short attack, medium decay
                 setPresetParams(0, 0, 95, 6,  0, 0, 0, 0,
-                               -45, 10, -15, -10,  0, 60, 100,
-                               2, 55, 45, 0,  0, 0);
+                               -45, 10, -15, -10,  0, 60, 100, 0,
+                               2, 55, 45, 0,  0, 0, 0, 64);
                 break;
             case 4: // Blown - Breathy wind instrument
                 // Pure blow excitation, tube-like geometry
                 // Slow attack for breath buildup, AR envelope
                 setPresetParams(0, 100, 0, 0,  0, -20, 0, 0,
-                               -35, -5, -10, 5,  0, 50, 100,
-                               45, 35, 50, 2,  0, 0);
+                               -35, -5, -10, 5,  0, 50, 100, 0,
+                               45, 35, 50, 2,  0, 0, 0, 64);
                 break;
             case 5: // Marimba - Wooden mallet percussion
                 // Soft mallet, bar-like geometry, warm brightness
                 // Quick attack, medium-long decay
                 setPresetParams(0, 0, 100, 0,  0, 0, 0, 0,
-                               20, 5, -40, -30,  0, 70, 100,
-                               2, 65, 70, 0,  0, 0);
+                               20, 5, -40, -30,  0, 70, 100, 0,
+                               2, 65, 70, 0,  0, 0, 0, 64);
                 break;
             case 6: // String - Karplus-Strong style pluck
                 // String model for realistic pluck, tight damping
                 // Very short attack, medium decay
                 setPresetParams(0, 0, 90, 7,  0, 0, 0, 0,
-                               -60, 15, -5, -15,  1, 60, 100,
-                               1, 40, 35, 1,  0, 0);
+                               -60, 15, -5, -15,  1, 60, 100, 0,
+                               1, 40, 35, 1,  0, 0, 0, 64);
                 break;
             case 7: // Drone - Evolving ambient texture
                 // Mixed excitation for complex texture, long sustain
                 // Looping envelope, wide stereo
                 setPresetParams(35, 40, 30, 0,  -10, 10, 2, 40,
-                               -20, -20, -50, 0,  2, 95, 95,
-                               55, 65, 60, 3,  0, 0);
+                               -20, -20, -50, 0,  2, 95, 95, 0,
+                               55, 65, 60, 3,  0, 0, 0, 64);
                 break;
         }
 #else
@@ -577,15 +604,15 @@ private:
     
 #ifdef ELEMENTS_LIGHTWEIGHT
     // Preset function for ELEMENTS_LIGHTWEIGHT mode
-    // Page 4: MODEL, SPACE, VOLUME, (blank)
+    // Page 4: MODEL, SPACE, VOLUME, DEJA_VU
     // Page 5: ATK, DEC, REL, ENV_MODE
-    // Page 6: COARSE, SEQ, SPREAD, DEJA_VU
+    // Page 6: COARSE, FINE, SEQ, SPREAD
     void setPresetParams(int bow, int blow, int strike, int mallet,
                          int bowT, int blwT, int stkMode, int granD,
                          int geo, int bright, int damp, int pos,
-                         int model, int space, int volume,
+                         int model, int space, int volume, int dejaVu,
                          int atk, int dec, int rel, int envMode,
-                         int coarse = 0, int seq = 0, int spread = 64, int dejaVu = 0) {
+                         int coarse = 0, int fine = 0, int seq = 0, int spread = 64) {
         // Page 1: Exciter Mix
         params_[0] = bow;
         params_[1] = blow;
@@ -604,11 +631,11 @@ private:
         params_[10] = damp;
         params_[11] = pos;
         
-        // Page 4: Model & Space (Lightweight)
+        // Page 4: Model, Space, Volume, Deja Vu (Lightweight)
         params_[12] = model;
         params_[13] = space;
         params_[14] = volume;
-        params_[15] = 0;  // blank
+        params_[15] = dejaVu;
         
         // Page 5: Envelope (ADR)
         params_[16] = atk;
@@ -616,11 +643,11 @@ private:
         params_[18] = rel;
         params_[19] = envMode;
         
-        // Page 6: Sequencer (Lightweight)
+        // Page 6: Tuning & Sequencer (Lightweight)
         params_[20] = coarse;
-        params_[21] = seq;
-        params_[22] = spread;
-        params_[23] = dejaVu;
+        params_[21] = fine;
+        params_[22] = seq;
+        params_[23] = spread;
         
         for (int i = 0; i < kNumParams; ++i) {
             applyParameter(i);
@@ -707,8 +734,9 @@ private:
             case 4: // BOW TIMBRE (bipolar)
                 synth_.SetBowTimbre(bipolar_norm);
                 break;
-            case 5: // BLOW TIMBRE (bipolar)
+            case 5: // BLOW TIMBRE (bipolar) - also drives FLOW turbulence
                 synth_.SetBlowTimbre(bipolar_norm);
+                synth_.SetBlowFlow(bipolar_norm);
                 break;
             case 6: // STK MODE (enum)
                 synth_.SetStrikeMode(params_[id]);
@@ -742,7 +770,9 @@ private:
             case 14: // VOLUME (0-127 -> 0.0-1.0)
                 synth_.SetOutputLevel(norm);
                 break;
-            // case 15: blank
+            case 15: // DEJA VU (0-127 -> 0.0-1.0, relocated from page 6)
+                sequencer_.SetDejaVu(norm);
+                break;
             
             // Page 5: Envelope
             case 16: // ATTACK
@@ -758,19 +788,21 @@ private:
                 synth_.SetEnvMode(params_[id]);
                 break;
             
-            // Page 6: Sequencer
+            // Page 6: Tuning & Sequencer
             case 20: // COARSE (bipolar: -64 to +63 maps to -24 to +24 semitones)
                 coarse_tune_ = (float)params_[id] * 24.0f / 63.0f;
                 sequencer_.SetTranspose(static_cast<int>(coarse_tune_));
+                RetuneHeldNote();
                 break;
-            case 21: // SEQ (preset selection 0-15)
+            case 21: // FINE (bipolar: -64 to +63 maps to -100 to +100 cents)
+                fine_tune_ = (float)params_[id] * 1.0f / 63.0f;
+                RetuneHeldNote();
+                break;
+            case 22: // SEQ (preset selection 0-15)
                 sequencer_.SetPreset(params_[id]);
                 break;
-            case 22: // SPREAD (0-127 -> 0.0-1.0)
+            case 23: // SPREAD (0-127 -> 0.0-1.0)
                 sequencer_.SetSpread(norm);
-                break;
-            case 23: // DEJA VU (0-127 -> 0.0-1.0)
-                sequencer_.SetDejaVu(norm);
                 break;
 #else
             // Page 4 (Full): Filter & Model
@@ -820,6 +852,21 @@ private:
         }
     }
 
+    // Clamp a (possibly tuned) MIDI note to [0, 127] before converting to
+    // uint8_t. Tuning can push the value out of range, and out-of-range
+    // float-to-integer casts are undefined behavior.
+    static uint8_t ClampedTunedNote(float tuned_note) {
+        if (tuned_note < 0.0f) tuned_note = 0.0f;
+        if (tuned_note > 127.0f) tuned_note = 127.0f;
+        return static_cast<uint8_t>(tuned_note);
+    }
+
+    // Tuned note without coarse transpose (used for sequencer-generated notes,
+    // where coarse transpose is already applied by the sequencer itself).
+    uint8_t ClampedFineTunedNote(float note) const {
+        return ClampedTunedNote(note + fine_tune_ + pitch_bend_);
+    }
+
     const unit_runtime_desc_t* runtime_desc_;  // Cached for potential future use
     modal::ModalSynth synth_;
     int32_t params_[kNumParams];
@@ -835,6 +882,8 @@ private:
     float coarse_tune_ = 0.0f;
     float fine_tune_ = 0.0f;    // -1 to +1 semitone (±100 cents)
     float pitch_bend_ = 0.0f;
+    bool note_active_ = false;
+    uint8_t perf_counter_ = 0xFF;
     
     bool initialized_;
 };

@@ -218,9 +218,9 @@ struct PresetDef {
   int bowT, flow, stkMode, granD;        // Page 2: Exciter timbre  
   int geo, bright, damp, pos;            // Page 3: Resonator
 #ifdef ELEMENTS_LIGHTWEIGHT
-  int model, space, volume;              // Page 4: Model & Output (lightweight)
+  int model, space, volume, dejaVu;      // Page 4: Model, Space, Volume, Deja Vu (lightweight)
   int atk, dec, rel, contour;            // Page 5: Envelope
-  int coarse, fine;                      // Page 6: Tuning (lightweight)
+  int coarse, fine, seq, spread;         // Page 6: Tuning & Sequencer (lightweight)
 #else
   int cutoff, reso, fltEnv, model;       // Page 4: Filter & Model (full)
   int atk, dec, rel, contour;            // Page 5: Envelope  
@@ -229,18 +229,18 @@ struct PresetDef {
 };
 
 #ifdef ELEMENTS_LIGHTWEIGHT
-// Presets for LIGHTWEIGHT mode (no filter/LFO, with SPACE/VOLUME/FINE)
+// Presets for LIGHTWEIGHT mode (no filter/LFO, with SPACE/VOLUME/DEJA VU)
 static const PresetDef kPresets[] = {
-  //           Exciter Mix          Exciter Timbre       Resonator            Model/Space/Vol   Envelope          Tuning
-  //           bow  blo  str  mal   bowT flow stk  grn   geo  bri  dmp  pos   mod  spc  vol     atk  dec  rel  cnt   crs  fin
-  {"INIT",     0,   0,  100,  0,    0,   0,   0,   0,    0,   0,   0,   0,    0,   70, 100,     5,  40,  40,   0,    0,   0},
-  {"MARIMBA",  0,   0,  100,  0,    0,   0,   0,   0,   -20,  10, -10,  0,    0,   80, 100,     2,  30,  50,   0,    0,   0},
-  {"VIBES",    0,   0,  100,  2,    0,   0,   0,   0,    10,  20, -30, 20,    0,   90, 100,     3,  60,  70,   0,    0,   0},
-  {"PLUCK",    0,   0,  100,  6,    0,   0,   3,   0,    0,   0,  10,   0,    1,   70, 110,     1,  20,  30,   0,    0,   0},
-  {"BOW",    100,   0,    0,  0,   20,   0,   0,   0,   -10,  30, -20, 10,    0,   80, 100,    30,  50,  80,   2,    0,   0},
-  {"FLUTE",    0, 100,    0,  0,    0,  30,   0,   0,    20,  20, -10,  0,    0,   70, 100,    10,  40,  60,   2,    0,   0},
-  {"STRING",   0,   0,  100,  6,    0,   0,   3,   0,    0,   10, -20,  0,    1,   60, 115,     5,  50,  80,   0,    0,   0},
-  {"MSTRING",  0,   0,  100,  0,    0,   0,   0,   0,    0,   20, -10,  0,    2,   50, 120,     5,  60,  90,   0,    0,   0},
+  //           Exciter Mix          Exciter Timbre       Resonator            Model/Space/Vol/DV   Envelope          Tuning & Sequencer
+  //           bow  blo  str  mal   bowT flow stk  grn   geo  bri  dmp  pos   mod  spc  vol  dvu   atk  dec  rel  cnt   crs  fin  seq  spr
+  {"INIT",     0,   0,  100,  0,    0,   0,   0,   0,    0,   0,   0,   0,    0,   70, 100,  0,    5,  40,  40,   0,    0,   0,   0,  64},
+  {"MARIMBA",  0,   0,  100,  0,    0,   0,   0,   0,   -20,  10, -10,  0,    0,   80, 100,  0,    2,  30,  50,   0,    0,   0,   0,  64},
+  {"VIBES",    0,   0,  100,  2,    0,   0,   0,   0,    10,  20, -30, 20,    0,   90, 100,  0,    3,  60,  70,   0,    0,   0,   0,  64},
+  {"PLUCK",    0,   0,  100,  6,    0,   0,   3,   0,    0,   0,  10,   0,    1,   70, 110,  0,    1,  20,  30,   0,    0,   0,   0,  64},
+  {"BOW",    100,   0,    0,  0,   20,   0,   0,   0,   -10,  30, -20, 10,    0,   80, 100,  0,   30,  50,  80,   2,    0,   0,   0,  64},
+  {"FLUTE",    0, 100,    0,  0,    0,  30,   0,   0,    20,  20, -10,  0,    0,   70, 100,  0,   10,  40,  60,   2,    0,   0,   0,  64},
+  {"STRING",   0,   0,  100,  6,    0,   0,   3,   0,    0,   10, -20,  0,    1,   60, 115,  0,    5,  50,  80,   0,    0,   0,   0,  64},
+  {"MSTRING",  0,   0,  100,  0,    0,   0,   0,   0,    0,   20, -10,  0,    2,   50, 120,  0,    5,  60,  90,   0,    0,   0,   0,  64},
 };
 #else
 // Presets for FULL mode (with filter and LFO)
@@ -300,8 +300,13 @@ void PrintUsage(const char* program) {
   printf("  --geometry <-64 to 63>  Resonator geometry\n");
   printf("  --brightness <-64 to 63>  Resonator brightness\n");
   printf("  --damping <-64 to 63>   Resonator damping\n");
+#ifdef ELEMENTS_LIGHTWEIGHT
+  printf("  --fine <-64 to 63>     Fine pitch tuning (-100 to +100 cents)\n");
+  printf("  (--cutoff and --resonance are only available in full mode)\n");
+#else
   printf("  --cutoff <0-127>      Filter cutoff\n");
   printf("  --resonance <0-127>   Filter resonance\n");
+#endif
   printf("  --model <0-2>         Model (0=MODAL, 1=STRING, 2=MSTRING)\n");
   printf("  --attack <0-127>      Envelope attack\n");
   printf("  --decay <0-127>       Envelope decay\n");
@@ -357,11 +362,11 @@ void ApplyPreset(ElementsSynth& synth, int preset_idx) {
   synth.setParameter(11, p.pos);
   
 #ifdef ELEMENTS_LIGHTWEIGHT
-  // Page 4: Model, Space, Volume (lightweight mode)
+  // Page 4: Model, Space, Volume, Deja Vu (lightweight mode)
   synth.setParameter(12, p.model);
   synth.setParameter(13, p.space);
   synth.setParameter(14, p.volume);
-  // 15 is blank
+  synth.setParameter(15, p.dejaVu);
   
   // Page 5: Envelope (same for both modes)
   synth.setParameter(16, p.atk);
@@ -369,10 +374,11 @@ void ApplyPreset(ElementsSynth& synth, int preset_idx) {
   synth.setParameter(18, p.rel);
   synth.setParameter(19, p.contour);
   
-  // Page 6: Tuning (lightweight mode)
+  // Page 6: Tuning & Sequencer (lightweight mode)
   synth.setParameter(20, p.coarse);
   synth.setParameter(21, p.fine);
-  // 22, 23 are blank
+  synth.setParameter(22, p.seq);
+  synth.setParameter(23, p.spread);
 #else
   // Page 4: Filter & Model (full mode)
   synth.setParameter(12, p.cutoff);
@@ -982,11 +988,12 @@ void RunSequencerTest(const SequencerTestConfig& config, const std::string& outp
   synth.setParameter(18, 50);    // release = medium
   synth.setParameter(19, 0);     // contour = ADR
   
-  // Set sequencer parameters (Page 6)
+  // Set sequencer parameters (Page 6: COARSE, FINE, SEQ, SPREAD; DEJA VU on page 4)
   synth.setParameter(20, 0);                // coarse = 0
-  synth.setParameter(21, config.seq_preset); // SEQ preset
-  synth.setParameter(22, config.spread);     // SPREAD
-  synth.setParameter(23, config.deja_vu);    // DEJA VU
+  synth.setParameter(21, 0);                // fine = 0
+  synth.setParameter(22, config.seq_preset); // SEQ preset
+  synth.setParameter(23, config.spread);     // SPREAD
+  synth.setParameter(15, config.deja_vu);    // DEJA VU
   
   // Set tempo (16.16 fixed point)
   uint32_t tempo_fixed = static_cast<uint32_t>(config.bpm * 65536.0f);
@@ -1133,10 +1140,12 @@ void RunGateSequencerTest(const SequencerTestConfig& config, const std::string& 
   int coarse_offset = static_cast<int>(config.base_note) - 60;
   synth.setParameter(20, coarse_offset);
   
-  // Set sequencer parameters
-  synth.setParameter(21, config.seq_preset);
-  synth.setParameter(22, config.spread);
-  synth.setParameter(23, config.deja_vu);
+  // Set sequencer parameters (Page 6: COARSE, FINE, SEQ, SPREAD; DEJA VU on page 4)
+  synth.setParameter(20, coarse_offset);  // COARSE
+  synth.setParameter(21, 0);              // FINE
+  synth.setParameter(22, config.seq_preset);  // SEQ preset
+  synth.setParameter(23, config.spread);      // SPREAD
+  synth.setParameter(15, config.deja_vu);     // DEJA VU
   
   // Set tempo
   uint32_t tempo_fixed = static_cast<uint32_t>(config.bpm * 65536.0f);
@@ -1277,11 +1286,12 @@ void RunPatternSequencerTest(const RhythmPattern& pattern, int seq_preset, int s
   synth.setParameter(18, 50);    // release
   synth.setParameter(19, 0);     // contour = ADR
   
-  // Set sequencer parameters (Page 6)
+  // Set sequencer parameters (Page 6: COARSE, FINE, SEQ, SPREAD; DEJA VU on page 4)
   synth.setParameter(20, 0);          // coarse = 0
-  synth.setParameter(21, seq_preset); // SEQ preset
-  synth.setParameter(22, spread);     // SPREAD
-  synth.setParameter(23, deja_vu);    // DEJA VU
+  synth.setParameter(21, 0);          // fine = 0
+  synth.setParameter(22, seq_preset); // SEQ preset
+  synth.setParameter(23, spread);     // SPREAD
+  synth.setParameter(15, deja_vu);    // DEJA VU
   
   // Set tempo
   uint32_t tempo_fixed = static_cast<uint32_t>(pattern.bpm * 65536.0f);
@@ -1538,9 +1548,15 @@ int main(int argc, char* argv[]) {
   // Individual parameters (use -999 as "not set")
   int param_bow = -999, param_blow = -999, param_strike = -999;
   int param_mallet = -999, param_geometry = -999, param_brightness = -999;
-  int param_damping = -999, param_cutoff = -999, param_resonance = -999;
+  int param_damping = -999;
+#ifndef ELEMENTS_LIGHTWEIGHT
+  int param_cutoff = -999, param_resonance = -999;
+#endif
   int param_model = -999, param_attack = -999, param_decay = -999;
   int param_release = -999;
+#ifdef ELEMENTS_LIGHTWEIGHT
+  int param_fine = -999;
+#endif
   
   for (int i = 1; i < argc; ++i) {
     if (strcmp(argv[i], "--preset") == 0 && i + 1 < argc) {
@@ -1601,10 +1617,18 @@ int main(int argc, char* argv[]) {
       param_brightness = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--damping") == 0 && i + 1 < argc) {
       param_damping = atoi(argv[++i]);
+#ifdef ELEMENTS_LIGHTWEIGHT
+    } else if (strcmp(argv[i], "--fine") == 0 && i + 1 < argc) {
+      param_fine = atoi(argv[++i]);
+#endif
     } else if (strcmp(argv[i], "--cutoff") == 0 && i + 1 < argc) {
+#ifndef ELEMENTS_LIGHTWEIGHT
       param_cutoff = atoi(argv[++i]);
+#endif
     } else if (strcmp(argv[i], "--resonance") == 0 && i + 1 < argc) {
+#ifndef ELEMENTS_LIGHTWEIGHT
       param_resonance = atoi(argv[++i]);
+#endif
     } else if (strcmp(argv[i], "--model") == 0 && i + 1 < argc) {
       param_model = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--attack") == 0 && i + 1 < argc) {
@@ -1713,7 +1737,10 @@ int main(int argc, char* argv[]) {
     ApplyPreset(synth, preset_idx);
   }
 
-  // Override with individual parameters
+  // Override with individual parameters.
+  // Parameter IDs differ between modes: in lightweight mode the model lives at
+  // page 4 (id 12) and there is no filter, so --cutoff/--resonance must not
+  // touch the model/space parameters they would corrupt.
   if (param_bow != -999) synth.setParameter(0, param_bow);
   if (param_blow != -999) synth.setParameter(1, param_blow);
   if (param_strike != -999) synth.setParameter(2, param_strike);
@@ -1721,12 +1748,20 @@ int main(int argc, char* argv[]) {
   if (param_geometry != -999) synth.setParameter(8, param_geometry);
   if (param_brightness != -999) synth.setParameter(9, param_brightness);
   if (param_damping != -999) synth.setParameter(10, param_damping);
+#ifdef ELEMENTS_LIGHTWEIGHT
+  if (param_model != -999) synth.setParameter(12, param_model);
+  if (param_fine != -999) synth.setParameter(21, param_fine);
+  if (param_attack != -999) synth.setParameter(16, param_attack);
+  if (param_decay != -999) synth.setParameter(17, param_decay);
+  if (param_release != -999) synth.setParameter(18, param_release);
+#else
   if (param_cutoff != -999) synth.setParameter(12, param_cutoff);
   if (param_resonance != -999) synth.setParameter(13, param_resonance);
   if (param_model != -999) synth.setParameter(15, param_model);
   if (param_attack != -999) synth.setParameter(16, param_attack);
   if (param_decay != -999) synth.setParameter(17, param_decay);
   if (param_release != -999) synth.setParameter(18, param_release);
+#endif
 
   // Open output file
   WavFile wav;
