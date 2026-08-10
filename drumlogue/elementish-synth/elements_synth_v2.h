@@ -518,10 +518,6 @@ public:
         uint8_t retrigger_note = current_note_;
         uint8_t retrigger_velocity = current_velocity_;
         bool retrigger = note_active_;
-#ifdef ELEMENTS_LIGHTWEIGHT
-        bool sequencer_enabled = false;
-        sequencer_enabled = sequencer_.IsEnabled();
-#endif
     
 #ifdef ELEMENTS_LIGHTWEIGHT
         // Clear any pending sequencer notes so a preset switch can't trigger
@@ -660,6 +656,12 @@ public:
     
         // Retrigger the held note with the new preset's voice configuration so
         // the sound continues instead of dying out with the stale envelope.
+        // The sequencer state is queried after the new preset is applied: if
+        // the new preset disables the sequencer (SEQ=OFF), fall through to a
+        // direct note instead of feeding the disabled sequencer.
+#ifdef ELEMENTS_LIGHTWEIGHT
+        const bool sequencer_enabled = sequencer_.IsEnabled();
+#endif
         if (retrigger) {
 #ifdef ELEMENTS_LIGHTWEIGHT
             if (sequencer_enabled) {
@@ -952,6 +954,7 @@ private:
                 break;
             case 23: // COARSE (bipolar: -64 to +63 maps to -24 to +24 semitones)
                 coarse_tune_ = (float)params_[id] * 24.0f / 63.0f;
+                RetuneHeldNote();
                 break;
 #endif
             default:

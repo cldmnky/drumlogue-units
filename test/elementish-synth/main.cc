@@ -1134,14 +1134,14 @@ void RunGateSequencerTest(const SequencerTestConfig& config, const std::string& 
   synth.setParameter(17, 40);    // decay
   synth.setParameter(18, 50);    // release
   
-  // Set COARSE to set base note (param 20 in lightweight mode)
-  // COARSE is bipolar: -64 to +63, centered at middle C (60)
-  // So COARSE = base_note - 60
+  // Set COARSE to set base note (param 20 in lightweight mode).
+  // COARSE is bipolar: -64 to +63 maps to -24 to +24 semitones, so the knob
+  // value for a semitone offset is offset * 63 / 24.
   int coarse_offset = static_cast<int>(config.base_note) - 60;
-  synth.setParameter(20, coarse_offset);
+  int coarse_value = coarse_offset * 63 / 24;
   
   // Set sequencer parameters (Page 6: COARSE, FINE, SEQ, SPREAD; DEJA VU on page 4)
-  synth.setParameter(20, coarse_offset);  // COARSE
+  synth.setParameter(20, coarse_value);  // COARSE
   synth.setParameter(21, 0);              // FINE
   synth.setParameter(22, config.seq_preset);  // SEQ preset
   synth.setParameter(23, config.spread);      // SPREAD
