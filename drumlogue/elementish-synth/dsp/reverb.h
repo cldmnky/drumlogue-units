@@ -135,6 +135,7 @@ public:
 
             wet[i] = acc * wet_gain;
 #ifdef UNIT_HOST_NATIVE
+            debug_last_wet_ = wet[i];
             if (IsBad(wet[i])) debug_nonfinite_ = true;
 #endif
             if (IsBad(wet[i])) wet[i] = 0.0f;

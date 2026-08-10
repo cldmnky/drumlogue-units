@@ -431,7 +431,7 @@ public:
         }
 #endif
     
-        synth_.NoteOn(ClampedTunedNote((float)note), velocity);
+        synth_.NoteOn(ClampedFullTunedNote((float)note), velocity);
         note_active_ = true;
     }
 
@@ -467,7 +467,7 @@ public:
         }
 #endif
     
-        synth_.NoteOn(ClampedTunedNote((float)current_note_), velocity);
+        synth_.NoteOn(ClampedFullTunedNote((float)current_note_), velocity);
         note_active_ = true;
     }
 
@@ -483,6 +483,7 @@ public:
 #ifdef ELEMENTS_LIGHTWEIGHT
         sequencer_.Reset();
 #endif
+        note_active_ = false;
         synth_.NoteOff();
         synth_.Reset();
     }
@@ -497,7 +498,7 @@ public:
     // Called from PitchBend and from parameter changes while a note is active.
     void RetuneHeldNote() {
         if (!note_active_) return;
-        synth_.SetFrequency(modal::MidiToFrequency(ClampedTunedNote((float)current_note_)));
+        synth_.SetFrequency(modal::MidiToFrequency(ClampedFullTunedNote((float)current_note_)));
     }
 
     void ChannelPressure(uint8_t pressure) {
@@ -664,11 +665,11 @@ public:
             if (sequencer_enabled) {
                 sequencer_.Trigger(retrigger_note, retrigger_velocity);
             } else {
-                synth_.NoteOn(ClampedTunedNote((float)retrigger_note), retrigger_velocity);
+                synth_.NoteOn(ClampedFullTunedNote((float)retrigger_note), retrigger_velocity);
                 note_active_ = true;
             }
 #else
-            synth_.NoteOn(ClampedTunedNote((float)retrigger_note), retrigger_velocity);
+            synth_.NoteOn(ClampedFullTunedNote((float)retrigger_note), retrigger_velocity);
             note_active_ = true;
 #endif
         }
@@ -971,6 +972,11 @@ private:
     // where coarse transpose is already applied by the sequencer itself).
     uint8_t ClampedFineTunedNote(float note) const {
         return ClampedTunedNote(note + fine_tune_ + pitch_bend_);
+    }
+
+    // Fully tuned note (coarse + fine + pitch bend) for directly played notes.
+    uint8_t ClampedFullTunedNote(float note) const {
+        return ClampedTunedNote(note + coarse_tune_ + fine_tune_ + pitch_bend_);
     }
 
     const unit_runtime_desc_t* runtime_desc_;  // Cached for potential future use

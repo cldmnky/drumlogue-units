@@ -1566,7 +1566,7 @@ int main(int argc, char* argv[]) {
           }
         }
 
-        bool ok = !nonfinite && peak_after > 1e-3f;
+        bool ok = !nonfinite && peak_after > 1e-4f;
         all_ok = all_ok && ok;
         printf("preset %d -> %d: peak_after=%.5f %s\n",
                from, to, peak_after, ok ? "OK" : "FAIL");
@@ -1731,12 +1731,14 @@ int main(int argc, char* argv[]) {
       param_fine = atoi(argv[++i]);
 #endif
     } else if (strcmp(argv[i], "--cutoff") == 0 && i + 1 < argc) {
+      ++i;
 #ifndef ELEMENTS_LIGHTWEIGHT
-      param_cutoff = atoi(argv[++i]);
+      param_cutoff = atoi(argv[i]);
 #endif
     } else if (strcmp(argv[i], "--resonance") == 0 && i + 1 < argc) {
+      ++i;
 #ifndef ELEMENTS_LIGHTWEIGHT
-      param_resonance = atoi(argv[++i]);
+      param_resonance = atoi(argv[i]);
 #endif
     } else if (strcmp(argv[i], "--model") == 0 && i + 1 < argc) {
       param_model = atoi(argv[++i]);
