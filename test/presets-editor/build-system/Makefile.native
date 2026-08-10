@@ -15,6 +15,7 @@ CXX ?= clang++
 
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
+HOST_ARM64 := $(filter arm64 aarch64,$(UNAME_M))
 
 # Base flags
 CXXFLAGS ?= -std=c++17 -g -O0 -Wall -Wextra -fPIC -DUNIT_HOST_NATIVE -DTEST -D__unit_header= -D__unit_callback= -DATTRIBUTES_H_
@@ -33,7 +34,7 @@ else
 endif
 
 # Enable NEON on ARM64 hosts (Apple Silicon / Linux aarch64)
-ifneq (,$(findstring arm64,$(UNAME_M)))
+ifneq ($(HOST_ARM64),)
   CXXFLAGS += -march=armv8-a+simd -DUSE_NEON
   CFLAGS   += -march=armv8-a+simd -DUSE_NEON
 endif
@@ -50,8 +51,12 @@ include $(UNIT_DIR)/config.mk
 # Apply unit-defined macros (UDEFS) from config.mk, e.g. -DELEMENTS_LIGHTWEIGHT,
 # so native builds match the release hardware build. Only -D macro definitions
 # are forwarded; ARM toolchain flags (-mfpu, -mfloat-abi, -O2, ...) in UDEFS are
-# not applicable to the native host build.
+# not applicable to the native host build. NEON feature flags are enabled above
+# only when the native host supports ARM64 NEON.
 UDEFS_DEFINES := $(filter -D%,$(UDEFS))
+ifeq ($(HOST_ARM64),)
+  UDEFS_DEFINES := $(filter-out -DUSE_NEON% -DNEON_DCO%,$(UDEFS_DEFINES))
+endif
 CXXFLAGS += $(UDEFS_DEFINES)
 CFLAGS   += $(UDEFS_DEFINES)
 
