@@ -196,6 +196,24 @@ See `eurorack/README.md` for Mutable Instruments licensing details.
 
 ## Version History
 
+### v1.4.0
+
+- Fix: COARSE, FINE and pitch bend now apply to directly played notes (NoteOn,
+  GateOn, held-note retune, preset retrigger) — previously they only affected
+  sequencer-generated notes
+- Fix: all-notes-off / panic clears the held-note state so a later preset load
+  cannot re-trigger a silenced note
+- Fix: STRING/MSTRING POSITION now actually changes the string timbre (the
+  pickup position comb was a no-op)
+- Fix: full-mode COARSE retunes a held note (matches lightweight mode)
+- Fix: preset switch while the sequencer is enabled no longer goes silent when
+  the new preset has SEQ off
+- Fix: preset load / note-transition stability (sound engine no longer stops,
+  note-transition distortion reduced)
+- Fix: sequencer pending-note leaks and interval-scale octave wrapping
+- New: presets-editor native builds match the released hardware build
+  (lightweight mode with Marbles sequencer)
+
 ### v1.3.1
 
 - Fix: loading a preset while a note is held now resets the voice state and

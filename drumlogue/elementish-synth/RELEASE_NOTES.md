@@ -1,5 +1,58 @@
 # Elementish Synth - Release Notes
 
+## v1.4.0
+
+Review-fix release: note transitions, tuning, and string pickup position.
+
+### Bug Fixes
+
+- **Tuning is applied to directly played notes:** COARSE, FINE and pitch bend
+  were only applied to sequencer-generated notes; `NoteOn`, `GateOn`, held-note
+  retuning and the preset retrigger now use the fully tuned pitch
+  (`ClampedFullTunedNote`), so COARSE/FINE/pitch bend work on every note path
+- **All-notes-off / panic cleanup:** `AllNoteOff()` now clears the held-note
+  state, so a subsequent preset load or retune cannot re-trigger a note after
+  the host requested silence
+- **STRING/MSTRING POSITION control works:** the pickup position comb was a
+  no-op (the read position was invariant to the parameter); the position tap is
+  now actually summed into the delay line output, so POSITION changes the
+  string timbre as documented
+- **Full-mode COARSE retunes a held note** (lightweight mode already did);
+  turning COARSE while a note is held now re-pitches it immediately
+- **Preset switch no longer goes silent with the sequencer:** if a note is
+  held while the sequencer is enabled and the new preset disables it (SEQ
+  OFF), the retrigger falls through to a direct note instead of feeding the
+  disabled sequencer
+- **Preset load / note transition stability:** voice runtime state is reset
+  and the held note retriggered on preset switch (sound engine no longer stops
+  mid-note; note-transition distortion reduced)
+- **Sequencer state leaks:** pending notes are dropped on note-off,
+  all-notes-off, panic and preset change; interval-scale quantization no
+  longer wraps to the wrong octave
+- **Reverb diagnostics:** `debug_last_wet_` is now tracked on host builds so
+  reverb instability is visible in the render debug log
+
+### Regression Tests
+
+- `--preset-retrigger-test`: 56 preset transitions (voice must keep sounding
+  and stay finite after a preset switch while a note is held)
+- `--bow-stability-test`: repeated bow note transitions stay finite and
+  audible
+- `--gate-test`: drumlogue pattern-sequencer simulation with correct COARSE
+  transpose mapping
+- Test CLI fix: `--cutoff`/`--resonance` consume their value argument in
+  lightweight builds (previously the value was mis-parsed as the output file)
+
+### Presets Editor
+
+- Native presets-editor builds now apply the unit's `config.mk` macros, so the
+  editor loads the same lightweight build that ships on hardware (with the
+  Marbles sequencer) instead of the full filter/LFO build
+- drupiter-synth can now be built natively on Apple Silicon with its release
+  macros (`NEON_DCO` and friends)
+
+---
+
 ## v1.3.1
 
 Preset-transition fix.
