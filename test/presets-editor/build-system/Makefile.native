@@ -47,6 +47,14 @@ endif
 # Discover project configuration
 include $(UNIT_DIR)/config.mk
 
+# Apply unit-defined macros (UDEFS) from config.mk, e.g. -DELEMENTS_LIGHTWEIGHT,
+# so native builds match the release hardware build. Only -D macro definitions
+# are forwarded; ARM toolchain flags (-mfpu, -mfloat-abi, -O2, ...) in UDEFS are
+# not applicable to the native host build.
+UDEFS_DEFINES := $(filter -D%,$(UDEFS))
+CXXFLAGS += $(UDEFS_DEFINES)
+CFLAGS   += $(UDEFS_DEFINES)
+
 # Override paths from container layout to local layout
 REPO_EURORACK := $(REPO_ROOT)/eurorack
 REPO_COMMON   := $(REPO_ROOT)/drumlogue/common
