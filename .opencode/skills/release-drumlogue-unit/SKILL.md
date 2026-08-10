@@ -28,6 +28,12 @@ Ask for (or confirm) these details:
 Confirm the unit is on the branch you intend to release (e.g. `main` after a
 PR merge): `git branch --show-current`.
 
+If the unit name is not known, list the units and their current versions:
+
+```bash
+make list-units
+```
+
 ## Step 2 — Bump the Version
 
 Update `drumlogue/<unit>/header.c` (hex encoding `x.y.z` → `0xMMNNPPU`):
@@ -35,6 +41,18 @@ Update `drumlogue/<unit>/header.c` (hex encoding `x.y.z` → `0xMMNNPPU`):
 ```bash
 make version UNIT=<unit> VERSION=<version>
 ```
+
+The root Makefile also provides a convenience target that performs the version
+bump and build together:
+
+```bash
+make release UNIT=<unit> VERSION=<version>
+```
+
+`make release` only prepares the local release (version + build); it does not
+commit, create the git tag, push, or create the GitHub release. Use either the
+convenience target or the separate `make version`/`make build` commands, not
+both.
 
 Verify:
 ```bash
@@ -52,11 +70,22 @@ Pages site):
 - `drumlogue/<unit>/README.md` — add the version to the **Version History**
   section. Also fix any now-outdated parameter tables / preset lists /
   behavior descriptions.
+- `README.<unit>.md` — if present, update the repository-level unit README as
+  well. The release workflow includes this file in the GitHub Release
+  documentation, so leaving it stale produces an outdated release page even
+  when the unit-local README is current.
 
 ## Step 4 — Build and Verify
 
 ```bash
 make build UNIT=<unit>        # or: ./build.sh <unit>
+```
+
+If stale build output is suspected, clean that unit first:
+
+```bash
+make clean UNIT=<unit>
+make build UNIT=<unit>
 ```
 
 Check the output:
@@ -72,9 +101,14 @@ If the build fails, diagnose via `objdump -T` on the artifact and check
 Commit all pending changes first (version bump + notes + docs):
 
 ```bash
-git add drumlogue/<unit> && git commit -m "Release <unit> v<version>"
+git add drumlogue/<unit>
+if [ -f README.<unit>.md ]; then git add README.<unit>.md; fi
+git commit -m "Release <unit> v<version>"
 git push
 ```
+
+Before committing, inspect `git status` and `git diff`; do not stage unrelated
+worktree changes.
 
 Create and push the tag:
 
@@ -94,8 +128,11 @@ causes duplicate assets on the release.
 Watch the workflow:
 
 ```bash
-gh run list --workflow=release.yml --limit 1 --json status,conclusion,headBranch
-# wait until conclusion == "success"
+RELEASE_SHA=$(git rev-parse "<unit>/v<version>^{commit}")
+gh run list --workflow=release.yml --commit "$RELEASE_SHA" --limit 1 \
+  --json databaseId,status,conclusion
+# use the returned databaseId with `gh run watch <databaseId> --exit-status`
+# and do not continue until that specific run succeeds
 ```
 
 Verify the release and its asset:
@@ -110,15 +147,17 @@ delete the duplicate: `gh release delete-asset <unit>/v<version> <bad-asset> --y
 
 ## Step 7 — Update the GH Pages Unit Page
 
-The release workflow does **not** touch the Jekyll site in `docs/`. The unit
-page `docs/units/<unit>.md` goes stale (old version badge, wrong download URL,
-outdated parameter/preset tables, missing version history). Update it:
+The release workflow does **not** touch the Jekyll site in `docs/`. If the unit
+has a page, `docs/units/<unit>.md` goes stale (old version badge, wrong download
+URL, outdated parameter/preset tables, missing version history). Update it.
+For a unit without an existing Pages entry, create a matching unit page only
+if that unit is intended to be published on the site:
 
 1. **Frontmatter** — bump `version` and point `download_url` at the
    **versioned** asset produced by the workflow:
    ```yaml
    version: vX.Y.Z
-   filename: <project>.drmlgunit
+   filename: <unit>-v<version>.drmlgunit
    download_url: https://github.com/cldmnky/drumlogue-units/releases/download/<unit>/v<version>/<unit>-v<version>.drmlgunit
    ```
 2. **Content** — fix anything stale versus the unit's `README.md`:
@@ -133,9 +172,12 @@ outdated parameter/preset tables, missing version history). Update it:
 Verify the deployment:
 
 ```bash
-gh run list --workflow=pages.yml --limit 1 --json status,conclusion   # wait for success
-curl -s "https://cldmnky.github.io/drumlogue-units/units/<unit>/" | grep -oE "v[0-9]+\.[0-9]+\.[0-9]+" | sort -u | tail -1
-# must show the new version
+DOCS_SHA=$(git rev-parse HEAD)
+gh run list --workflow=pages.yml --commit "$DOCS_SHA" --limit 1 --json databaseId,status,conclusion
+# wait for the run for DOCS_SHA; use `gh run watch <databaseId> --exit-status`
+PAGE_URL="https://cldmnky.github.io/drumlogue-units/units/<unit>/"
+curl -fsS "$PAGE_URL" | grep -Fq "v<version>"
+curl -fsS "$PAGE_URL" | grep -Fq "<unit>-v<version>.drmlgunit"
 ```
 
 ## Step 8 — Summary
@@ -162,7 +204,9 @@ Report:
   (`<unit>-v<version>.drmlgunit`), not the raw SDK project name
   (`<project>.drmlgunit`) — the workflow renames the artifact on upload.
 - `make tag` refuses to overwrite an existing tag; if the tag already exists
-  after a failed push, delete it locally and remotely first
-  (`git tag -d <tag> && git push origin :<tag>`).
+  after a failed push, first inspect its target and whether a GitHub release
+  already exists. Only delete a tag when it is confirmed to be incorrect and
+  unpublished; deleting a published tag can break the release URL:
+  `git tag -d <tag> && git push origin :<tag>`.
 - Version suffix releases (`1.1.0-pre`) are marked pre-release by the
   workflow automatically; `make version` encodes only the base `x.y.z`.
