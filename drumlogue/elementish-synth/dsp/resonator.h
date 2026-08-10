@@ -989,24 +989,32 @@ public:
         // Protect against NaN input
         if (excitation != excitation) excitation = 0.0f;
         
-        // Read from delay line with linear interpolation.
-        // The comb delay is position-scaled: total delay (base + position
-        // part) reproduces the fundamental, so the position comb sits on top
-        // of it like a pickup on the string.
-        float base = delay_samples_ * (1.0f - clamped_position_);
+        // Read from delay line with linear interpolation. Two taps are summed:
+        // the main tap at the fundamental period (delay_samples_), plus a
+        // pickup tap at the position-scaled delay (Elements-style). The pickup
+        // position comb suppresses harmonics that have a node at the pickup
+        // point, so moving POSITION changes the timbre.
+        float main_read_pos = static_cast<float>(write_ptr_) - delay_samples_;
+        if (main_read_pos < 0.0f) main_read_pos += kMaxDelay;
+        
         float comb_delay = delay_samples_ * clamped_position_;
         if (comb_delay < 2.0f) comb_delay = 2.0f;
+        float comb_read_pos = static_cast<float>(write_ptr_) - comb_delay;
+        if (comb_read_pos < 0.0f) comb_read_pos += kMaxDelay;
         
-        float read_pos = static_cast<float>(write_ptr_) - base - comb_delay;
-        if (read_pos < 0.0f) read_pos += kMaxDelay;
-        
-        int read_idx = static_cast<int>(read_pos);
-        float frac = read_pos - static_cast<float>(read_idx);
+        int read_idx = static_cast<int>(main_read_pos);
+        float frac = main_read_pos - static_cast<float>(read_idx);
         
         int idx0 = read_idx & (kMaxDelay - 1);
         int idx1 = (read_idx + 1) & (kMaxDelay - 1);
         
         float delayed = delay_[idx0] * (1.0f - frac) + delay_[idx1] * frac;
+        
+        int comb_idx = static_cast<int>(comb_read_pos);
+        float comb_frac = comb_read_pos - static_cast<float>(comb_idx);
+        int cidx0 = comb_idx & (kMaxDelay - 1);
+        int cidx1 = (comb_idx + 1) & (kMaxDelay - 1);
+        delayed += delay_[cidx0] * (1.0f - comb_frac) + delay_[cidx1] * comb_frac;
         
         // Simple one-pole lowpass for brightness control
         // Lower cutoff = darker sound (more high freq damping)
