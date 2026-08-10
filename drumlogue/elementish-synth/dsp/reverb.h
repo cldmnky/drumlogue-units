@@ -185,10 +185,10 @@ float Reverb::comb_buffer_[Reverb::kCombCount][Reverb::kMaxCombDelay];
 float Reverb::allpass_buffer_[Reverb::kAllpassCount][Reverb::kMaxAllpassDelay];
 
 // Scaled, non-multiple-of-each-other prime-ish delays (in samples at 48kHz).
-const int Reverb::kCombDelay[kCombCount] = {
+const int Reverb::kCombDelay[Reverb::kCombCount] = {
     401, 463, 557, 631, 709, 787, 863, 941
 };
-const int Reverb::kAllpassDelay[kAllpassCount] = {
+const int Reverb::kAllpassDelay[Reverb::kAllpassCount] = {
     113, 157, 197, 251
 };
 
