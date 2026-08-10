@@ -3,9 +3,9 @@ layout: unit
 title: Elementish Synth
 tagline: Modal synthesis voice with bow, blow, and strike exciters and versatile resonator models
 unit_type: Synthesizer
-version: v1.2.0
+version: v1.4.0
 filename: elementish_synth.drmlgunit
-download_url: https://github.com/cldmnky/drumlogue-units/releases
+download_url: https://github.com/cldmnky/drumlogue-units/releases/download/elementish-synth/v1.4.0/elementish-synth-v1.4.0.drmlgunit
 permalink: /units/elementish-synth/
 ---
 
@@ -71,14 +71,14 @@ The unit has 24 parameters organized across 6 pages:
 | **DAMPING** | -64 to +63 | Energy dissipation. Negative = quick decay, positive = sustained |
 | **POSITION** | -64 to +63 | Excitation point on surface. Affects harmonic content like PWM |
 
-### Page 4 - Model & Space
+### Page 4 - Model, Space, Volume & Déjà Vu
 
 | Parameter | Range | Description |
 |-----------|-------|-------------|
 | **MODEL** | 0-2 | Resonator model: MODAL, STRING, or MSTRING |
-| **SPACE** | 0-127 | Stereo width. 0 = mono, 127 = wide stereo |
+| **SPACE** | 0-127 | Elements space metaparameter: exciter bleed, stereo width, reverb amount/time |
 | **VOLUME** | 0-127 | Output level |
-| *(unused)* | - | Reserved for future use |
+| **DEJA VU** | 0-127 | Sequencer pattern looping. 0 = random, 127 = locked loop |
 
 ### Page 5 - Envelope
 
@@ -102,14 +102,14 @@ The unit has 24 parameters organized across 6 pages:
 | **LFO PRE** | 0-7 | LFO shape + destination preset |
 | **COARSE** | -64 to +63 | Pitch coarse tune. ±24 semitones range |
 
-#### Lightweight Mode (Page 6 - Sequencer)
+#### Lightweight Mode (Page 6 - Tuning & Sequencer)
 
 | Parameter | Range | Description |
 |-----------|-------|--------------|
-| **COARSE** | -64 to +63 | Base pitch for sequencer. Sets root note |
+| **COARSE** | -64 to +63 | Pitch coarse tune. ±24 semitones range |
+| **FINE** | -64 to +63 | Pitch fine tune. ±100 cents range |
 | **SEQ** | 0-15 | Sequencer preset (see Sequencer Presets table) |
-| **SPREAD** | 0-127 | Note range. 0 = narrow, 127 = ±24 semitones |
-| **DEJA VU** | 0-127 | Pattern looping. 0 = random, 127 = locked loop |
+| **SPREAD** | 0-127 | Note range. 0 = narrow, 127 = wide |
 
 ---
 
@@ -199,10 +199,10 @@ The unit includes 8 carefully crafted presets:
 | 0 | **INIT** | Clean starting point with basic strike |
 | 1 | **BOWED STR** | Bowed string with sustain. Use BOW level to control |
 | 2 | **BELL** | Metallic bell percussion with long decay |
-| 3 | **WOBBLE** | Wobble bass sound |
-| 4 | **BLOWN TUBE** | Wind/breath instrument. Use BLOW level to control |
-| 5 | **SHIMMER** | Ambient shimmer texture |
-| 6 | **PLUCK STR** | Plucked string using STRING resonator model |
+| 3 | **PLUCK** | Plectrum plucked string |
+| 4 | **BLOWN** | Breathy wind instrument (granular blow) |
+| 5 | **MARIMBA** | Wooden mallet percussion |
+| 6 | **STRING** | Karplus-Strong plucked string |
 | 7 | **DRONE** | Evolving drone pad with looping envelope |
 
 ---
@@ -228,7 +228,7 @@ The unit includes 8 carefully crafted presets:
 
 ### Creating Blown/Wind Sounds
 
-1. Start with the **BLOWN TUBE** preset or set **BLOW** to 80-100
+1. Start with the **BLOWN** preset or set **BLOW** to 80-100
 2. Set **STRIKE** and **BOW** to 0
 3. Use **FLOW** to control air turbulence
 4. Experiment with **GEOMETRY** for different tube characters
@@ -290,6 +290,38 @@ The sequencer is inspired by Mutable Instruments Marbles and creates tempo-synce
 ---
 
 ## Version History
+
+### v1.4.0 - Review-Fix Release
+
+- COARSE, FINE and pitch bend now apply to directly played notes (NoteOn,
+  GateOn, held-note retune, preset retrigger) — previously they only affected
+  sequencer-generated notes
+- All-notes-off / panic clears the held-note state so a later preset load
+  cannot re-trigger a silenced note
+- STRING/MSTRING POSITION now actually changes the string timbre (the pickup
+  position comb was a no-op)
+- Full-mode COARSE retunes a held note (matches lightweight mode)
+- Preset switch while the sequencer is enabled no longer goes silent when the
+  new preset has SEQ off
+- Preset load / note-transition stability fixes (sound engine no longer stops,
+  note-transition distortion reduced)
+- Sequencer pending-note leaks and interval-scale octave wrapping fixed
+
+### v1.3.1 - Preset-Transition Fix
+
+- Loading a preset while a note is held resets the voice state and retriggers
+  the note, so the sound continues instead of dying out
+- Blown preset audible again (tube oscillation threshold)
+- Quartic attack table now reaches 1.0
+
+### v1.3.0 - Review-Fix Release
+
+- Sequencer note leaks fixed (note-off / all-notes-off / panic / preset change)
+- MIDI tuning clamp and pitch-bend of the held note
+- STRING/MSTRING respond to GEOMETRY (dispersion / chord) and POSITION
+- BLOW exciter rewritten as an Elements-style granular sample-player source
+- SPACE metaparameter drives exciter bleed, stereo spread, and reverb tail
+- FINE tuning re-exposed on page 6; DEJA VU moved to page 4
 
 ### v1.2.0 - Generative Sequencer Release
 
