@@ -2,14 +2,19 @@
  * @file perf_test.cc
  * @brief Performance monitoring test for Drupiter synth in different modes
  *
- * Tests CPU usage across mono, polyphonic, and unison synthesis modes
- * using the built-in PERF_MON system.
+ * Measures whole-callback CPU cost for mono / poly / unison modes using the
+ * built-in PERF_MON system, mirroring the real drumlogue callback:
+ *   - 48 kHz sample rate
+ *   - 64 frames per buffer (hardware buffer size)
+ *   - i.MX6 ULZ Cortex-A7 @ 900 MHz => ~1.2M cycle budget per callback
+ *
+ * The headline metric is the RenderTotal counter ONLY. The DCO/VCF/Effects
+ * counters nest inside RenderTotal and are displayed for informational
+ * purposes; they must never be summed with it.
  *
  * Usage:
- *   Build with PERF_MON=1: ./build.sh drupiter-synth PERF_MON=1
+ *   Build with PERF_MON=1: make PERF_MON=1 perf_test
  *   Run test: ./perf_test
- *
- * Output shows cycle counts and CPU utilization for each synthesis mode.
  */
 
 #include <iostream>
@@ -18,6 +23,7 @@
 #include <string>
 #include <chrono>
 #include <thread>
+#include <cstring>
 
 // Include the Drupiter synth
 #include "../../drumlogue/drupiter-synth/drupiter_synth.h"
@@ -41,13 +47,18 @@ const unit_header_t unit_header = {
     .num_params = 0
 };
 
-// Test configuration
+// Test configuration - mirrors real hardware
 static constexpr uint32_t kSampleRate = 48000;
 static constexpr uint32_t kTestDurationSeconds = 2;  // Test each mode for 2 seconds
-static constexpr uint32_t kFramesPerBuffer = 128;   // Typical drumlogue buffer size
+static constexpr uint32_t kFramesPerBuffer = 64;     // drumlogue hardware buffer size
 
-// CPU frequency for utilization calculation (ARM Cortex-A7 typical)
-static constexpr uint32_t kCpuFrequencyHz = 600000000;  // 600 MHz
+// CPU frequency for utilization calculation.
+// DRUSYS report: NXP i.MX6 ULZ, single Cortex-A7 @ 900 MHz.
+static constexpr uint32_t kCpuFrequencyHz = 900000000;
+
+// Cycle budget for one full audio callback
+static constexpr uint32_t kCyclesPerSample = kCpuFrequencyHz / kSampleRate;
+static constexpr uint32_t kBudgetPerBuffer = kCyclesPerSample * kFramesPerBuffer;
 
 // Structure to store performance results for summary table
 struct PerfResult {
@@ -66,14 +77,19 @@ public:
     void RunAllTests() {
         std::cout << "=== Drupiter Synth Performance Test ===\n";
         std::cout << "Sample Rate: " << kSampleRate << " Hz\n";
-        std::cout << "Buffer Size: " << kFramesPerBuffer << " samples\n";
+        std::cout << "Buffer Size: " << kFramesPerBuffer << " frames (hardware)\n";
         std::cout << "Test Duration: " << kTestDurationSeconds << " seconds per mode\n";
-        std::cout << "CPU Frequency: " << (kCpuFrequencyHz / 1000000) << " MHz\n\n";
+        std::cout << "CPU Frequency: " << (kCpuFrequencyHz / 1000000) << " MHz\n";
+        std::cout << "Callback budget: " << kBudgetPerBuffer << " cycles ("
+                  << std::fixed << std::setprecision(3)
+                  << (static_cast<float>(kFramesPerBuffer) / kSampleRate * 1000.0f)
+                  << " ms)\n\n";
 
         // Test each synthesis mode
-        TestVoiceCount("1 Voice (Mono)", 1);
-        TestVoiceCount("2 Voices (Poly)", 2);
-        TestVoiceCount("4 Voices (Poly)", 4);
+        TestScenario("Mono (1 voice)", 1);
+        TestScenario("Poly (2 voices)", 2);
+        TestScenario("Poly (4 voices)", 4);
+        TestScenario("Unison (held note)", 5);
 
         // Print summary table
         PrintSummaryTable();
@@ -87,7 +103,18 @@ private:
     std::vector<float> test_buffer_;
     std::vector<PerfResult> results_;
 
-    void TestVoiceCount(const std::string& mode_name, int voice_count) {
+    // Find a counter index by name (counters are registered inside Init())
+    static uint8_t FindCounter(const char* name) {
+        const uint8_t count = ::dsp::PerfMon::GetCounterCount();
+        for (uint8_t i = 0; i < count; ++i) {
+            if (std::strcmp(::dsp::PerfMon::GetCounterName(i), name) == 0) {
+                return i;
+            }
+        }
+        return 0xFF;
+    }
+
+    void TestScenario(const std::string& mode_name, int voice_count) {
         std::cout << "Testing " << mode_name << "...\n";
 
         // Initialize synth
@@ -104,29 +131,24 @@ private:
             std::cerr << "Failed to initialize synth: " << result << "\n";
             return;
         }
-        std::cout << "Synth initialized successfully\n";
 
-        // Set synthesis mode via hub control (not default voice allocator)
-        // MOD_SYNTH_MODE = 14. The hub maps UI values 0-100 onto the
-        // destination range (0-2), so mode = value * 50: 0=MONO, 50=POLY,
-        // 100=UNISON.
-        const uint8_t synth_mode = (voice_count == 1) ? 0 : 1;  // MONO for 1 voice, POLY for 2+ voices
-        synth_.SetHubValue(14, synth_mode * 50);  // MOD_SYNTH_MODE
+        // Set synthesis mode via hub control using NATIVE destination values:
+        // MOD_SYNTH_MODE range is 0..2 (MONO/POLY/UNISON).
+        uint8_t hub_mode = 0;
+        if (voice_count >= 2 && voice_count <= 4) hub_mode = 1;  // POLY
+        if (voice_count == 5) hub_mode = 2;                      // UNISON
+        synth_.SetHubValue(MOD_SYNTH_MODE, hub_mode);
 
         // Reset performance counters
         PERF_MON_RESET();
 
         // Warm up (1 second)
-        std::cout << "  Warming up...\n";
-        std::cout << "  Calling Render for warmup...\n";
         RunTestSequence(1.0f, voice_count);
-        std::cout << "  Warmup complete\n";
 
         // Reset counters again for actual test
         PERF_MON_RESET();
 
         // Run actual test
-        std::cout << "  Running performance test...\n";
         RunTestSequence(static_cast<float>(kTestDurationSeconds), voice_count);
 
         // Collect and display results
@@ -136,15 +158,18 @@ private:
     }
 
     void CollectPerformanceResults(const std::string& mode_name) {
-        // Calculate cycles per second for utilization
-        const uint32_t cycles_per_second = kCpuFrequencyHz;
-        const uint32_t cycles_per_sample = cycles_per_second / kSampleRate;
+        // Headline metric: whole-callback cost (RenderTotal counter).
+        const uint8_t total_idx = FindCounter("RenderTotal");
+        const uint32_t total_avg_cycles = (total_idx != 0xFF)
+            ? ::dsp::PerfMon::GetAverageCycles(total_idx) : 0;
+        const uint32_t total_peak_cycles = (total_idx != 0xFF)
+            ? ::dsp::PerfMon::GetPeakCycles(total_idx) : 0;
 
-        // Total utilization
-        uint32_t total_avg_cycles = PERF_MON_TOTAL_AVG();
-        uint32_t total_peak_cycles = PERF_MON_TOTAL_PEAK();
-        float total_avg_util = (static_cast<float>(total_avg_cycles) / cycles_per_sample) * 100.0f;
-        float total_peak_util = (static_cast<float>(total_peak_cycles) / cycles_per_sample) * 100.0f;
+        // Utilization against the FULL CALLBACK budget (not per-sample).
+        float total_avg_util =
+            (static_cast<float>(total_avg_cycles) / static_cast<float>(kBudgetPerBuffer)) * 100.0f;
+        float total_peak_util =
+            (static_cast<float>(total_peak_cycles) / static_cast<float>(kBudgetPerBuffer)) * 100.0f;
 
         // Performance rating
         std::string rating;
@@ -167,24 +192,25 @@ private:
     void PrintSummaryTable() {
         std::cout << "=== Performance Summary Table ===\n";
         std::cout << std::fixed << std::setprecision(1);
-        std::cout << "+----------------+--------+--------+--------+--------+\n";
-        std::cout << "| Mode          | Avg CPU| Peak CPU| Avg Cyc| Peak Cyc|\n";
-        std::cout << "+----------------+--------+--------+--------+--------+\n";
+        std::cout << "+----------------------+---------+---------+---------+---------+\n";
+        std::cout << "| Mode                 | Avg CPU | Peak CPU| Avg Cyc | Peak Cyc|\n";
+        std::cout << "+----------------------+---------+---------+---------+---------+\n";
 
         for (const auto& result : results_) {
-            std::cout << "| " << std::left << std::setw(14) << result.mode_name << " | "
+            std::cout << "| " << std::left << std::setw(20) << result.mode_name << " | "
                       << std::right << std::setw(6) << result.total_avg_util << "% | "
                       << std::setw(6) << result.total_peak_util << "% | "
-                      << std::setw(6) << result.total_avg_cycles << " | "
-                      << std::setw(6) << result.total_peak_cycles << " |\n";
+                      << std::setw(7) << result.total_avg_cycles << " | "
+                      << std::setw(7) << result.total_peak_cycles << " |\n";
         }
 
-        std::cout << "+----------------+--------+--------+--------+--------+\n";
+        std::cout << "+----------------------+---------+---------+---------+---------+\n";
 
         // Show ratings
         std::cout << "Performance Ratings:\n";
         for (const auto& result : results_) {
-            std::cout << "  " << std::left << std::setw(16) << result.mode_name << ": " << result.rating << "\n";
+            std::cout << "  " << std::left << std::setw(20) << result.mode_name
+                      << ": " << result.rating << "\n";
         }
         std::cout << "\n";
     }
@@ -199,10 +225,16 @@ private:
         int note_index = 0;
 
         for (uint32_t buffer = 0; buffer < buffers_to_process; ++buffer) {
-            // Skip note triggering for now to isolate the crash
-            if (buffer % (buffers_to_process / voice_count) == 0 && note_index < voice_count) {
-                synth_.NoteOn(notes[note_index % 4], velocities[note_index % 4]);
-                note_index++;
+            // Trigger up to `voice_count` notes at the start so sustained
+            // voices exercise the requested mode during measurement.
+            if (buffer == 0) {
+                const int notes_to_trigger =
+                    (voice_count == 5) ? 1 :  // Unison: one held note drives the stack
+                    (voice_count > 4 ? 4 : voice_count);
+                for (int n = 0; n < notes_to_trigger; ++n) {
+                    synth_.NoteOn(notes[n % 4], velocities[n % 4]);
+                }
+                note_index = notes_to_trigger;
             }
 
             // Process audio buffer
@@ -213,7 +245,7 @@ private:
         for (int i = 0; i < note_index; ++i) {
             synth_.NoteOff(notes[i % 4]);
         }
-        
+
         // Let envelopes finish
         for (int i = 0; i < 100; ++i) {
             synth_.Render(test_buffer_.data(), kFramesPerBuffer);
@@ -223,71 +255,42 @@ private:
     void PrintPerformanceResults(const std::string& mode_name) {
         std::cout << "  " << mode_name << " Results:\n";
 
-        // Calculate cycles per second for utilization
-        const uint32_t cycles_per_second = kCpuFrequencyHz;
-        const uint32_t cycles_per_sample = cycles_per_second / kSampleRate;
-
-        // Display each counter
+        // Display each counter (informational; DCO/VCF/Effects nest in RenderTotal)
         for (uint8_t i = 0; i < ::dsp::PerfMon::GetCounterCount(); ++i) {
-            ::dsp::PerfStats stats = PERF_MON_GET_STATS(i);
-            
+            ::dsp::PerfStats stats = ::dsp::PerfMon::GetStats(i);
+
             if (stats.frame_count == 0) continue;
 
-            // Calculate utilization percentage
-            float avg_utilization = (static_cast<float>(stats.average_cycles) / cycles_per_sample) * 100.0f;
-            float peak_utilization = (static_cast<float>(stats.peak_cycles) / cycles_per_sample) * 100.0f;
-
-            std::cout << std::fixed << std::setprecision(1);
             std::cout << "    " << stats.name << ":\n";
-            std::cout << "      Avg: " << stats.average_cycles << " cycles ("
-                      << avg_utilization << "% CPU)\n";
-            std::cout << "      Peak: " << stats.peak_cycles << " cycles ("
-                      << peak_utilization << "% CPU)\n";
-            std::cout << "      Min: " << stats.min_cycles << " cycles\n";
-            std::cout << "      Measurements: " << stats.frame_count << "\n";
+            std::cout << "      Avg: " << stats.average_cycles
+                      << " cycles/buffer, Peak: " << stats.peak_cycles
+                      << ", Min: " << stats.min_cycles
+                      << " (" << stats.frame_count << " buffers)\n";
         }
 
-        // Total utilization
-        uint32_t total_avg_cycles = PERF_MON_TOTAL_AVG();
-        uint32_t total_peak_cycles = PERF_MON_TOTAL_PEAK();
-        float total_avg_util = (static_cast<float>(total_avg_cycles) / cycles_per_sample) * 100.0f;
-        float total_peak_util = (static_cast<float>(total_peak_cycles) / cycles_per_sample) * 100.0f;
-
-        std::cout << "    TOTAL:\n";
-        std::cout << "      Avg: " << total_avg_cycles << " cycles ("
-                  << total_avg_util << "% CPU)\n";
-        std::cout << "      Peak: " << total_peak_cycles << " cycles ("
-                  << total_peak_util << "% CPU)\n";
-
-        // Performance rating
-        std::string rating;
-        if (total_avg_util < 50.0f) rating = "EXCELLENT (plenty of headroom)";
-        else if (total_avg_util < 70.0f) rating = "GOOD (reasonable headroom)";
-        else if (total_avg_util < 80.0f) rating = "FAIR (near limit)";
-        else rating = "POOR (may cause xruns)";
-
-        std::cout << "      Rating: " << rating << "\n";
+        // Headline utilization from stored result
+        const PerfResult& r = results_.back();
+        std::cout << std::fixed << std::setprecision(1);
+        std::cout << "    CALLBACK TOTAL:\n";
+        std::cout << "      Avg: " << r.total_avg_cycles << " cycles ("
+                  << r.total_avg_util << "% of budget)\n";
+        std::cout << "      Peak: " << r.total_peak_cycles << " cycles ("
+                  << r.total_peak_util << "% of budget)\n";
+        std::cout << "      Rating: " << r.rating << "\n";
     }
 
     void PrintUtilizationGuide() {
-        std::cout << "CPU Utilization Guide:\n";
+        std::cout << "CPU Utilization Guide (per 64-frame callback @ 900 MHz):\n";
         std::cout << "  < 50%: Excellent - plenty of headroom for modulation/effects\n";
         std::cout << "  50-70%: Good - reasonable headroom, stable performance\n";
         std::cout << "  70-80%: Fair - near limit, monitor carefully\n";
         std::cout << "  > 80%: Poor - may cause audio dropouts (xruns)\n\n";
 
-        std::cout << "Performance Breakdown:\n";
-        std::cout << "  VoiceAlloc: Voice management, note triggering, envelope updates\n";
-        std::cout << "  DCO: Oscillator processing (wavetable lookup, FM, drift)\n";
-        std::cout << "  VCF: Filter processing (LPF with resonance)\n";
-        std::cout << "  Effects: Chorus, modulation, additional processing\n";
-        std::cout << "  RenderTotal: Complete audio buffer processing\n\n";
-
-        std::cout << "Optimization Notes:\n";
-        std::cout << "  - Q31 interpolation reduces DCO CPU by 30-40%\n";
-        std::cout << "  - PolyBLEP anti-aliasing adds ~5-10% CPU per oscillator\n";
-        std::cout << "  - 24dB filters use ~15% more CPU than 12dB\n";
-        std::cout << "  - Heavy modulation increases processing load\n";
+        std::cout << "Notes:\n";
+        std::cout << "  - DCO/VCF/Effects counters are nested inside RenderTotal;\n";
+        std::cout << "    they overlap and must NOT be summed.\n";
+        std::cout << "  - Desktop/QEMU numbers use a wall-clock simulation and are\n";
+        std::cout << "    indicative only; validate on hardware before release.\n";
     }
 };
 
@@ -300,7 +303,7 @@ int main(int argc, char** argv) {
     // Check if PERF_MON is enabled
 #ifndef PERF_MON
     std::cerr << "ERROR: PERF_MON not enabled!\n";
-    std::cerr << "Build with: ./build.sh drupiter-synth PERF_MON=1\n";
+    std::cerr << "Build with: make clean && make PERF_MON=1 perf_test\n";
     return 1;
 #endif
 

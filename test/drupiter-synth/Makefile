@@ -48,7 +48,7 @@ $(PERF_TARGET): $(PERF_SOURCES) $(DSP_SOURCES)
 	$(CXX) $(CXXFLAGS) -DPERF_MON $^ $(LDFLAGS) -o $@
 
 clean:
-	rm -rf $(TARGET) *.wav fixtures/
+	rm -rf $(TARGET) $(PERF_TARGET) *.wav fixtures/
 
 # Test targets
 fixtures:
