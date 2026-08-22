@@ -29,7 +29,6 @@ public:
      * @param smoothed_pitch_bend Pitch bend modulation
      * @param dco1_level DCO1 level
      * @param dco2_level DCO2 level
-     * @param semitones_to_ratio Function to convert semitones to ratio
      * @return Mixed output signal
      */
     static float RenderMono(
@@ -44,8 +43,7 @@ public:
         float pitch_mod_ratio,
         float smoothed_pitch_bend,
         float dco1_level,
-        float dco2_level,
-        float (*semitones_to_ratio)(float)
+        float dco2_level
     );
 };
 

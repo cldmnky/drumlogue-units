@@ -37,8 +37,7 @@ float UnisonRenderer::RenderUnison(
     float smoothed_pitch_bend,
     float dco1_level,
     float dco2_level,
-    uint8_t dco1_wave_param,
-    float (*semitones_to_ratio)(float)
+    uint8_t dco1_wave_param
 ) {
     // UNISON MODE: Use UnisonOscillator for multi-voice detuned stack + DCO2
     dsp::UnisonOscillator& unison_osc = synth.GetAllocator().GetUnisonOscillator();

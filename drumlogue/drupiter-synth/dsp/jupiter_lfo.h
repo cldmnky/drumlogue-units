@@ -34,6 +34,9 @@ public:
         WAVEFORM_SAMPLE_HOLD = 3 // Random sample & hold
     };
 
+    /** @brief Current waveform (test/diagnostic hook) */
+    Waveform GetWaveform() const { return waveform_; }
+
     /**
      * @brief Constructor
      */

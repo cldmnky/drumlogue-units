@@ -24,8 +24,7 @@ float MonoRenderer::RenderMono(
     float pitch_mod_ratio,
     float smoothed_pitch_bend,
     float dco1_level,
-    float dco2_level,
-    float (*semitones_to_ratio)(float)
+    float dco2_level
 ) {
     // MONO MODE: Use main synth DCOs (monophonic, single voice)
     synth.GetDCO1().SetPulseWidth(modulated_pw);

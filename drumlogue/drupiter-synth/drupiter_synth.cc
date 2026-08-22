@@ -61,38 +61,11 @@ static constexpr float kMinDistance = 1e-6f;     // Minimum significant log dist
 // Fast 2^x approximation (accurate for |x| < 8)
 // Uses polynomial: 2^x ≈ 1 + 0.693x + 0.240x² + 0.056x³
 // Relative error < 0.3% for |x| < 4, piecewise approximation for |x| >= 4
-inline float fast_pow2(float x) {
-    // Clamp to safe range
-    if (x < -8.0f) return 0.00390625f;  // 2^-8
-    if (x > 8.0f) return 256.0f;         // 2^8
-    
-    // For |x| >= 4, use piecewise approximation: 2^x = 2^(4 + (x-4)) = 16 * 2^(x-4)
-    // This keeps the polynomial input in the accurate range
-    if (x >= 4.0f) {
-        return 16.0f * fast_pow2(x - 4.0f);
-    } else if (x <= -4.0f) {
-        return fast_pow2(x + 4.0f) * 0.0625f;  // 2^x = 2^((x+4) - 4) = 2^(x+4) / 16
-    }
-    
-    // Polynomial approximation (Horner's form) for |x| < 4
-    const float c1 = 0.693147181f;  // ln(2)
-    const float c2 = 0.240226507f;  // ln(2)²/2!
-    const float c3 = 0.055504109f;  // ln(2)³/3!
-    const float c4 = 0.009618129f;  // ln(2)⁴/4!
-    
-    return 1.0f + x * (c1 + x * (c2 + x * (c3 + x * c4)));
-}
+// (implementation shared via common/dsp_utils.h)
 
-// Fast cents to ratio: 2^(cents/1200)
-// For detune in cents, typically ±200
-inline float cents_to_ratio(float cents) {
-    return fast_pow2(cents * (1.0f / 1200.0f));
-}
-
-// Fast semitones to ratio: 2^(semitones/12)
-inline float semitones_to_ratio(float semitones) {
-    return fast_pow2(semitones * (1.0f / 12.0f));
-}
+// Fast cents to ratio / semitones to ratio now live in common/dsp_utils.h
+// (shared, inlinable — previously passed into renderers as function pointers,
+// which blocked inlining and forced indirect calls in the per-sample path).
 
 inline uint8_t clamp_u8_int32(int32_t value, int32_t min_value, int32_t max_value) {
     if (value < min_value) return static_cast<uint8_t>(min_value);
@@ -168,6 +141,8 @@ DrupiterSynth::DrupiterSynth()
     , buffer_guard_(0xDEADBEEFDEADBEEF)
     , noise_seed_(0x12345678)
     , last_cutoff_hz_(1000.0f)
+    , synth_mode_change_pending_(false)
+    , pending_native_synth_mode_(0)
     , hpf_prev_output_(0.0f)
     , hpf_prev_input_(0.0f)
 {
@@ -212,7 +187,6 @@ int8_t DrupiterSynth::Init(const unit_runtime_desc_t* desc) {
     catch_dco2_tune_.Init(50);    // Center position for bipolar detune
     catch_xmod_.Init(0);
     catch_lfo_rate_.Init(0);
-    catch_mod_amt_.Init(0);
     
     // Initialize MIDI modulation smoothing (per-buffer processing)
     pitch_bend_smooth_.Init(0.0f, 0.005f);   // Pitch bend - slow for smooth vibrato
@@ -331,19 +305,17 @@ void DrupiterSynth::RenderChunk(float* out, uint32_t frames) {
                                            setup.env_pitch_depth, mod.dco1_level, mod.dco2_level, mod.cutoff_base_nominal,
                                            setup.resonance, setup.vcf_mode, setup.hpf_alpha, setup.key_track, setup.smoothed_pressure,
                                            setup.env_vcf_depth, setup.lfo_vcf_depth, current_preset_.params[PARAM_DCO1_WAVE],
-                                           current_preset_.params[PARAM_DCO2_WAVE], current_preset_.params[PARAM_VCF_CUTOFF],
-                                           fast_pow2, semitones_to_ratio);
+                                           current_preset_.params[PARAM_DCO2_WAVE], current_preset_.params[PARAM_VCF_CUTOFF]);
         } else if (current_mode_ == dsp::SYNTH_MODE_UNISON) {
             mixed_ = dsp::UnisonRenderer::RenderUnison(*this, mod.modulated_pw, setup.dco1_oct_mult, setup.dco2_oct_mult,
                                        setup.detune_ratio, setup.lfo_vco_depth, lfo_out_, mod.pitch_mod_ratio,
                                        setup.smoothed_pitch_bend, mod.dco1_level, mod.dco2_level,
-                                       current_preset_.params[PARAM_DCO1_WAVE], semitones_to_ratio);
+                                       current_preset_.params[PARAM_DCO1_WAVE]);
         } else {
             // MONO mode
             mixed_ = dsp::MonoRenderer::RenderMono(*this, mod.modulated_pw, setup.dco1_oct_mult, setup.dco2_oct_mult,
                                    setup.detune_ratio, setup.xmod_depth, setup.lfo_vco_depth, lfo_out_, mod.pitch_mod_ratio,
-                                   setup.smoothed_pitch_bend, mod.dco1_level, mod.dco2_level,
-                                   semitones_to_ratio);
+                                   setup.smoothed_pitch_bend, mod.dco1_level, mod.dco2_level);
         }
         
         #ifdef PERF_MON
@@ -402,62 +374,59 @@ void DrupiterSynth::SetParameter(uint8_t id, int32_t value) {
             
         // Page 6: MOD HUB selector and EFFECT mode
         case PARAM_MOD_HUB:
-            v = clamp_u8_int32(value, 0, MOD_NUM_DESTINATIONS - 1);  // 14 hub destinations (0-17)
+            v = clamp_u8_int32(value, 0, MOD_NUM_DESTINATIONS - 1);  // 18 hub destinations (0-17)
             mod_hub_.SetDestination(v);
             
-            // Restore the previously stored value for this destination
-            // This allows switching between MOD HUB options and remembering each value
+            // Restore the previously stored NATIVE value for this destination.
+            // hub_values[] stores destination-native units (enum indices,
+            // cents, etc.), matching the kModDestinations ranges — the hub
+            // derives the 0-100 UI representation itself.
             if (v < MOD_NUM_DESTINATIONS) {
-                mod_hub_.SetValueForDest(v, current_preset_.hub_values[v]);
-                // BUGFIX: re-base the shared knob catch on the newly selected
-                // destination's value. Otherwise the first MOD AMT turn after a
-                // switch compares the knob against the *previous* destination's
-                // value, causing random hold/catch behavior when hopping
-                // between MOD HUB options.
-                catch_mod_amt_.Init(current_preset_.hub_values[v]);
+                mod_hub_.SetNativeValueForDest(v, current_preset_.hub_values[v]);
             }
             
             current_preset_.params[id] = v;
+            // LFO delay/waveform are hub destinations; refresh the DSP
+            // immediately so edits apply without a preset reload.
+            UpdateLfoSettings();
             return;  // Hub handles its own state
             
         case PARAM_MOD_AMT: {
-            // Hub amount: Store in hub and preset's hub_values array
+            // Hub amount: store in hub and preset's hub_values array.
+            // Applied directly (no knob catching): drumlogue's endless encoder
+            // delivers resolved values, so catching only made the hub feel
+            // unresponsive or caused apparent random jumps after switching
+            // destinations.
             v = clamp_u8_int32(value, 0, 100);
-            int32_t caught_v = catch_mod_amt_.Update(v);
-            const int32_t actual_value = mod_hub_.SetValueAndGetClamped(caught_v);
+            const int32_t actual_value = mod_hub_.SetValueAndGetClamped(v);
             
-            // Store the EFFECTIVE 0-100 value (post knob-catch), not the raw
-            // knob position. While the knob is catching, the raw value has not
-            // been applied; storing it would make the destination jump when
-            // restored after switching MOD HUB options.
+            // Store the NATIVE (destination-range) value so restoration via
+            // SetNativeValueForDest is exact for enums/ranges that do not map
+            // 1:1 onto 0-100.
             {
                 uint8_t dest = current_preset_.params[PARAM_MOD_HUB];
                 if (dest < MOD_NUM_DESTINATIONS) {
-                    // Store effective 0-100 value for restoration later
-                    current_preset_.hub_values[dest] = caught_v;
+                    current_preset_.hub_values[dest] = static_cast<uint8_t>(actual_value);
                     
                     // Apply specific destinations to DSP components immediately
                     switch (dest) {
                         case MOD_SYNTH_MODE:  // S MODE (range 0-2: MONO/POLY/UNISON)
-                            if (actual_value <= 2) {
-                                // Only allow mode changes when no notes are playing
-                                // to prevent audio glitches and envelope state issues
-                                if (!allocator_.IsAnyVoiceActive()) {
-                                    current_mode_ = static_cast<dsp::SynthMode>(actual_value);
-                                    allocator_.SetMode(current_mode_);
-                                }
-                                // If voices are active, mode change will apply after all notes off
-                            }
+                            // Queued and applied immediately when idle;
+                            // deferred until all voices release otherwise.
+                            RequestHubSynthMode(static_cast<uint8_t>(actual_value));
+                            ResolvePendingSynthMode();
                             break;
                         case MOD_UNISON_DETUNE:  // UNI DET (range 0-50 cents)
-                            // Update unison detune with actual clamped value
-                            allocator_.SetUnisonDetune(actual_value);
+                            // Update unison detune with actual clamped native value
+                            allocator_.SetUnisonDetune(static_cast<float>(actual_value));
                             break;
                         default:
                             break;  // Other destinations handled in Render()
                     }
                 }
             }
+            // LFO delay/waveform are hub destinations; refresh immediately
+            UpdateLfoSettings();
             return;  // Hub handles its own state
         }
             
@@ -724,10 +693,21 @@ const char* DrupiterSynth::GetParameterStr(uint8_t id, int32_t value) {
 
 void DrupiterSynth::SetHubValue(uint8_t destination, uint8_t value) {
     if (destination < MOD_NUM_DESTINATIONS) {
-        mod_hub_.SetValueForDest(destination, value);
-        // Also update the preset storage for consistency
-        current_preset_.hub_values[destination] = value;
+        // Native destination value (enum index, cents, etc.); the hub clamps
+        // to the destination's range, so persist the CLAMPED value.
+        mod_hub_.SetNativeValueForDest(destination, value);
+        const uint8_t clamped =
+            static_cast<uint8_t>(mod_hub_.GetValue(destination));
+        current_preset_.hub_values[destination] = clamped;
+        // Route S MODE through the same deferred-apply path as the knob
+        if (destination == MOD_SYNTH_MODE) {
+            RequestHubSynthMode(clamped);
+        }
     }
+}
+
+uint8_t DrupiterSynth::GetLfoWaveformForTest() const {
+    return static_cast<uint8_t>(lfo_.GetWaveform());
 }
 
 void DrupiterSynth::NoteOn(uint8_t note, uint8_t velocity) {
@@ -875,13 +855,6 @@ void DrupiterSynth::LoadPreset(uint8_t preset_id) {
     catch_dco2_tune_.Init(current_preset_.params[PARAM_DCO2_TUNE]);
     catch_xmod_.Init(current_preset_.params[PARAM_XMOD]);
     catch_lfo_rate_.Init(current_preset_.params[PARAM_LFO_RATE]);
-    // MOD_AMT: Initialize with the current destination's hub value
-    {
-        uint8_t dest = current_preset_.params[PARAM_MOD_HUB];
-        if (dest < MOD_NUM_DESTINATIONS) {
-            catch_mod_amt_.Init(current_preset_.hub_values[dest]);
-        }
-    }
     
     // DCO levels from OSC_MIX parameter
     float osc_mix = current_preset_.params[PARAM_OSC_MIX] / 100.0f;
@@ -897,26 +870,35 @@ void DrupiterSynth::LoadPreset(uint8_t preset_id) {
     sync_mode_ = current_preset_.params[PARAM_SYNC];
     
     // Apply all parameters to DSP components
+    // NOTE: deliberately skip PARAM_MOD_HUB / PARAM_MOD_AMT here. Their
+    // handlers write through to current_preset_.hub_values[], so replaying
+    // the placeholder MOD_AMT=0 would clobber the preset's real hub data
+    // before the restoration below reads it. The hub is fully restored from
+    // the pristine arrays immediately after this loop.
     for (uint8_t i = 0; i < PARAM_COUNT; ++i) {
+        if (i == PARAM_MOD_HUB || i == PARAM_MOD_AMT) continue;
         SetParameter(i, current_preset_.params[i]);
     }
     
-    // BUGFIX: restore MOD HUB values AFTER the parameter loop. Factory presets
-    // keep PARAM_MOD_AMT at 0 ("amount in hub_values"), so SetParameter(MOD_AMT)
-    // above overwrites the selected destination's value with 0 and destroys
-    // the preset's real modulation/synth-mode setting (e.g. Init preset loaded
-    // VCF TYPE 0 instead of its stored 1). Hub state must win over the dummy
-    // MOD_AMT param value.
+    // Restore MOD HUB state from the pristine preset arrays. hub_values[]
+    // holds NATIVE destination values, so restore through
+    // SetNativeValueForDest (exact for enums/ranges that don't map 1:1 to
+    // the 0-100 UI range).
     mod_hub_.SetDestination(current_preset_.params[PARAM_MOD_HUB]);
     for (uint8_t dest = 0; dest < MOD_NUM_DESTINATIONS; ++dest) {
-        mod_hub_.SetValueForDest(dest, current_preset_.hub_values[dest]);
+        mod_hub_.SetNativeValueForDest(dest, current_preset_.hub_values[dest]);
     }
-    // Re-base the knob catch on the restored destination value
+    // A preset is authoritative on load: apply its stored S MODE right away
+    // (no voices can be active yet) and drop anything previously queued.
+    // Without this, e.g. "Poly Brass" stayed monophonic until the user
+    // touched S MODE.
     {
-        uint8_t dest = current_preset_.params[PARAM_MOD_HUB];
-        if (dest < MOD_NUM_DESTINATIONS) {
-            catch_mod_amt_.Init(current_preset_.hub_values[dest]);
+        const uint8_t sm = static_cast<uint8_t>(mod_hub_.GetValue(MOD_SYNTH_MODE));
+        if (sm <= 2) {
+            current_mode_ = static_cast<dsp::SynthMode>(sm);
+            allocator_.SetMode(current_mode_);
         }
+        synth_mode_change_pending_ = false;
     }
     
     // Initialize effect and LFO settings from preset (critical for preset load)
@@ -1006,6 +988,23 @@ void DrupiterSynth::UpdateEffectParameters(uint8_t effect_mode) {
     }
 }
 
+void DrupiterSynth::RequestHubSynthMode(uint8_t native_value) {
+    if (native_value > 2) return;
+    synth_mode_change_pending_ = true;
+    pending_native_synth_mode_ = native_value;
+}
+
+void DrupiterSynth::ResolvePendingSynthMode() {
+    if (!synth_mode_change_pending_) return;
+    // Mode changes are only safe when no notes are playing (prevents audio
+    // glitches and envelope state corruption); stay pending until they end.
+    if (allocator_.IsAnyVoiceActive()) return;
+    
+    current_mode_ = static_cast<dsp::SynthMode>(pending_native_synth_mode_);
+    allocator_.SetMode(current_mode_);
+    synth_mode_change_pending_ = false;
+}
+
 void DrupiterSynth::UpdateLfoSettings() {
     // Update LFO settings when hub parameters change
     // Called from SetParameter when MOD_HUB or MOD_AMT changes
@@ -1025,8 +1024,15 @@ void DrupiterSynth::UpdateLfoSettings() {
 // Render Helper Method Implementations
 // ============================================================================
 
-DrupiterSynth::RenderSetup DrupiterSynth::PrepareRenderSetup(uint32_t frames) {
+    DrupiterSynth::RenderSetup DrupiterSynth::PrepareRenderSetup(uint32_t frames) {
     RenderSetup setup;
+    
+    // Apply LFO delay/waveform from the MOD HUB every block. The setters are
+    // trivial assignments, and routing through the render path guarantees
+    // hub edits take effect no matter which API changed them (previously
+    // these only refreshed on two early-returning SetParameter branches,
+    // leaving the DSP stale until a preset reload).
+    UpdateLfoSettings();
     
     // Read oscillator parameters
     const float osc_mix = current_preset_.params[PARAM_OSC_MIX] / 100.0f;
@@ -1073,14 +1079,12 @@ DrupiterSynth::RenderSetup DrupiterSynth::PrepareRenderSetup(uint32_t frames) {
     // BUGFIX: guard against switching mode while notes are playing, matching
     // the SetParameter path - otherwise an S MODE change flips the mode
     // mid-note and glitches voices/envelopes.
-    const uint8_t synth_mode_value = mod_hub_.GetValue(MOD_SYNTH_MODE);
-    const dsp::SynthMode synth_mode = static_cast<dsp::SynthMode>(synth_mode_value < 3 ? synth_mode_value : 0);
-    if (synth_mode != current_mode_ && !allocator_.IsAnyVoiceActive()) {
-        current_mode_ = synth_mode;
-        allocator_.SetMode(current_mode_);
-    }
+    // Apply any deferred S MODE hub change once voices are idle
+    ResolvePendingSynthMode();
     
-    // Unison detune control
+    // Unison detune control (native cents 0-50). VoiceAllocator::SetUnisonDetune
+    // caches the last value, so unchanged hub state skips the expensive
+    // powf-based detune-ratio recalculation every callback.
     const float unison_detune_cents = static_cast<float>(mod_hub_.GetValue(MOD_UNISON_DETUNE));
     allocator_.SetUnisonDetune(unison_detune_cents);
     
@@ -1093,9 +1097,18 @@ DrupiterSynth::RenderSetup DrupiterSynth::PrepareRenderSetup(uint32_t frames) {
     }
     allocator_.SetPortamentoTime(porta_time_ms);
     
-    // VCF filter type
-    const uint8_t vcf_type = mod_hub_.GetValue(MOD_VCF_TYPE);
-    setup.vcf_mode = (vcf_type < 50) ? dsp::JupiterVCF::MODE_LP12 : dsp::JupiterVCF::MODE_LP24;
+    // VCF filter type — hub stores the native enum 0-3 (LP12/LP24/HP12/BP12).
+    // (Previously compared against 50, which is unreachable for a 0-3 range
+    // and silently forced LP12 regardless of the preset/selection.)
+    {
+        const uint8_t vcf_type = mod_hub_.GetValue(MOD_VCF_TYPE);
+        switch (vcf_type) {
+            case 1:  setup.vcf_mode = dsp::JupiterVCF::MODE_LP24; break;
+            case 2:  setup.vcf_mode = dsp::JupiterVCF::MODE_HP12; break;
+            case 3:  setup.vcf_mode = dsp::JupiterVCF::MODE_BP12; break;
+            default: setup.vcf_mode = dsp::JupiterVCF::MODE_LP12; break;
+        }
+    }
     vcf_.SetMode(setup.vcf_mode);
     
     // Pre-calculate HPF coefficient
@@ -1113,6 +1126,16 @@ DrupiterSynth::RenderSetup DrupiterSynth::PrepareRenderSetup(uint32_t frames) {
     
     // Velocity modulation for MONO/UNISON modes
     setup.vel_mod = (current_velocity_ / 127.0f) * 0.5f;
+    
+    // Mono-path per-block constants. current_note_/current_velocity_ only
+    // change on MIDI events, so these were previously recomputed every sample.
+    {
+        const float note_offset = (static_cast<int32_t>(current_note_) - 60) / 12.0f;
+        const float tracking_exponent = clampf(note_offset * setup.key_track, -4.0f, 4.0f);
+        setup.mono_key_track_ratio = semitones_to_ratio(tracking_exponent * 12.0f);
+        setup.mono_vel_gain = 0.2f + (current_velocity_ / 127.0f) * 0.8f;
+        setup.mono_kybd_gain = 1.0f + (note_offset * setup.vca_kybd * 0.5f);
+    }
     
     // Process portamento/glide for MONO/UNISON modes
     if (current_mode_ == dsp::SYNTH_MODE_MONOPHONIC || 
@@ -1208,13 +1231,9 @@ float DrupiterSynth::ProcessFilterVcaFrame(
         else if (hpf_out < -1.5f) hpf_out = -1.5f + 0.3f * (hpf_out + 1.5f);
     }
     
-    // Apply keyboard tracking for MONO/UNISON modes
-    float cutoff_base = cutoff_base_nominal;
-    const float note_offset = (static_cast<int32_t>(current_note_) - 60) / 12.0f;
-    const float tracking_exponent = note_offset * setup.key_track;
-    const float clamped_exponent = (tracking_exponent > 4.0f) ? 4.0f :
-                      (tracking_exponent < -4.0f) ? -4.0f : tracking_exponent;
-    cutoff_base *= semitones_to_ratio(clamped_exponent * 12.0f);
+    // Apply keyboard tracking for MONO/UNISON modes.
+    // Hoisted per-block: depends only on current_note_ + key_track (setup).
+    const float cutoff_base = cutoff_base_nominal * setup.mono_key_track_ratio;
 
     // Combine all modulation sources
     float total_mod = vcf_env_out_ * 2.0f
@@ -1247,17 +1266,19 @@ float DrupiterSynth::ProcessFilterVcaFrame(
         else if (filtered < -1.8f) filtered = -1.8f + 0.2f * (filtered + 1.8f);
     }
     
-    // Apply VCA
+    // Apply VCA (velocity/keyboard gains hoisted per-block in PrepareRenderSetup)
     float vca_gain = (current_mode_ == dsp::SYNTH_MODE_POLYPHONIC) ? 1.0f : vca_env_out_;
     
     if (current_mode_ != dsp::SYNTH_MODE_POLYPHONIC) {
-        const float velocity_vca = 0.2f + (current_velocity_ / 127.0f) * 0.8f;
-        vca_gain *= velocity_vca;
+        vca_gain *= setup.mono_vel_gain;
     }
     
     if (current_mode_ == dsp::SYNTH_MODE_UNISON) {
         dsp::Voice& lead_voice = allocator_.GetVoiceMutable(0);
-        vca_gain = lead_voice.env_amp.Process();
+        // Multiply by the lead voice's envelope instead of overwriting, so the
+        // velocity gain applied above is preserved (previously unison ignored
+        // velocity entirely: loud == soft).
+        vca_gain *= lead_voice.env_amp.Process();
         
         if (!lead_voice.env_amp.IsActive()) {
             vca_gain = 0.0f;
@@ -1276,11 +1297,9 @@ float DrupiterSynth::ProcessFilterVcaFrame(
         vca_gain *= tremolo;
     }
     
-    // VCA Keyboard tracking
+    // VCA Keyboard tracking (hoisted per-block)
     if (setup.vca_kybd > kMinModulation) {
-        const float note_offset = (static_cast<int32_t>(current_note_) - 60) / 12.0f;
-        const float kb_gain = 1.0f + (note_offset * setup.vca_kybd * 0.5f);
-        vca_gain *= kb_gain;
+        vca_gain *= setup.mono_kybd_gain;
     }
     
     // VCA Level control
@@ -1296,27 +1315,26 @@ void DrupiterSynth::FinalizeOutput(uint32_t frames, float* out) {
     // Effect mode processing
     const uint8_t effect_mode = current_preset_.params[PARAM_EFFECT];
     
+    // Denormal-protection DC offset, fused into the interleave pass
+    // (previously two redundant unit-gain passes + separate interleave +
+    // separate offset loop).
+    constexpr float kDenormalOffset = 1.0e-15f;
+    
     if (effect_mode == 2) {
-        // DRY mode: Bypass effects
-        for (uint32_t i = 0; i < frames; i++) {
-            left_buffer_[i] = mix_buffer_[i];
-            right_buffer_[i] = mix_buffer_[i];
+        // DRY mode: bypass effects — copy/interleave in one fused pass
+        for (uint32_t i = 0; i < frames; ++i) {
+            const float v = mix_buffer_[i] + kDenormalOffset;
+            out[i * 2] = v;
+            out[i * 2 + 1] = v;
         }
     } else {
         // Process with pre-configured parameters
         space_widener_.ProcessMonoBatch(mix_buffer_, left_buffer_, right_buffer_, frames);
-    }
-    
-    // Add DC offset for denormal protection
-    const float denormal_offset = 1.0e-15f;
-    drupiter::neon::ApplyGain(left_buffer_, 1.0f, frames);
-    drupiter::neon::ApplyGain(right_buffer_, 1.0f, frames);
-    
-    // Interleave stereo
-    drupiter::neon::InterleaveStereo(left_buffer_, right_buffer_, out, frames);
-    
-    // Add DC offset to output
-    for (uint32_t i = 0; i < frames * 2; ++i) {
-        out[i] += denormal_offset;
+        
+        // Interleave stereo with offset in one fused pass
+        for (uint32_t i = 0; i < frames; ++i) {
+            out[i * 2] = left_buffer_[i] + kDenormalOffset;
+            out[i * 2 + 1] = right_buffer_[i] + kDenormalOffset;
+        }
     }
 }

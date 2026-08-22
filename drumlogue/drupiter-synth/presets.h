@@ -604,7 +604,8 @@ static const DrupiterPreset kFactoryPresets[12] = {
             0,    // MOD_ENV_TO_PWM: No envelope->PWM
             0,    // MOD_ENV_TO_VCF: No envelope->filter
             0,    // MOD_HPF: High-pass filter off
-            2,    // MOD_VCF_TYPE: BP12 (bandpass filter - nasal character)
+            3,    // MOD_VCF_TYPE: BP12 (bandpass filter - nasal character)
+                  // (enum: 0=LP12, 1=LP24, 2=HP12, 3=BP12)
             0,    // MOD_LFO_DELAY: N/A
             0,    // MOD_LFO_WAVE: Triangle (default)
             0,    // MOD_LFO_ENV_AMT: N/A

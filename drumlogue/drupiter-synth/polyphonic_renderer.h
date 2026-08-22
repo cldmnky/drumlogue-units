@@ -37,7 +37,6 @@ public:
      * @param smoothed_pressure Channel pressure
      * @param env_vcf_depth Envelope to VCF depth
      * @param lfo_vcf_depth LFO to VCF depth
-     * @param fast_pow2 Fast power of 2 function
      * @return Mixed output signal
      */
     static float RenderVoices(
@@ -63,9 +62,7 @@ public:
         float lfo_vcf_depth,
         uint8_t dco1_wave_param,
         uint8_t dco2_wave_param,
-        uint8_t vcf_cutoff_param,
-        float (*fast_pow2)(float),
-        float (*semitones_to_ratio)(float)
+        uint8_t vcf_cutoff_param
     );
 };
 

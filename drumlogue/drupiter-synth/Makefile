@@ -97,12 +97,15 @@ ifneq ($(DEBUG),)
 else
   # Non-debug
   USE_COPT += -fomit-frame-pointer
-  USE_COPT += -finline-limit=9999999999
-  USE_COPT += --param max-inline-insns-single=9999999999
+  # Sane inline limits: the previous 9999999999 limits ballooned text to
+  # ~58 KB (beyond a 32 KB L1 I-cache). LTO + local symbol binding already
+  # cross-file-inlines the hot paths.
+  USE_COPT += -finline-limit=800
+  USE_COPT += --param max-inline-insns-single=500
 
   USE_CXXOPT += -fomit-frame-pointer
-  USE_CXXOPT += -finline-limit=9999999999
-  USE_CXXOPT += --param max-inline-insns-single=9999999999
+  USE_CXXOPT += -finline-limit=800
+  USE_CXXOPT += --param max-inline-insns-single=500
   USE_CXXOPT += -fno-threadsafe-statics
 
   ifeq ($(OPTIM),)

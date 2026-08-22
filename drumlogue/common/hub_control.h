@@ -27,6 +27,10 @@
  * 2. Call {@link SetDestination} when the selector parameter changes (e.g., user picks a new MOD target).
  * 3. Feed raw 0–100 slider values from the UI into {@link SetValue}. The hub stores the UI intent and
  *    converts it to the destination-specific range (visible via {@link GetValue}).
+ *    When restoring persisted state that is already in the destination's native
+ *    units (e.g. an enum index or cents), use {@link SetNativeValueForDest}
+ *    instead — it clamps natively and derives the matching 0-100 UI value.
+ *    {@link NativeToUi} / {@link UiToNative} convert between representations.
  * 4. Use {@link GetCurrentValueString} or {@link GetValueString} when rendering the parameter value; the
  *    returned pointer is stable and safe to cache, which prevents screen flicker.
  * 5. If you need the original UI slider position, read {@link GetOriginalValue}. This is distinct from the
@@ -306,6 +310,81 @@ class HubControl {
     // Mark this destination as caught with its current modulation value
     caught_values_[dest] = clamped;
     caught_[dest] = true;
+  }
+  
+  /**
+   * @brief Set NATIVE value for a specific destination
+   * @param dest Destination index
+   * @param value Value in the destination's own range (e.g. 0-3 for an enum,
+   *        cents for detune), NOT the 0-100 UI range
+   *
+   * Clamps to [min, max], stores as the destination's modulation value and
+   * derives the matching 0-100 UI representation (visible via
+   * {@link GetOriginalValue}). This is the correct entry point when restoring
+   * persisted state that was stored in native units.
+   */
+  void SetNativeValueForDest(uint8_t dest, int32_t value) {
+    if (dest >= NUM_DESTINATIONS) return;
+    
+    const Destination& d = destinations_[dest];
+    int32_t clamped = value;
+    if (clamped < d.min) clamped = d.min;
+    if (clamped > d.max) clamped = d.max;
+    
+    clamped_values_[dest] = clamped;
+    caught_values_[dest] = clamped;
+    caught_[dest] = true;
+    
+    // Derive the UI (0-100) representation
+    const int32_t range = d.max - d.min;
+    int32_t ui;
+    if (range > 0) {
+      ui = static_cast<int32_t>(((clamped - d.min) * 100.0f) / range + 0.5f);
+    } else {
+      ui = 0;
+    }
+    if (ui < 0) ui = 0;
+    if (ui > 100) ui = 100;
+    original_values_[dest] = ui;
+  }
+  
+  /**
+   * @brief Convert a NATIVE destination value to its 0-100 UI representation
+   * @param dest Destination index
+   * @param native_value Value in the destination's own range
+   * @return Rounded 0-100 UI value (clamped)
+   */
+  int32_t NativeToUi(uint8_t dest, int32_t native_value) const {
+    if (dest >= NUM_DESTINATIONS) return 0;
+    const Destination& d = destinations_[dest];
+    int32_t clamped = native_value;
+    if (clamped < d.min) clamped = d.min;
+    if (clamped > d.max) clamped = d.max;
+    const int32_t range = d.max - d.min;
+    if (range <= 0) return 0;
+    int32_t ui = static_cast<int32_t>(((clamped - d.min) * 100.0f) / range + 0.5f);
+    if (ui < 0) ui = 0;
+    if (ui > 100) ui = 100;
+    return ui;
+  }
+  
+  /**
+   * @brief Convert a 0-100 UI value to the destination's NATIVE range
+   * @param dest Destination index
+   * @param ui_value UI value in 0-100
+   * @return Native value clamped to [min, max]
+   */
+  int32_t UiToNative(uint8_t dest, int32_t ui_value) const {
+    if (dest >= NUM_DESTINATIONS) return 0;
+    const Destination& d = destinations_[dest];
+    if (ui_value < 0) ui_value = 0;
+    if (ui_value > 100) ui_value = 100;
+    const int32_t range = d.max - d.min;
+    if (range <= 0) return d.min;
+    int32_t clamped = d.min + static_cast<int32_t>((ui_value * range) / 100.0f + 0.5f);
+    if (clamped < d.min) clamped = d.min;
+    if (clamped > d.max) clamped = d.max;
+    return clamped;
   }
   
   /**
