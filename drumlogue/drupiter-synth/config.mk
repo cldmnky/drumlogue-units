@@ -100,10 +100,8 @@ endif
 UDEFS += -DDRUPITER_MAX_VOICES=$(DRUPITER_MAX_VOICES)
 UDEFS += -DUNISON_MAX_DETUNE=$(UNISON_MAX_DETUNE)
 
-# Feature flags - NEON always enabled for ARM (Task 2.5)
+# Feature flags - NEON enabled for ARM (Cortex-A7 vector unit)
 UDEFS += -DUSE_NEON
-UDEFS += -mfpu=neon
-UDEFS += -mfloat-abi=hard
 
 # Enable NEON-optimized DCO processing (requires USE_NEON)
 UDEFS += -DNEON_DCO
@@ -112,8 +110,22 @@ UDEFS += -DNEON_DCO
 UDEFS += -DENABLE_POLYBLEP
 
 # Performance optimizations
-UDEFS += -O2
-UDEFS += -ffast-math
+# NOTE: The SDK Makefile already selects -march=armv7-a -mtune=cortex-a7
+# -mfloat-abi=hard -mfpu=neon-vfpv4 and a default -Os. Do NOT append -mfpu,
+# -mfloat-abi, -O levels or -ffast-math through UDEFS here: UDEFS land at the
+# END of the compiler invocation and silently override the Makefile's
+# architecture flags (this previously downgraded neon-vfpv4 -> plain neon).
+OPTIM = -O2
+
+# Bind unit-internal symbols locally so LTO can inline across translation
+# units. Previously every internal call went through the PLT (~205 exported
+# symbols), adding an indirect call+load per oscillator/filter/envelope call
+# in the per-sample path. SDK callbacks (unit_*) keep default visibility via
+# __unit_callback/used attributes.
+USE_COPT  += -fno-semantic-interposition
+USE_CXXOPT += -fno-semantic-interposition
+# Cross-TU calls also bind locally (functions only; data relocations untouched)
+USE_LDOPT += -Bsymbolic-functions
 
 # Optional: Enable debug profiling
 # UDEFS += -DENABLE_PROFILING

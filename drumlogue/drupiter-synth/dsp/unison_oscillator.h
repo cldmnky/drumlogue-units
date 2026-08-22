@@ -99,79 +99,27 @@ public:
      * @param right Output right channel
      */
     inline void Process(float* left, float* right) {
-#if defined(__ARM_NEON) && defined(USE_NEON)
-        // NEON-optimized path: Process 4 oscillators at a time
-        float samples[kMaxVoices];
-        
-        // Generate samples from all oscillators
-        for (uint8_t i = 0; i < num_voices_; i++) {
-            samples[i] = oscillators_[i].Process();
-        }
-        
-        // NEON vectorized panning and mixing
-        float32x4_t left_sum = vdupq_n_f32(0.0f);
-        float32x4_t right_sum = vdupq_n_f32(0.0f);
-        float32x4_t half = vdupq_n_f32(0.5f);
-        float32x4_t spread = vdupq_n_f32(stereo_spread_);
-        
-        // Process 4 voices at a time
-        uint8_t i = 0;
-        for (; i + 4 <= num_voices_; i += 4) {
-            // Load samples and pans
-            float32x4_t samp = vld1q_f32(&samples[i]);
-            float32x4_t pan = vld1q_f32(&voice_pans_[i]);
-            
-            // Apply stereo spread: pan *= stereo_spread_
-            pan = vmulq_f32(pan, spread);
-            
-            // Calculate pan coefficients:
-            // pan_left = (1.0 - pan) * 0.5 + 0.5
-            // pan_right = pan * 0.5 + 0.5
-            float32x4_t one_minus_pan = vsubq_f32(vdupq_n_f32(1.0f), pan);
-            float32x4_t pan_left = vmlaq_f32(half, one_minus_pan, half);
-            float32x4_t pan_right = vmlaq_f32(half, pan, half);
-            
-            // Apply panning and accumulate
-            left_sum = vmlaq_f32(left_sum, samp, pan_left);
-            right_sum = vmlaq_f32(right_sum, samp, pan_right);
-        }
-        
-        // Horizontal add (sum all 4 lanes)
-        float32x2_t left_pair = vadd_f32(vget_low_f32(left_sum), vget_high_f32(left_sum));
-        float32x2_t right_pair = vadd_f32(vget_low_f32(right_sum), vget_high_f32(right_sum));
-        *left = vget_lane_f32(vpadd_f32(left_pair, left_pair), 0);
-        *right = vget_lane_f32(vpadd_f32(right_pair, right_pair), 0);
-        
-        // Process remaining voices (scalar)
-        for (; i < num_voices_; i++) {
-            float pan = voice_pans_[i] * stereo_spread_;
-            float pan_left = (1.0f - pan) * 0.5f + 0.5f;
-            float pan_right = pan * 0.5f + 0.5f;
-            
-            *left += samples[i] * pan_left;
-            *right += samples[i] * pan_right;
-        }
-#else
-        // Scalar fallback path
+        // Scalar mix. A previous NEON variant vectorized only the panning
+        // multiplies while the expensive oscillator generation stayed scalar,
+        // and it summed in a different order than the desktop build — with no
+        // measurable win on Cortex-A7 for 4+1 voices. Scalar keeps both paths
+        // bit-consistent.
         *left = 0.0f;
         *right = 0.0f;
-        
+
         // Mix all voices with pan positioning
         for (uint8_t i = 0; i < num_voices_; i++) {
             float sample = oscillators_[i].Process();
-            
+
             // Pan based on voice index (golden ratio spiral for natural spread)
             float pan = voice_pans_[i] * stereo_spread_;
             float pan_left = (1.0f - pan) * 0.5f + 0.5f;
             float pan_right = pan * 0.5f + 0.5f;
-            
+
             *left += sample * pan_left;
             *right += sample * pan_right;
         }
-#endif
-        
-        // Scale by voice count to prevent clipping (same for both paths)
-        // OPTIMIZATION: precomputed when the voice count changes
+
         *left *= scale_;
         *right *= scale_;
     }

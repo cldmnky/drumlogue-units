@@ -10,6 +10,7 @@
 #include "../common/neon_dsp.h"
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 #ifdef USE_NEON
 #include <arm_neon.h>
@@ -31,13 +32,22 @@ DRUMLOGUE_ALWAYS_INLINE float fasterpow2f(float p) {
     return v.f;
 }
 
-// Cached state for performance optimizations
-static uint8_t cached_dco1_wave = 255;  // Cache to avoid redundant SetWaveform calls
-static uint8_t cached_dco2_wave = 255;
-static float cached_inv_voice_count = 1.0f;  // Pre-calculated reciprocal of voice count
-static uint8_t cached_active_voice_count = 0;
-static float cached_resonance = -1.0f;      // Cache to avoid redundant SetResonance calls
-static int cached_vcf_mode = -1;            // Cache to avoid redundant SetMode calls
+// Cached propagation state for performance optimizations.
+//
+// The cache is keyed by owning DrupiterSynth instance: multiple instances
+// legitimately exist in tests (and sequentially on preset reloads), and
+// previously these file-scope values leaked between them, skipping required
+// SetWaveform/SetResonance propagation on freshly constructed synths.
+struct PolyCache {
+    const void* owner = nullptr;
+    uint8_t dco1_wave = 255;   // Cache to avoid redundant SetWaveform calls
+    uint8_t dco2_wave = 255;
+    float inv_voice_count = 1.0f;   // Pre-calculated reciprocal of voice count
+    uint8_t active_voice_count = 0;
+    float resonance = -1.0f;        // Cache to avoid redundant SetResonance calls
+    int vcf_mode = -1;              // Cache to avoid redundant SetMode calls
+};
+static PolyCache s_poly_cache;
 
 // Map DCO1 UI parameter value (0-4) to waveform enum
 // DCO1 waveforms: SAW(0), SQR(1), PUL(2), TRI(3), SAW_PWM(4)
@@ -91,9 +101,7 @@ float PolyphonicRenderer::RenderVoices(
     float lfo_vcf_depth,
     uint8_t dco1_wave_param,
     uint8_t dco2_wave_param,
-    uint8_t vcf_cutoff_param,
-    float (*fast_pow2)(float),
-    float (*semitones_to_ratio)(float)
+    uint8_t vcf_cutoff_param
 ) {
     // POLYPHONIC MODE: Render and mix multiple independent voices
     float mixed = 0.0f;
@@ -102,19 +110,64 @@ float PolyphonicRenderer::RenderVoices(
     // OPTIMIZATION: Check HPF condition once before voice loop instead of per-voice
     const bool apply_hpf = hpf_alpha > 0.0f;
 
+    // Reset caches when a different synth instance owns this renderer state
+    if (s_poly_cache.owner != static_cast<const void*>(&synth)) {
+        s_poly_cache = PolyCache();
+        s_poly_cache.owner = &synth;
+    }
+
+    // OPTIMIZATION: Propagate waveforms to ALL voices in one pre-loop pass
+    // when the parameter changes. Previously done inside the voice loop with
+    // the cache write there, so only the first active voice received the new
+    // waveform until a second parameter change came along.
+    if (dco1_wave_param != s_poly_cache.dco1_wave) {
+        const JupiterDCO::Waveform wf = map_dco1_waveform(dco1_wave_param);
+        for (uint8_t vo = 0; vo < DRUPITER_MAX_VOICES; vo++) {
+            synth.GetAllocator().GetVoiceMutable(vo).dco1.SetWaveform(wf);
+        }
+        s_poly_cache.dco1_wave = dco1_wave_param;
+    }
+    if (dco2_wave_param != s_poly_cache.dco2_wave) {
+        const JupiterDCO::Waveform wf = map_dco2_waveform(dco2_wave_param);
+        for (uint8_t vo = 0; vo < DRUPITER_MAX_VOICES; vo++) {
+            synth.GetAllocator().GetVoiceMutable(vo).dco2.SetWaveform(wf);
+        }
+        s_poly_cache.dco2_wave = dco2_wave_param;
+    }
+
     // OPTIMIZATION: resonance and mode only change when parameters change.
     // Update ALL voices in a single pre-loop pass when they do, instead of
     // calling the setters per voice per sample. (The cache must not be
     // updated inside the voice loop, or only the first active voice would
     // receive the new setting.)
-    if (resonance != cached_resonance || static_cast<int>(vcf_mode) != cached_vcf_mode) {
-        cached_resonance = resonance;
-        cached_vcf_mode = static_cast<int>(vcf_mode);
+    if (resonance != s_poly_cache.resonance || static_cast<int>(vcf_mode) != s_poly_cache.vcf_mode) {
+        s_poly_cache.resonance = resonance;
+        s_poly_cache.vcf_mode = static_cast<int>(vcf_mode);
         for (uint8_t v = 0; v < DRUPITER_MAX_VOICES; v++) {
             dsp::Voice& voice_mut = synth.GetAllocator().GetVoiceMutable(v);
             voice_mut.vcf.SetResonance(resonance);
             voice_mut.vcf.SetMode(vcf_mode);
         }
+    }
+
+    // Per-voice note/velocity-derived constants. These only change when a
+    // voice is retriggered (or key tracking moves), so compute them lazily
+    // once instead of every sample.
+    uint8_t kt_note[DRUPITER_MAX_VOICES];
+    uint32_t kt_bits[DRUPITER_MAX_VOICES];
+    float kt_ratio[DRUPITER_MAX_VOICES];
+    uint32_t vel_bits[DRUPITER_MAX_VOICES];
+    float vel_mod2[DRUPITER_MAX_VOICES];  // velocity * 0.5 * 2 (VCF octaves)
+    float vel_vca[DRUPITER_MAX_VOICES];   // 0.2..1.0 VCA multiplier
+    uint32_t key_track_bits;
+    std::memcpy(&key_track_bits, &key_track, sizeof(key_track_bits));
+    for (uint8_t vo = 0; vo < DRUPITER_MAX_VOICES; ++vo) {
+        kt_note[vo] = 0xFF;
+        kt_bits[vo] = 0xFFFFFFFFu;
+        kt_ratio[vo] = 1.0f;
+        vel_bits[vo] = 0xFFFFFFFFu;
+        vel_mod2[vo] = 0.0f;
+        vel_vca[vo] = 1.0f;
     }
 
     // Render each active voice
@@ -146,17 +199,8 @@ float PolyphonicRenderer::RenderVoices(
             }
         }
 
-        // Set voice-specific parameters using proper waveform mapping
-        // DCO1 and DCO2 have different waveform sets at the same UI indices
-        // OPTIMIZATION: Only call SetWaveform if waveform parameter changed
-        if (dco1_wave_param != cached_dco1_wave) {
-            voice_mut.dco1.SetWaveform(map_dco1_waveform(dco1_wave_param));
-            cached_dco1_wave = dco1_wave_param;
-        }
-        if (dco2_wave_param != cached_dco2_wave) {
-            voice_mut.dco2.SetWaveform(map_dco2_waveform(dco2_wave_param));
-            cached_dco2_wave = dco2_wave_param;
-        }
+        // NOTE: waveforms are propagated in the pre-loop pass above; here we
+        // only update the continuously-modulated pulse width.
         voice_mut.dco1.SetPulseWidth(modulated_pw);
         voice_mut.dco2.SetPulseWidth(modulated_pw);
 
@@ -164,19 +208,14 @@ float PolyphonicRenderer::RenderVoices(
         float voice_freq1 = voice.pitch_hz * dco1_oct_mult;
         float voice_freq2 = voice.pitch_hz * dco2_oct_mult * detune_ratio;
 
-        // Apply LFO vibrato with NEON vectorization when available
+        // Apply LFO vibrato
+        // (The previous NEON variant used vld1_f32 across two separate local
+        // variables, which is undefined behaviour and slower than two scalar
+        // multiplies on Cortex-A7.)
         if (lfo_vco_depth > kMinModulation) {
             const float lfo_mod = 1.0f + lfo_out * lfo_vco_depth * 0.05f;
-#ifdef USE_NEON
-            // OPTIMIZATION: Vectorize - multiply both frequencies by lfo_mod simultaneously
-            float32x2_t freq_pair = vld1_f32(&voice_freq1);
-            float32x2_t lfo_vec = vdup_n_f32(lfo_mod);
-            freq_pair = vmul_f32(freq_pair, lfo_vec);
-            vst1_f32(&voice_freq1, freq_pair);
-#else
             voice_freq1 *= lfo_mod;
             voice_freq2 *= lfo_mod;
-#endif
         }
 
         // Apply pitch envelope modulation (Task 2.2.1: Per-voice pitch envelope)
@@ -186,16 +225,8 @@ float PolyphonicRenderer::RenderVoices(
             // Use faster pow2 approximation instead of expensive powf
             const float voice_pitch_ratio = fasterpow2f(voice_env_pitch * env_pitch_depth / 12.0f);
 
-            // NEON-optimized: multiply both frequencies by ratio simultaneously
-#ifdef USE_NEON
-            float32x2_t freq_pair = vld1_f32(&voice_freq1);  // Load freq1, freq2
-            float32x2_t ratio_vec = vdup_n_f32(voice_pitch_ratio);  // Duplicate ratio
-            freq_pair = vmul_f32(freq_pair, ratio_vec);  // Multiply both
-            vst1_f32(&voice_freq1, freq_pair);  // Store back
-#else
             voice_freq1 *= voice_pitch_ratio;
             voice_freq2 *= voice_pitch_ratio;
-#endif
         }
 
         voice_mut.dco1.SetFrequency(voice_freq1);
@@ -229,23 +260,36 @@ float PolyphonicRenderer::RenderVoices(
             voice_mut.hpf_prev_input = voice_mix;
         }
 
-        // Apply per-voice keyboard tracking
-        float voice_cutoff_base = cutoff_base_nominal;
-        const float voice_note_offset = (static_cast<int32_t>(voice.midi_note) - 60) / 12.0f;
-        const float voice_tracking_exponent = voice_note_offset * key_track;
-        const float voice_clamped_exponent = (voice_tracking_exponent > 4.0f) ? 4.0f :
-                                             (voice_tracking_exponent < -4.0f) ? -4.0f : voice_tracking_exponent;
-        voice_cutoff_base *= semitones_to_ratio(voice_clamped_exponent * 12.0f);
+        // Apply per-voice keyboard tracking (hoisted: recomputed only when the
+        // voice's note or the key-tracking amount changes)
+        if (kt_note[v] != voice.midi_note || kt_bits[v] != key_track_bits) {
+            const float voice_note_offset =
+                (static_cast<int32_t>(voice.midi_note) - 60) / 12.0f;
+            const float voice_tracking_exponent =
+                clampf(voice_note_offset * key_track, -4.0f, 4.0f);
+            kt_ratio[v] = semitones_to_ratio(voice_tracking_exponent * 12.0f);
+            kt_note[v] = voice.midi_note;
+            kt_bits[v] = key_track_bits;
+        }
+        float voice_cutoff_base = cutoff_base_nominal * kt_ratio[v];
 
-        // Per-voice velocity modulation for VCF (0-50% scaled)
-        // Note: voice.velocity is already normalized (0.0-1.0)
-        const float voice_vel_mod = voice.velocity * 0.5f;
+        // Per-voice velocity modulation (hoisted, keyed on the velocity bits).
+        // Stored pre-multiplied by 2 so the combine below keeps its original
+        // `voice_vel_mod * 2.0f` semantics without a per-sample multiply.
+        uint32_t vbits;
+        std::memcpy(&vbits, &voice.velocity, sizeof(vbits));
+        if (vel_bits[v] != vbits) {
+            vel_mod2[v] = voice.velocity;  // velocity * 0.5f * 2.0f combined
+            vel_vca[v] = 0.2f + voice.velocity * 0.8f;
+            vel_bits[v] = vbits;
+        }
+        const float voice_vel_mod = vel_mod2[v];
 
         // Combine envelope, LFO, velocity, and pressure modulation (shared sources)
         float voice_total_mod = voice_vcf_env * 2.0f              // Base envelope modulation
                               + env_vcf_depth * voice_vcf_env     // Hub envelope.VCF modulation
                               + lfo_out * lfo_vcf_depth * 1.0f    // LFO modulation
-                              + voice_vel_mod * 2.0f              // Velocity adds up to +2 octaves
+                              + voice_vel_mod                     // Velocity adds up to +2 octaves (hoisted, pre-scaled)
                               + smoothed_pressure * 1.0f;         // Channel pressure adds up to +1 octave
 
         // Clamp modulation depth to avoid extreme cutoff values (branchless, from common/dsp_utils.h)
@@ -269,8 +313,7 @@ float PolyphonicRenderer::RenderVoices(
         // BUGFIX: voice.velocity is already normalized 0.0-1.0 (VelocityToFloat);
         // dividing by 127 again clamped the gain to ~0.2 with no audible range.
         // Map normalized velocity to VCA multiplier 0.2-1.0 (soft hits still audible)
-        const float voice_vca_gain = 0.2f + voice.velocity * 0.8f;  // 0.2 to 1.0
-        voice_output *= voice_vca_gain;
+        voice_output *= vel_vca[v];
 
         // Add filtered, velocity-scaled voice to mix
         mixed += voice_output;
@@ -284,12 +327,13 @@ float PolyphonicRenderer::RenderVoices(
     // Scale by voice count to prevent clipping
     // OPTIMIZATION: Pre-calculate and cache reciprocal to avoid sqrt on every frame
     if (active_voice_count > 0) {
-        if (active_voice_count != cached_active_voice_count) {
+        if (active_voice_count != s_poly_cache.active_voice_count) {
             // Only recalculate if voice count changed
-            cached_inv_voice_count = 1.0f / sqrtf(static_cast<float>(active_voice_count));
-            cached_active_voice_count = active_voice_count;
+            s_poly_cache.inv_voice_count =
+                1.0f / sqrtf(static_cast<float>(active_voice_count));
+            s_poly_cache.active_voice_count = active_voice_count;
         }
-        mixed *= cached_inv_voice_count;  // Multiply instead of divide
+        mixed *= s_poly_cache.inv_voice_count;  // Multiply instead of divide
     }
 
     return mixed;

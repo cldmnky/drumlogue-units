@@ -61,36 +61,6 @@ inline float FastTanh(float x) {
     return x * (27.0f + x2) / (27.0f + 9.0f * x2);
 }
 
-#ifdef __ARM_NEON
-// NEON-optimized tanh using vectorized polynomial evaluation
-// Processes single float but uses NEON for internal calculations
-inline float FastTanh_NEON(float x) {
-    if (x > 4.0f) return 1.0f;
-    if (x < -4.0f) return -1.0f;
-    
-    // Load single value into NEON register
-    float32x4_t vx = vdupq_n_f32(x);
-    float32x4_t vx2 = vmulq_f32(vx, vx);
-    
-    // Compute numerator: x * (27 + x²)
-    float32x4_t num = vmulq_f32(vx, vaddq_f32(vdupq_n_f32(27.0f), vx2));
-    
-    // Compute denominator: 27 + 9*x²
-    float32x4_t den = vaddq_f32(vdupq_n_f32(27.0f), 
-                               vmulq_f32(vdupq_n_f32(9.0f), vx2));
-    
-    // Use reciprocal approximation for division (faster than vdivq_f32)
-    float32x4_t recip_den = vrecpeq_f32(den);
-    recip_den = vmulq_f32(recip_den, vrecpsq_f32(recip_den, den));  // Newton-Raphson iteration
-    
-    // Compute result
-    float32x4_t result = vmulq_f32(num, recip_den);
-    
-    // Extract single float result
-    return vgetq_lane_f32(result, 0);
-}
-#endif
-
 // Fast pow(2, x) approximation for keyboard tracking
 // Uses bit manipulation for integer part + polynomial for fractional
 inline float FastPow2(float x) {
@@ -264,13 +234,10 @@ float JupiterVCF::Process(float input) {
             // Input stage with soft saturation (transistor-like nonlinearity)
             float u = input - feedback;
             
-            // Use NEON-optimized tanh approximation for saturation
-            // This creates the characteristic "warmth" of analog filters
-#ifdef __ARM_NEON
-            u = FastTanh_NEON(u);
-#else
-            u = FastTanh(u);
-#endif
+            // Soft saturation (transistor-like nonlinearity) for analog warmth.
+            // (The previous NEON variant duplicated one scalar into four lanes
+            // and reduced horizontally — strictly slower than the scalar VFP
+            // path on Cortex-A7.)
             
             // 4 cascaded one-pole sections using Krajeski-style improved coefficients
             // Each pole: y[n] = g * (0.3/1.3 * x[n] + 1/1.3 * x[n-1] - y[n-1]) + y[n-1]
@@ -393,18 +360,7 @@ void JupiterVCF::UpdateCoefficients() {
     const float wc3 = wc2 * wc;
     const float wc4 = wc3 * wc;
     
-#ifdef __ARM_NEON
-    // NEON-optimized polynomial evaluation for g coefficient
-    // ota_g_ = 0.9892f * wc - 0.4342f * wc2 + 0.1381f * wc3 - 0.0202f * wc4
-    float32x4_t wc_powers = {wc, wc2, wc3, wc4};
-    float32x4_t g_coeffs = {0.9892f, -0.4342f, 0.1381f, -0.0202f};
-    float32x4_t g_result = vmulq_f32(wc_powers, g_coeffs);
-    // Horizontal sum using pairwise addition (compatible with older NEON)
-    float32x2_t g_sum2 = vpadd_f32(vget_low_f32(g_result), vget_high_f32(g_result));
-    ota_g_ = vget_lane_f32(vpadd_f32(g_sum2, g_sum2), 0);
-#else
     ota_g_ = 0.9892f * wc - 0.4342f * wc2 + 0.1381f * wc3 - 0.0202f * wc4;
-#endif
     
     // Clamp g to prevent instability
     if (ota_g_ < 0.0f) ota_g_ = 0.0f;
@@ -417,17 +373,7 @@ void JupiterVCF::UpdateCoefficients() {
     
     // Krajeski resonance correction: compensate resonance for cutoff changes
     // gRes = r * (1.0029 + 0.0526*wc - 0.926*wc² + 0.0218*wc³)
-#ifdef __ARM_NEON
-    // NEON-optimized polynomial evaluation for resonance correction
-    float32x4_t res_powers = {1.0f, wc, wc2, wc3};
-    float32x4_t res_coeffs = {1.0029f, 0.0526f, -0.926f, 0.0218f};
-    float32x4_t res_result = vmulq_f32(res_powers, res_coeffs);
-    // Horizontal sum using pairwise addition
-    float32x2_t res_sum2 = vpadd_f32(vget_low_f32(res_result), vget_high_f32(res_result));
-    const float res_correction = vget_lane_f32(vpadd_f32(res_sum2, res_sum2), 0);
-#else
     const float res_correction = 1.0029f + 0.0526f * wc - 0.926f * wc2 + 0.0218f * wc3;
-#endif
     ota_res_k_ = 4.0f * r * res_correction;
     
     // Limit resonance to prevent self-oscillation going out of control

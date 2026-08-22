@@ -29,7 +29,6 @@ public:
      * @param dco1_level DCO1 level
      * @param dco2_level DCO2 level
      * @param dco1_wave_param DCO1 waveform parameter value
-     * @param semitones_to_ratio Function to convert semitones to ratio
      * @return Mixed output signal
      */
     static float RenderUnison(
@@ -44,8 +43,7 @@ public:
         float smoothed_pitch_bend,
         float dco1_level,
         float dco2_level,
-        uint8_t dco1_wave_param,
-        float (*semitones_to_ratio)(float)
+        uint8_t dco1_wave_param
     );
 };
 

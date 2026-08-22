@@ -203,6 +203,10 @@ public:
     // Preset type (forward declaration from presets.h)
     struct Preset {
         uint8_t params[PARAM_COUNT];
+        // Hub values are stored in each destination's NATIVE units
+        // (e.g. VCF type 0-3, synth mode 0-2, detune in cents), matching
+        // kModDestinations ranges. The hub's UI (0-100) representation is
+        // derived via HubControl::NativeToUi.
         uint8_t hub_values[MOD_NUM_DESTINATIONS];
         char name[14];
     };
@@ -274,11 +278,20 @@ public:
     const char* GetParameterStr(uint8_t id, int32_t value);
     
     /**
-     * @brief Set hub control value for testing (bypasses parameter system)
+     * @brief Set hub control value (test/direct API)
      * @param destination Hub destination (0-17)
-     * @param value Hub value (0-100)
+     * @param value NATIVE destination value, e.g. VCF type 0-3, synth mode
+     *        0-2, unison detune in cents 0-50 (NOT the 0-100 UI range)
      */
     void SetHubValue(uint8_t destination, uint8_t value);
+    
+    // --- Test/diagnostic hooks (used by test/drupiter-synth harness) ---
+    /** @brief Currently selected VCF mode (verifies MOD_VCF_TYPE hub routing) */
+    dsp::JupiterVCF::Mode GetVcfModeForTest() const { return vcf_.GetMode(); }
+    /** @brief Current LFO waveform index 0-3 (verifies live hub updates) */
+    uint8_t GetLfoWaveformForTest() const;
+    /** @brief Current synthesis mode */
+    dsp::SynthMode GetSynthModeForTest() const { return current_mode_; }
     
     /**
      * @brief Note on event
@@ -348,6 +361,9 @@ public:
     void SetSynthesisMode(dsp::SynthMode mode) {
         current_mode_ = mode;
         allocator_.SetMode(mode);
+        // An explicit API change cancels any queued hub request; the next
+        // genuine hub event will queue a new one.
+        synth_mode_change_pending_ = false;
     }
 
     // ============================================================================
@@ -462,6 +478,9 @@ private:
     dsp::SmoothedValue dco2_level_smooth_;
     
     // Knob catch mechanism (prevents sudden jumps when knob differs from preset)
+    // NOTE: intentionally NOT used for PARAM_MOD_AMT — drumlogue's endless
+    // encoder delivers resolved values, so catching there only made the hub
+    // feel unresponsive/erratic. Hub values apply directly.
     dsp::CatchableValue catch_cutoff_;
     dsp::CatchableValue catch_mix_;
     dsp::CatchableValue catch_reso_;
@@ -470,8 +489,6 @@ private:
     dsp::CatchableValue catch_dco2_tune_;
     dsp::CatchableValue catch_xmod_;
     dsp::CatchableValue catch_lfo_rate_;
-    // Mod hub destinations (18 destinations use hub's internal catching)
-    dsp::CatchableValue catch_mod_amt_;
     
     // MIDI modulation state
     float pitch_bend_semitones_;           // Current pitch bend value (-2 to +2 semitones)
@@ -481,6 +498,14 @@ private:
     
     // Cached filter cutoff for coefficient update optimization
     float last_cutoff_hz_;
+    
+    // Pending S MODE change requested via the MOD HUB (knob event or
+    // SetHubValue). Applied by PrepareRenderSetup once no voices are active,
+    // so mode switches never glitch running voices. A direct
+    // SetSynthesisMode() call (test/diagnostic API) cancels any pending
+    // request and holds until the next actual hub request arrives.
+    bool synth_mode_change_pending_ = false;
+    uint8_t pending_native_synth_mode_ = 0;
     
     // HPF state variables (must be instance members, not static)
     float hpf_prev_output_;
@@ -531,6 +556,18 @@ private:
     void UpdateEffectParameters(uint8_t effect_mode);
     
     /**
+     * @brief Queue a MOD HUB S MODE request for application at the start of
+     *        the next block where no voices are active
+     * @param native_value Native hub value 0-2 (MONO/POLY/UNISON)
+     */
+    void RequestHubSynthMode(uint8_t native_value);
+    
+    /**
+     * @brief Apply any queued S MODE request if voices are idle
+     */
+    void ResolvePendingSynthMode();
+
+    /**
      * @brief Update LFO settings from hub parameters
      * 
      * Called when MOD_LFO_DELAY or MOD_LFO_WAVE hub values change
@@ -578,6 +615,12 @@ private:
         float hpf_alpha;
         float key_track;
         float vel_mod;
+        
+        // Mono-path per-block constants (note/velocity change only on events,
+        // so they are hoisted out of the per-sample loop)
+        float mono_key_track_ratio;  // semitones_to_ratio(key tracking) for current note
+        float mono_vel_gain;         // velocity -> VCA multiplier (0.2-1.0)
+        float mono_kybd_gain;        // keyboard tracking -> VCA multiplier
         
         // MIDI smoothing
         float smoothed_pitch_bend;

@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <cmath>
 #include "jupiter_dco.h"
 #include "jupiter_vcf.h"
 #include "jupiter_env.h"
@@ -79,7 +80,11 @@ public:
 
 	void Init(float sample_rate);
 	void SetMode(SynthMode mode);
+	// Cached: unchanged values skip the powf-based detune-ratio recalculation
+	// and per-oscillator frequency re-propagation (this was previously called
+	// every audio callback even outside unison mode).
 	void SetUnisonDetune(float detune_cents) {
+		if (fabsf(detune_cents - unison_detune_cents_) < 1e-4f) return;
 		unison_detune_cents_ = detune_cents;
 		unison_osc_.SetDetune(detune_cents);
 	}
@@ -127,7 +132,12 @@ public:
 	UnisonOscillator& GetUnisonOscillator() { return unison_osc_; }
 	bool HasHeldNotes() const { return core_.HasHeldNotes(); }
 
-	void SetPortamentoTime(float time_ms) { portamento_time_ms_ = time_ms; }
+	// Cached: portamento time arrives from the MOD HUB every callback; skip
+	// redundant stores (and any downstream recomputation) when unchanged.
+	void SetPortamentoTime(float time_ms) {
+		if (fabsf(time_ms - portamento_time_ms_) < 1e-4f) return;
+		portamento_time_ms_ = time_ms;
+	}
 	float GetPortamentoTime() const { return portamento_time_ms_; }
 
 	void SetAllocationStrategy(VoiceAllocationStrategy strategy);

@@ -107,6 +107,9 @@ public:
      */
     float Process(float input);
     
+    /** @brief Currently selected filter mode (test/diagnostic hook) */
+    Mode GetMode() const { return mode_; }
+    
     /**
      */
     void Reset();
