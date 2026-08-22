@@ -139,6 +139,14 @@ private:
         if (voice_count == 5) hub_mode = 2;                      // UNISON
         synth_.SetHubValue(MOD_SYNTH_MODE, hub_mode);
 
+        // Flush the (possibly deferred) S MODE change with one quiet block
+        // BEFORE triggering notes, otherwise the request stays pending for
+        // the whole run and the scenario measures MONO.
+        {
+            std::vector<float> quiet(kFramesPerBuffer * 2, 0.0f);
+            synth_.Render(quiet.data(), kFramesPerBuffer);
+        }
+
         // Reset performance counters
         PERF_MON_RESET();
 

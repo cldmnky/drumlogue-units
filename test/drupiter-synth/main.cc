@@ -456,6 +456,9 @@ static void ConfigureSynthForVelocityTest(DrupiterSynth& synth) {
     synth.SetHubValue(MOD_ENV_KYBD, 0);
     synth.SetHubValue(MOD_ENV_TO_PITCH, 0);
     synth.SetHubValue(MOD_PORTAMENTO_TIME, 0);
+    // Zero unison detune so detuned voices don't beat — the velocity tests
+    // require a deterministic amplitude.
+    synth.SetHubValue(MOD_UNISON_DETUNE, 0);
 
     // Set VCA level to full scale
     synth.SetHubValue(MOD_VCA_LEVEL, 100);
@@ -1091,10 +1094,19 @@ static bool TestCutoffCurveMonotonic() {
     synth.SetParameter(DrupiterSynth::PARAM_VCF_RESONANCE, 0);
     synth.SetParameter(DrupiterSynth::PARAM_VCF_KEYFLW, 0);
 
+    // Sawtooth on both DCOs: the monotonicity check needs harmonic content.
+    // (The filter-test config solos a sine, whose energy sits entirely below
+    // even the lowest cutoff here, making the RMS ratio ~1.0 regardless.)
+    synth.SetParameter(DrupiterSynth::PARAM_DCO1_WAVE, 0);  // SAW
+    synth.SetParameter(DrupiterSynth::PARAM_DCO2_WAVE, 0);  // SAW
+    synth.SetParameter(DrupiterSynth::PARAM_OSC_MIX, 50);
+
     synth.SetParameter(DrupiterSynth::PARAM_VCF_CUTOFF, 10);
     auto output_low = RenderWithNotes(synth, desc, {{60, 100}}, 0.4f);
 
-    synth.SetParameter(DrupiterSynth::PARAM_VCF_CUTOFF, 90);
+    // 100 bypasses the VCF entirely (see ProcessFilterVcaFrame) — a robust,
+    // deterministic bright endpoint for the monotonicity comparison.
+    synth.SetParameter(DrupiterSynth::PARAM_VCF_CUTOFF, 100);
     auto output_high = RenderWithNotes(synth, desc, {{60, 100}}, 0.4f);
 
     const uint32_t skip_frames = static_cast<uint32_t>(0.1f * desc.samplerate);
@@ -2534,7 +2546,11 @@ static bool TestHubMultiSelect() {
     synth.LoadPreset(0);  // Init preset: MOD_HUB=MOD_VCF_TYPE, hub[VCF_TYPE]=1 (LP24)
     {
         uint8_t dest = synth.GetCurrentPreset().params[DrupiterSynth::PARAM_MOD_HUB];
-        int32_t expected = synth.GetCurrentPreset().hub_values[dest];
+        const int32_t native = synth.GetCurrentPreset().hub_values[dest];
+        // PARAM_MOD_AMT reports the 0-100 UI representation derived from the
+        // NATIVE stored value. VCF TYP range is 0..3, so native 1 (LP24)
+        // maps to round(1*100/3) = 33.
+        const int32_t expected = static_cast<int32_t>((native * 100.0f) / 3.0f + 0.5f);
         if (synth.GetParameter(DrupiterSynth::PARAM_MOD_AMT) != expected) {
             std::cout << "    ERROR: preset load clobbered hub value for dest "
                       << (int)dest << " (expected " << expected << ", got "
@@ -2544,6 +2560,143 @@ static bool TestHubMultiSelect() {
     }
     
     std::cout << "    PASSED: Hub multi-select value restore, catch re-basing, preset load" << std::endl;
+    return true;
+}
+
+// ============================================================================
+// MOD HUB native-value semantics, live LFO updates, S MODE edge trigger
+// ============================================================================
+
+static bool TestHubNativeSemantics() {
+    std::cout << "\n--- Hub Native Semantics / Live Updates / Mode Edge Trigger ---" << std::endl;
+
+    unit_runtime_desc_t desc = {};
+    desc.samplerate = 48000;
+    desc.frames_per_buffer = 64;
+    desc.input_channels = 0;
+    desc.output_channels = 2;
+
+    auto render_blocks = [](DrupiterSynth& s, uint32_t n) {
+        std::vector<float> buf(64 * 2, 0.0f);
+        for (uint32_t i = 0; i < n; ++i) s.Render(buf.data(), 64);
+    };
+
+    DrupiterSynth synth;
+    if (synth.Init(&desc) != k_unit_err_none) {
+        std::cout << "    ERROR: init failed" << std::endl;
+        return false;
+    }
+
+    // 1) Factory preset routing must reflect native hub values.
+    //    "Poly Brass" (9): S MODE=1 -> POLY. Previously normalized storage
+    //    mapped UI 1% back to MONO.
+    synth.LoadPreset(9);
+    render_blocks(synth, 2);
+    if (synth.GetSynthModeForTest() != dsp::SYNTH_MODE_POLYPHONIC) {
+        std::cout << "    ERROR: preset 9 did not engage POLY (mode="
+                  << (int)synth.GetSynthModeForTest() << ")" << std::endl;
+        return false;
+    }
+
+    //    "BP Lead" (8): VCF TYP=2 -> BP12. Previously the mode compare used
+    //    an unreachable threshold and forced LP12.
+    synth.LoadPreset(8);
+    render_blocks(synth, 2);
+    if (synth.GetVcfModeForTest() != dsp::JupiterVCF::MODE_BP12) {
+        std::cout << "    ERROR: preset 8 did not select BP12 (mode="
+                  << (int)synth.GetVcfModeForTest() << ")" << std::endl;
+        return false;
+    }
+
+    //    Init (0): VCF TYP=1 -> LP24.
+    synth.LoadPreset(0);
+    render_blocks(synth, 2);
+    if (synth.GetVcfModeForTest() != dsp::JupiterVCF::MODE_LP24) {
+        std::cout << "    ERROR: preset 0 did not select LP24 (mode="
+                  << (int)synth.GetVcfModeForTest() << ")" << std::endl;
+        return false;
+    }
+
+    // 2) Live LFO waveform updates from the hub (previously stale until a
+    //    preset reload because both hub parameter paths returned early).
+    synth.SetParameter(DrupiterSynth::PARAM_MOD_HUB, MOD_LFO_WAVE);
+    synth.SetParameter(DrupiterSynth::PARAM_MOD_AMT, 67);   // UI 67 -> native 2 (SQR)
+    if (synth.GetLfoWaveformForTest() != 2) {
+        std::cout << "    ERROR: LFO wave not applied live (got "
+                  << (int)synth.GetLfoWaveformForTest() << ", want 2)" << std::endl;
+        return false;
+    }
+    synth.SetParameter(DrupiterSynth::PARAM_MOD_AMT, 100);  // -> native 3 (S&H)
+    if (synth.GetLfoWaveformForTest() != 3) {
+        std::cout << "    ERROR: LFO wave boundary not applied" << std::endl;
+        return false;
+    }
+    // Native API path round-trips too
+    synth.SetHubValue(MOD_LFO_WAVE, 1);
+    render_blocks(synth, 1);
+    if (synth.GetLfoWaveformForTest() != 1) {
+        std::cout << "    ERROR: SetHubValue(MOD_LFO_WAVE) not applied" << std::endl;
+        return false;
+    }
+
+    // 3) UNI DET UI<->native conversion (range 0..50 cents).
+    synth.SetParameter(DrupiterSynth::PARAM_MOD_HUB, MOD_UNISON_DETUNE);
+    synth.SetParameter(DrupiterSynth::PARAM_MOD_AMT, 74);   // -> 37 cents
+    if (synth.GetParameter(DrupiterSynth::PARAM_MOD_AMT) != 74 ||
+        synth.GetCurrentPreset().hub_values[MOD_UNISON_DETUNE] != 37) {
+        std::cout << "    ERROR: UNI DET native storage wrong (stored "
+                  << (int)synth.GetCurrentPreset().hub_values[MOD_UNISON_DETUNE]
+                  << ", want 37)" << std::endl;
+        return false;
+    }
+    synth.SetHubValue(MOD_UNISON_DETUNE, 50);               // max cents
+    synth.SetParameter(DrupiterSynth::PARAM_MOD_HUB, MOD_UNISON_DETUNE);
+    if (synth.GetParameter(DrupiterSynth::PARAM_MOD_AMT) != 100) {
+        std::cout << "    ERROR: UNI DET native->UI conversion wrong" << std::endl;
+        return false;
+    }
+
+    // 4) Enum clamping on the native API.
+    synth.SetHubValue(MOD_VCF_TYPE, 7);                     // clamp to 3
+    synth.SetParameter(DrupiterSynth::PARAM_MOD_HUB, MOD_VCF_TYPE);
+    if (synth.GetParameter(DrupiterSynth::PARAM_MOD_AMT) != 100 ||
+        synth.GetCurrentPreset().hub_values[MOD_VCF_TYPE] != 3) {
+        std::cout << "    ERROR: enum clamp failed" << std::endl;
+        return false;
+    }
+
+    // 5) S MODE edge trigger: a direct SetSynthesisMode() call must stick
+    //    across quiet blocks (previously reverted to the hub's MONO default),
+    //    while an actual hub change still applies once voices release.
+    DrupiterSynth synth2;
+    if (synth2.Init(&desc) != k_unit_err_none) {
+        std::cout << "    ERROR: init failed (2)" << std::endl;
+        return false;
+    }
+    synth2.SetParameter(DrupiterSynth::PARAM_VCA_RELEASE, 0);
+    synth2.SetParameter(DrupiterSynth::PARAM_VCF_RELEASE, 0);
+    synth2.SetSynthesisMode(dsp::SYNTH_MODE_POLYPHONIC);
+    render_blocks(synth2, 4);
+    if (synth2.GetSynthModeForTest() != dsp::SYNTH_MODE_POLYPHONIC) {
+        std::cout << "    ERROR: direct SetSynthesisMode reverted by hub" << std::endl;
+        return false;
+    }
+    synth2.NoteOn(60, 100);
+    render_blocks(synth2, 2);
+    synth2.SetHubValue(MOD_SYNTH_MODE, 0);                  // user turns knob to MONO
+    render_blocks(synth2, 2);
+    if (synth2.GetSynthModeForTest() != dsp::SYNTH_MODE_POLYPHONIC) {
+        std::cout << "    ERROR: hub mode change applied mid-note" << std::endl;
+        return false;
+    }
+    synth2.NoteOff(60);
+    render_blocks(synth2, 8);                               // release tails
+    if (synth2.GetSynthModeForTest() != dsp::SYNTH_MODE_MONOPHONIC) {
+        std::cout << "    ERROR: hub mode change not applied after notes off" << std::endl;
+        return false;
+    }
+
+    std::cout << "    PASSED: hub native values, live LFO updates, mode edge trigger" << std::endl;
     return true;
 }
 
@@ -3064,6 +3217,9 @@ int main(int argc, char** argv) {
         ok = false;
     }
     if (!TestHubMultiSelect()) {
+        ok = false;
+    }
+    if (!TestHubNativeSemantics()) {
         ok = false;
     }
     
