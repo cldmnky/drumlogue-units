@@ -34,7 +34,7 @@ This runs a comprehensive test that measures CPU usage in all synthesis modes:
 - Monophonic (1 voice)
 - Polyphonic (2 voices)
 - Polyphonic (4 voices)
-- Unison (3 voices)
+- Unison (held note, 5-voice stack)
 
 ### Manual Performance Testing
 
@@ -61,10 +61,28 @@ PERF_MON_PRINT_ALL();
 The system tracks these DSP components:
 
 - **VoiceAlloc**: Voice management, note triggering, envelope updates
-- **DCO**: Oscillator processing (wavetable lookup, FM, drift, PolyBLEP)
-- **VCF**: Filter processing (LPF with resonance)
-- **Effects**: Chorus, modulation, additional processing
-- **RenderTotal**: Complete audio buffer processing
+- **DCO**: Oscillator processing (wavetable lookup, FM, drift, PolyBLEP) — *nested*
+- **VCF**: Filter processing (LPF with resonance) — *nested*
+- **Effects**: Chorus, modulation, additional processing — *nested*
+- **RenderTotal**: Complete audio buffer processing — **headline metric**
+
+> The nested counters overlap with RenderTotal and must NOT be summed.
+> The summary table reports RenderTotal only.
+
+## Understanding Results
+
+### CPU Utilization Calculation
+
+Utilization is measured against the FULL CALLBACK budget, mirroring the
+hardware (DRUSYS report: NXP i.MX6 ULZ, Cortex-A7 @ 900 MHz):
+
+- **Sample Rate**: 48 kHz
+- **Buffer Size**: 64 frames (drumlogue hardware buffer)
+- **Callback budget**: 64 / 48000 s = 1.333 ms ≈ 1,200,000 cycles @ 900 MHz
+
+```
+Utilization % = (cycles_per_buffer / 1_200_000) × 100
+```
 
 ## Understanding Results
 
@@ -86,43 +104,54 @@ Utilization % = (cycles_used / cycles_per_sample) × 100
 - **70-80%**: Fair - near limit, monitor carefully
 - **> 80%**: Poor - may cause audio dropouts (xruns)
 
-## Expected Results with Q31 Optimization
+## Measured Results (2026-08, desktop harness, indicative)
 
-Based on the Q31 fixed-point interpolation optimization:
+Whole-callback cost per 64-frame buffer; desktop wall-clock simulation,
+normalized to the 900 MHz hardware budget:
 
-| Mode | Expected CPU | Status |
-|------|--------------|--------|
-| Mono | ~25-35% | ✅ Excellent (estimated) |
-| Poly 2 voices | ~45-60% | ✅ Good (estimated) |
-| Poly 4 voices | ~65-80% | ⚠️ Monitor (estimated) |
-| Unison 3 voices | ~55-70% | ✅ Good (estimated) |
+| Mode              | Avg cycles | Avg % of budget | Peak % |
+|-------------------|-----------:|----------------:|-------:|
+| Mono (1 voice)    |      ~6350 |            ~0.5% |   ~1.4% |
+| Poly (2 voices)   |      ~8265 |            ~0.7% |   ~1.0% |
+| Poly (4 voices)   |      ~9173 |            ~0.8% |   ~1.1% |
+| Unison (held)     |      ~4885 |            ~0.4% |   ~1.4% |
 
-*Note: Current performance test has runtime issues. Estimates based on DSP analysis and Q31 optimization benefits.*
+QEMU ARM profile (`make -f Makefile.podman perf-test UNIT=drupiter-synth`,
+256-frame host buffer, mono preset + one held note):
+
+- Average callback: **0.768 ms** (14.4% of the 900 MHz budget), peak 0.37×
+- Real-time factor: **6.95×**
+
+These are relative indicators only; validate on hardware before release.
 
 ## Optimization Impact
 
-The Q31 interpolation provides significant performance improvements:
+Historical notes (verify independently before quoting):
 
-- **DCO Processing**: 30-40% reduction in CPU usage
-- **Per-Voice Savings**: ~10-15% CPU per additional voice
-- **Total System**: Enables stable 4-voice polyphony
+- Q31 wavetable interpolation: micro-benchmark claims of 30-40% were never
+  validated end-to-end; float interpolation may be comparable on Cortex-A7.
 
 ## Technical Details
 
 ### Cycle Counting
 
-Uses ARM DWT (Data Watchpoint & Trace) PMCCNTR register for accurate cycle counting. Available on ARM Cortex-M and Cortex-A processors.
+Desktop/QEMU builds use a high-resolution wall-clock simulation of the
+900 MHz cycle counter (microsecond resolution). Hardware profiling requires
+an ARM PMU-based counter (the Cortex-M DWT address used previously is not
+valid userspace PMU access on the i.MX6 ULZ).
 
 ### Buffer Processing
 
-Tests process audio in 128-sample buffers (typical drumlogue buffer size) to simulate real hardware conditions.
+Tests process audio in **64-frame** buffers to match real hardware conditions.
 
 ### Test Sequence
 
 Each mode test:
-1. **Warm-up**: 1 second to stabilize performance
-2. **Measurement**: 2 seconds of active processing
-3. **Cleanup**: Allow envelopes to finish
+1. **Mode flush**: one quiet block applies a queued S MODE change before any
+   note-on (deferred changes would otherwise never apply mid-run)
+2. **Warm-up**: 1 second with notes held
+3. **Measurement**: 2 seconds with notes held (sustained voices exercise the mode)
+4. **Cleanup**: Note-off + tail renders
 
 ### Voice Configuration
 
@@ -152,15 +181,11 @@ Run tests multiple times and average results.
 
 Desktop tests use x86_64 cycle counters, while hardware uses ARM DWT. Results are comparable but not identical due to architecture differences.
 
-### Current Runtime Issues
+### Known Limitations
 
-The performance test currently experiences a segmentation fault during the first Render() call. This appears to be unrelated to PERF_MON and may be due to:
-
-- Uninitialized DSP component state
-- Null pointer access in Render method
-- Memory allocation failures in Init()
-
-**Workaround**: Use the estimates above for performance planning. The segmentation fault needs to be debugged separately from the PERF_MON system.
+Desktop/QEMU numbers use simulated cycles and are indicative only. For
+release decisions, profile on hardware via the PERF_MON build and compare
+against the 1.333 ms callback budget.
 
 ## Advanced Usage
 
