@@ -21,6 +21,7 @@
 #include <getopt.h>
 #include <time.h>
 #include <math.h>
+#include <sys/resource.h>
 
 // Global state
 static unit_host_state_t g_state = {0};
@@ -65,6 +66,7 @@ static int load_unit_symbols(unit_host_state_t* state) {
     g_callbacks.unit_get_param_str_value = dlsym(state->unit_handle, "unit_get_param_str_value");
     g_callbacks.unit_get_param_bmp_value = dlsym(state->unit_handle, "unit_get_param_bmp_value");
     g_callbacks.unit_set_tempo = dlsym(state->unit_handle, "unit_set_tempo");
+    g_callbacks.unit_tempo_4ppqn_tick = dlsym(state->unit_handle, "unit_tempo_4ppqn_tick");
     g_callbacks.unit_note_on = dlsym(state->unit_handle, "unit_note_on");
     g_callbacks.unit_note_off = dlsym(state->unit_handle, "unit_note_off");
     g_callbacks.unit_gate_on = dlsym(state->unit_handle, "unit_gate_on");
@@ -209,6 +211,12 @@ int unit_host_process_wav(const char* input_path, const char* output_path,
     if (config->profile && is_synth) {
         target_frames = config->sample_rate * 10;  // 10 seconds for synth profiling
     }
+    if (config->soak_seconds > 0) {
+        // Extended silent run for leak/stability observation (device has no swap)
+        target_frames += config->soak_seconds * config->sample_rate;
+        printf("Soak mode: +%u seconds of silence (%u seconds total)\n",
+               config->soak_seconds, target_frames / config->sample_rate);
+    }
     
     // Open input WAV file
     wav_file_t input_wav = {0};
@@ -294,8 +302,19 @@ int unit_host_process_wav(const char* input_path, const char* output_path,
     uint32_t note_index = 0;
     const uint32_t num_notes = sizeof(note_sequence) / sizeof(note_sequence[0]);
     
-    // Seed random number generator for parameter changes
-    srand(time(NULL));
+    // Seed random number generator for parameter changes (deterministic by
+    // default so failures reproduce; override with --seed)
+    srand(config->seed);
+    printf("Random seed: %u\n", config->seed);
+
+    // Exercise tempo/sequencer callbacks like the hardware sequencer does
+    // (tempo encoding follows the SDK convention used by units; most ignore it)
+    if (g_callbacks.unit_set_tempo) {
+        g_callbacks.unit_set_tempo(120u << 16);  // 120 BPM, Q16.16
+    }
+    double tick_accum = 0.0;
+    uint32_t tick_counter = 0;
+    uint32_t next_rss_log = config->sample_rate * 5;
     
     // Main processing loop
     while (total_frames < target_frames) {
@@ -345,8 +364,29 @@ int unit_host_process_wav(const char* input_path, const char* output_path,
                 }
             }
             
+            // Exercise the remaining MIDI callbacks deterministically
+            if (g_callbacks.unit_pitch_bend) {
+                const uint16_t bend = (note_index & 1) ? 16383 : ((note_index & 2) ? 0 : 8192);
+                g_callbacks.unit_pitch_bend(bend);
+            }
+            if (g_callbacks.unit_channel_pressure) {
+                g_callbacks.unit_channel_pressure((uint8_t)(32 + (current_note % 64)));
+            }
+            if (g_callbacks.unit_aftertouch) {
+                g_callbacks.unit_aftertouch(current_note, (uint8_t)(64 + (note_index % 64)));
+            }
+
             note_index++;
             next_note_trigger += note_trigger_interval;
+        }
+
+        // Sequencer-style 4ppqn ticks at 120 BPM (8 ticks/sec)
+        tick_accum += (double)frames_read * (120.0 / 60.0) * 4.0 / (double)config->sample_rate;
+        while (tick_accum >= 1.0) {
+            if (g_callbacks.unit_tempo_4ppqn_tick) {
+                g_callbacks.unit_tempo_4ppqn_tick(tick_counter++);
+            }
+            tick_accum -= 1.0;
         }
         
         // For profiling synths: Change random parameters at intervals
@@ -406,13 +446,11 @@ int unit_host_process_wav(const char* input_path, const char* output_path,
         
         // Process through unit with profiling
         struct timespec render_start, render_end;
-        if (config->profile) {
-            clock_gettime(CLOCK_MONOTONIC, &render_start);
-        }
+        clock_gettime(CLOCK_MONOTONIC, &render_start);
         
         g_callbacks.unit_render(unit_input, output_buffer, frames_read);
         
-        if (config->profile) {
+        {
             clock_gettime(CLOCK_MONOTONIC, &render_end);
             
             // Calculate elapsed time for this render call
@@ -437,6 +475,31 @@ int unit_host_process_wav(const char* input_path, const char* output_path,
         if (config->verbose && (total_frames % (config->sample_rate / 4)) == 0) {
             printf("Processed %.1f seconds...\n", (float)total_frames / config->sample_rate);
         }
+
+        // Periodic memory footprint (device has ~180 MB free and NO swap)
+        if (total_frames >= next_rss_log) {
+            struct rusage ru;
+            getrusage(RUSAGE_SELF, &ru);
+            printf("[mem] t=%.1fs maxrss=%ld KB\n",
+                   (double)total_frames / config->sample_rate, ru.ru_maxrss);
+            next_rss_log += config->sample_rate * 5;
+        }
+    }
+
+    // Machine-readable metrics line for CI summaries
+    {
+        struct rusage ru;
+        getrusage(RUSAGE_SELF, &ru);
+        const uint32_t nbuf = state->profile_stats.render_count;
+        const double wall = state->profile_stats.total_render_time;
+        const double audio = (double)total_frames / (double)config->sample_rate;
+        printf("QEMU_METRICS buffer=%u avg_ms=%.3f peak_ms=%.3f rt_factor=%.2f rss_kb=%ld seed=%u\n",
+               config->buffer_size,
+               nbuf ? (wall / nbuf) * 1000.0 : 0.0,
+               state->profile_stats.max_render_time * 1000.0,
+               (wall > 0.0) ? audio / wall : 0.0,
+               ru.ru_maxrss,
+               config->seed);
     }
     
     // Cleanup
@@ -975,7 +1038,9 @@ int unit_host_parse_args(int argc, char* argv[], unit_host_config_t* config) {
     // Set defaults
     memset(config, 0, sizeof(unit_host_config_t));
     config->sample_rate = 48000;
-    config->buffer_size = 256;
+    config->buffer_size = 64;   // drumlogue hardware buffer
+    config->seed = 1234;        // deterministic by default
+    config->soak_seconds = 0;
     config->channels = 2;  // Default to stereo
     config->verbose = false;
     config->profile = false;
@@ -988,7 +1053,9 @@ int unit_host_parse_args(int argc, char* argv[], unit_host_config_t* config) {
         fprintf(stderr, "Options:\n");
         fprintf(stderr, "  --param-<id> <value>    Set parameter (0-23)\n");
         fprintf(stderr, "  --sample-rate <rate>    Sample rate (default: 48000)\n");
-        fprintf(stderr, "  --buffer-size <frames>  Buffer size (default: 256)\n");
+        fprintf(stderr, "  --buffer-size <frames>  Buffer size (default: 64 = hardware)\n");
+        fprintf(stderr, "  --seed <n>              RNG seed for param storm (default: 1234)\n");
+        fprintf(stderr, "  --soak-seconds <n>      Extend run with n seconds of silence\n");
         fprintf(stderr, "  --channels <1|2>        Output channels (default: 2)\n");
         fprintf(stderr, "  --test-presets          Test preset loading/switching\n");
         fprintf(stderr, "  --profile               Enable CPU profiling\n");
@@ -1038,6 +1105,16 @@ int unit_host_parse_args(int argc, char* argv[], unit_host_config_t* config) {
             config->hold_notes = true;
         } else if (strcmp(argv[i], "--no-rand-params") == 0) {
             config->no_rand_params = true;
+        } else if (strcmp(argv[i], "--seed") == 0) {
+            if (i + 1 < argc) {
+                config->seed = (uint32_t)strtoul(argv[i + 1], NULL, 10);
+                i++;
+            }
+        } else if (strcmp(argv[i], "--soak-seconds") == 0) {
+            if (i + 1 < argc) {
+                config->soak_seconds = (uint32_t)strtoul(argv[i + 1], NULL, 10);
+                i++;
+            }
         } else if (strcmp(argv[i], "--verbose") == 0) {
             config->verbose = true;
         }

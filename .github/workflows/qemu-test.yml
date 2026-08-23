@@ -182,8 +182,20 @@ jobs:
       - name: Run QEMU test for ${{ matrix.unit }}
         working-directory: test/qemu-arm
         run: |
+          set -o pipefail
           chmod +x test-unit.sh
-          ./test-unit.sh ${{ matrix.unit }}
+          ./test-unit.sh ${{ matrix.unit }} | tee build/test-log.txt
+
+      - name: Append QEMU results to job summary
+        if: always()
+        working-directory: test/qemu-arm
+        run: |
+          {
+            echo "### QEMU ARM — ${{ matrix.unit }}"
+            echo '```'
+            grep -E "QEMU_METRICS|WAV_METRICS|SYMBOL_AUDIT (PASS|FAIL)|Random seed" build/test-log.txt 2>/dev/null || echo "(no metrics — see logs)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       
       - name: Upload test output
         uses: actions/upload-artifact@v4
