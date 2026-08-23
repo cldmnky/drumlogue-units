@@ -75,6 +75,12 @@ __unit_callback void unit_set_tempo(uint32_t tempo) {
     (void)tempo;  // Tempo not used in basic implementation
 }
 
+// NOTE: not declared in this SDK's unit.h, so it needs explicit C linkage to
+// be resolvable via dlsym("unit_tempo_4ppqn_tick") by the firmware/host.
+extern "C" __unit_callback void unit_tempo_4ppqn_tick(uint32_t counter) {
+    (void)counter;  // Sequencer ticks not used in basic implementation
+}
+
 __unit_callback void unit_note_on(uint8_t note, uint8_t velocity) {
     s_synth_instance.NoteOn(note, velocity);
 }

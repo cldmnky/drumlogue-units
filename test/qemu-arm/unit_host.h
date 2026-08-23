@@ -40,7 +40,7 @@ typedef struct {
     const char* input_wav;      // Input WAV file
     const char* output_wav;     // Output WAV file
     uint32_t sample_rate;       // Sample rate (default: 48000)
-    uint32_t buffer_size;       // Buffer size in frames (default: 256)
+    uint32_t buffer_size;       // Buffer size in frames (default: 64 = hardware)
     uint8_t channels;           // Number of channels (1=mono, 2=stereo)
     bool verbose;               // Verbose logging
     bool profile;               // Enable CPU profiling
@@ -48,6 +48,8 @@ typedef struct {
     bool test_presets;          // Test preset loading/switching
     bool hold_notes;            // Keep notes held (no note_off between triggers)
     bool no_rand_params;        // Disable random parameter variations during profiling
+    uint32_t seed;              // RNG seed for parameter storms (default: 1234, deterministic)
+    uint32_t soak_seconds;      // Extended silent soak duration (default: 0 = off)
 } unit_host_config_t;
 
 /**
@@ -79,6 +81,7 @@ typedef struct {
     const char* (*unit_get_param_str_value)(uint8_t, int32_t);
     const uint8_t* (*unit_get_param_bmp_value)(uint8_t, int32_t);
     void (*unit_set_tempo)(uint32_t);
+    void (*unit_tempo_4ppqn_tick)(uint32_t);
     void (*unit_note_on)(uint8_t, uint8_t);
     void (*unit_note_off)(uint8_t);
     void (*unit_gate_on)(uint8_t);

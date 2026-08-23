@@ -12,6 +12,13 @@ PROFILE_FLAG=""
 PERF_MON_FLAG=""
 BUILD_FLAGS=""
 
+# Hardware parity: drumlogue runs 64-frame buffers @48kHz. Deterministic RNG
+# seed so parameter-storm failures reproduce. Override via env.
+QEMU_BUFFER_SIZE="${QEMU_BUFFER_SIZE:-64}"
+QEMU_SEED="${QEMU_SEED:-1234}"
+QEMU_TIMEOUT="${QEMU_TIMEOUT:-600}"
+HOST_ARGS="--buffer-size $QEMU_BUFFER_SIZE --seed $QEMU_SEED"""
+
 # Parse flags
 shift
 for arg in "$@"; do
@@ -116,6 +123,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     # macOS: Use Podman container with qemu-user-static
     # Note: -i (not -it) so this works from make and CI without a TTY
     podman run --rm -i \
+        -e HOST_ARGS="$HOST_ARGS" -e TIMEOUT_SECS="$QEMU_TIMEOUT" \
         -v "$(pwd):/workspace:Z" \
         -v "$(pwd)/../..:/repo:ro,Z" \
         -w /workspace \
@@ -125,32 +133,83 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         dpkg --add-architecture armhf && \
         apt-get update -qq && \
         apt-get install -y -qq qemu-user-static libsndfile1:armhf libstdc++6:armhf > /dev/null 2>&1 && \
-        qemu-arm-static -cpu cortex-a7 -L /usr/arm-linux-gnueabihf \
+        timeout \$TIMEOUT_SECS qemu-arm-static -cpu cortex-a7 -L /usr/arm-linux-gnueabihf \
             /workspace/unit_host_arm \
             /repo/drumlogue/${UNIT_NAME}/${UNIT_FILE_NAME}.drmlgunit \
             /workspace/${INPUT_WAV} \
             /workspace/${OUTPUT_WAV} \
-            --verbose $PROFILE_FLAG $PERF_MON_FLAG $EXTRA_ARGS
-    "
+            --verbose \$HOST_ARGS $PROFILE_FLAG $PERF_MON_FLAG $EXTRA_ARGS
+    " || { echo ""; echo "❌ Test failed or timed out after ${QEMU_TIMEOUT}s"; exit 1; }
 else
     # Linux: Use native qemu-arm directly
-    qemu-arm -cpu cortex-a7 -L /usr/arm-linux-gnueabihf \
+    timeout "$QEMU_TIMEOUT" qemu-arm -cpu cortex-a7 -L /usr/arm-linux-gnueabihf \
         ./unit_host_arm \
         ../../drumlogue/${UNIT_NAME}/${UNIT_FILE_NAME}.drmlgunit \
         ./${INPUT_WAV} \
         ./${OUTPUT_WAV} \
-        --verbose $PROFILE_FLAG $PERF_MON_FLAG $EXTRA_ARGS
+        --verbose $HOST_ARGS $PROFILE_FLAG $PERF_MON_FLAG $EXTRA_ARGS
 fi
 
-if [ $? -eq 0 ]; then
+if [ $? -ne 0 ]; then
     echo ""
-    echo "✅ Test passed!"
-    if [ -z "$TEST_PRESETS_FLAG" ]; then
-        echo "📁 Output: $OUTPUT_WAV"
-        ls -lh "$OUTPUT_WAV"
-    fi
-else
-    echo ""
-    echo "❌ Test failed"
+    echo "❌ Test failed or timed out"
     exit 1
 fi
+
+# Snapshot the unit under test where the audit sandbox can see it
+mkdir -p build
+cp "$UNIT_FILE" build/unit_under_test.drmlgunit
+
+# Units shipping a unit_exports.map get STRICT export checking
+EXPORTS_MAP="../../drumlogue/${UNIT_NAME}/unit_exports.map"
+AUDIT_ARGS=""
+if [ -f "$EXPORTS_MAP" ]; then
+    AUDIT_ARGS="build/unit_exports.map"
+    cp "$EXPORTS_MAP" build/unit_exports.map
+fi
+
+AUDIT_FAILED=0
+
+run_symbol_audit() {
+    # Device ABI ceiling audit (glibc 2.24 / GLIBCXX_3.4.21 / CXXABI_1.3.9)
+    # and unit-API export allowlist. Needs readelf + python3.
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        podman run --rm -e AUDIT_ARGS="$AUDIT_ARGS" -v "$(pwd):/workspace:Z" -w /workspace ubuntu:22.04 \
+            bash -c "apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq python3 binutils >/dev/null 2>&1; python3 check_unit_symbols.py build/unit_under_test.drmlgunit \$AUDIT_ARGS" \
+            && return 0 || return 1
+    else
+        python3 check_unit_symbols.py build/unit_under_test.drmlgunit $AUDIT_ARGS
+    fi
+}
+
+run_wav_validation() {
+    # Output sanity: finite samples, non-silent, denormal/DC report.
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        podman run --rm -v "$(pwd):/workspace:Z" -w /workspace ubuntu:22.04 \
+            bash -c "apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq python3 python3-numpy >/dev/null 2>&1; python3 validate_output.py '$OUTPUT_WAV' --sample-rate 48000" \
+            && return 0 || return 1
+    else
+        python3 validate_output.py "$OUTPUT_WAV" --sample-rate 48000
+    fi
+}
+
+echo ""
+echo "🔎 Running symbol/ABI audit..."
+run_symbol_audit || AUDIT_FAILED=1
+
+if [ -z "$TEST_PRESETS_FLAG" ]; then
+    echo "🔎 Validating output WAV..."
+    run_wav_validation || AUDIT_FAILED=1
+    echo "📁 Output: $OUTPUT_WAV"
+    ls -lh "$OUTPUT_WAV"
+fi
+
+if [ "$AUDIT_FAILED" -ne 0 ]; then
+    echo ""
+    echo "❌ Post-checks failed"
+    exit 1
+fi
+
+echo ""
+echo "✅ Test passed!"
+

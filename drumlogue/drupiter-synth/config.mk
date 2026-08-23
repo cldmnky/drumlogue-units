@@ -124,8 +124,11 @@ OPTIM = -O2
 # __unit_callback/used attributes.
 USE_COPT  += -fno-semantic-interposition
 USE_CXXOPT += -fno-semantic-interposition
-# Cross-TU calls also bind locally (functions only; data relocations untouched)
-USE_LDOPT += -Bsymbolic-functions
+# Cross-TU calls also bind locally (functions only; data relocations untouched),
+# and the exact export surface comes from unit_exports.map (SDK callbacks +
+# unit_header; everything else local). NOTE: USE_LDOPT words are spliced into
+# ONE -Wl option list, so multiple settings must stay comma-joined here.
+USE_LDOPT += -Bsymbolic-functions,--version-script=unit_exports.map
 
 # Optional: Enable debug profiling
 # UDEFS += -DENABLE_PROFILING
