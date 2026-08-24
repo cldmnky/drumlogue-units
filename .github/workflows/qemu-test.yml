@@ -167,6 +167,7 @@ jobs:
             python3 \
             python3-numpy \
             python3-scipy \
+            python3-soundfile \
             make
           # Make the armhf runtime libraries visible to qemu's -L sysroot
           # (/usr/arm-linux-gnueabihf) - libsndfile is not part of the
