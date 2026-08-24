@@ -191,6 +191,7 @@ jobs:
         run: |
           set -o pipefail
           chmod +x test-unit.sh
+          mkdir -p build   # tee target must exist before the pipeline starts
           ./test-unit.sh ${{ matrix.unit }} | tee build/test-log.txt
 
       - name: Append QEMU results to job summary
