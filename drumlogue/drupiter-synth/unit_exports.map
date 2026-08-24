@@ -1,0 +1,31 @@
+/* Exact export surface required by the drumlogue host (dlsym).
+   Everything else is bound locally: kills PLT interposition for
+   internal DSP calls and shrinks the dynamic symbol table. */
+{
+  global:
+    unit_header;
+    unit_init;
+    unit_teardown;
+    unit_reset;
+    unit_resume;
+    unit_suspend;
+    unit_render;
+    unit_set_param_value;
+    unit_get_param_value;
+    unit_get_param_str_value;
+    unit_get_param_bmp_value;
+    unit_set_tempo;
+    unit_tempo_4ppqn_tick;
+    unit_note_on;
+    unit_note_off;
+    unit_gate_on;
+    unit_gate_off;
+    unit_all_note_off;
+    unit_pitch_bend;
+    unit_channel_pressure;
+    unit_aftertouch;
+    unit_load_preset;
+    unit_get_preset_index;
+    unit_get_preset_name;
+  local: *;
+};
