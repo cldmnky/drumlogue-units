@@ -113,6 +113,11 @@ jobs:
   qemu-test:
     name: QEMU ARM Test
     needs: build-units
+    # Without an explicit condition this job is SKIPPED on PRs:
+    # build-units runs via `if: always()` even though build-sdk-image was
+    # skipped, and the skipped grandparent cascades into any unconditioned
+    # dependent. Gate on the actual result instead.
+    if: always() && needs.build-units.result == 'success'
     runs-on: ubuntu-latest
     strategy:
       matrix:
