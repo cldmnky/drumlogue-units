@@ -160,6 +160,7 @@ jobs:
             qemu-user \
             qemu-user-static \
             libsndfile1-dev \
+            libsndfile1-dev:armhf \
             libsndfile1:armhf \
             libstdc++6:armhf \
             libc6:armhf \
