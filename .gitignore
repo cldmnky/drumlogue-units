@@ -10,6 +10,8 @@
 # Linker output
 *.ilk
 *.map
+# ...but version scripts are source, not build output
+!drumlogue/*/unit_exports.map
 *.exp
 
 # Precompiled Headers
