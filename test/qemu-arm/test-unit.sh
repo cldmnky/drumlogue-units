@@ -212,8 +212,6 @@ fi
 
 echo ""
 echo "✅ Test passed!"
-# Explicit success exit: some CI shells report a nonzero status here even
-# though every post-check above passed; make the contract unambiguous.
-echo "SCRIPT_DEBUG: about to exit 0"
+# Make the success contract unambiguous regardless of shell quirks.
 exit 0
 
