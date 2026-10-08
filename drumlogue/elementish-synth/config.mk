@@ -72,6 +72,13 @@ ULIBS += -lc
 UDEFS = -DELEMENTS_LIGHTWEIGHT
 UDEFS += -DUSE_NEON
 
+# The vectorized modal-resonator SVF path (resonator.h) is opt-in in the
+# source to keep the scalar fallback as a safety net. v1.4.0 shipped without
+# this define, which silently reverted the resonator to scalar processing and
+# lost the NEON speedup from v1.1.0. Re-enabled here after stability validation
+# (QEMU ARM parameter storm, ARM64 NEON bow-stability and preset-retrigger).
+UDEFS += -DELEMENTISH_USE_NEON_RESONATOR
+
 # Performance monitoring — enabled via: ./build.sh elementish-synth build PERF_MON=1
 # PERF_MON reads ARM DWT PMCCNTR (0xE0001004) which requires the debug counter
 # to be enabled; on QEMU use: ./build.sh elementish-synth build PERF_MON=1 __QEMU_ARM__=1
