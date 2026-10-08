@@ -1,5 +1,47 @@
 # Elementish Synth - Release Notes
 
+## v1.4.1
+
+Performance fix release: restores the NEON modal resonator and cuts reverb
+guard overhead.
+
+### Bug Fixes
+
+- **NEON modal resonator re-enabled:** v1.4.0 shipped without the
+  `ELEMENTISH_USE_NEON_RESONATOR` define, which silently reverted the
+  resonator to the scalar SVF path and lost the NEON speedup introduced in
+  v1.1.0 (~40% on the modal resonator). Release builds now define the opt-in
+  macro again
+- **Reverb CPU cost reduced:** the v1.4 per-sample NaN guards ran ~34
+  bit-pattern checks per sample. Guards now run only where values enter the
+  tank (input, comb/allpass writes, wet output) — the guarded-write invariant
+  makes read checks redundant — and use a single exponent-field compare
+  (NaN/Inf or |x| >= 2^19) instead of the three-condition test
+
+### Performance
+
+Measured on the QEMU ARM harness (64-frame buffers, 10 s parameter storm,
+seed 1234):
+
+| Build | CPU Usage | Real-Time Factor |
+|-------|-----------|------------------|
+| v1.3.1 | 9.02% | 11.08x |
+| v1.4.0 | 16.18% | 6.18x |
+| **v1.4.1** | **9.11%** | **10.98x** |
+
+Output metrics are unchanged by the guard rewrite (peak/rms/DC identical).
+Note: QEMU does not model Cortex-A7 NEON throughput, so the NEON gain is
+understated in the harness.
+
+### Regression Tests
+
+- Full desktop suite (9 phases) passes with a native ARM64 NEON build
+- `--bow-stability-test` and `--preset-retrigger-test` pass with the NEON
+  resonator enabled
+- QEMU ARM symbol/ABI audit and WAV validation pass
+
+---
+
 ## v1.4.0
 
 Review-fix release: note transitions, tuning, and string pickup position.

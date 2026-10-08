@@ -61,9 +61,9 @@ The unit has 24 parameters organized across 6 pages:
 | Parameter | Range | Description |
 |-----------|-------|-------------|
 | **MODEL** | 0-2 | Resonator model: MODAL, STRING, or MSTRING |
-| **SPACE** | 0-127 | Stereo width. 0 = mono, 127 = wide stereo |
+| **SPACE** | 0-127 | Elements space metaparameter: exciter bleed, stereo width, reverb amount/time |
 | **VOLUME** | 0-127 | Output level |
-| *(unused)* | - | Reserved for future use |
+| **DEJA VU** | 0-127 | Sequencer pattern looping. 0 = random, 127 = locked loop |
 
 ### Page 5 - Envelope
 
@@ -87,14 +87,14 @@ The unit has 24 parameters organized across 6 pages:
 | **LFO PRE** | 0-7 | LFO shape + destination preset |
 | **COARSE** | -64 to +63 | Pitch coarse tune. ±24 semitones range |
 
-#### Lightweight Mode (Page 6 - Sequencer)
+#### Lightweight Mode (Page 6 - Tuning & Sequencer)
 
 | Parameter | Range | Description |
 |-----------|-------|--------------|
-| **COARSE** | -64 to +63 | Base pitch for sequencer. Sets root note |
+| **COARSE** | -64 to +63 | Pitch coarse tune. ±24 semitones range |
+| **FINE** | -64 to +63 | Pitch fine tune. ±100 cents range |
 | **SEQ** | 0-15 | Sequencer preset (see Sequencer Presets table) |
-| **SPREAD** | 0-127 | Note range. 0 = narrow, 127 = ±24 semitones |
-| **DEJA VU** | 0-127 | Pattern looping. 0 = random, 127 = locked loop |
+| **SPREAD** | 0-127 | Note range. 0 = narrow, 127 = wide |
 
 ### Mallet Types
 
@@ -252,7 +252,7 @@ The sequencer is inspired by Mutable Instruments Marbles and creates tempo-synce
 - **Processing**: Stereo output
 - **Polyphony**: Monophonic (single voice)
 - **CPU Usage**: Efficient - MODAL ~0.5%, STRING/MSTRING ~0.3%
-- **Binary Size**: ~123KB
+- **Binary Size**: ~132KB
 
 ## Credits
 
@@ -261,6 +261,30 @@ The sequencer is inspired by Mutable Instruments Marbles and creates tempo-synce
 - **drumlogue Port**: CLDM
 
 ## Version History
+
+- **v1.4.1** - Performance Fix Release
+  - NEON modal resonator re-enabled (v1.4.0 dropped the opt-in define and
+    lost the ~40% resonator speedup)
+  - Reverb NaN guards moved to tank entry points and cheapened — CPU usage
+    back to v1.3.1 level
+  - QEMU ARM: 9.11% CPU / 10.98x real-time (v1.4.0: 16.18% / 6.18x)
+
+- **v1.4.0** - Review-Fix Release
+  - COARSE, FINE and pitch bend now apply to directly played notes
+  - All-notes-off / panic clears the held-note state
+  - STRING/MSTRING POSITION now changes the string timbre
+  - Preset-load / note-transition stability fixes; sequencer pending-note
+    leaks and interval-scale octave wrapping fixed
+
+- **v1.3.1** - Preset-Transition Fix
+  - Loading a preset while a note is held resets the voice and retriggers it
+  - Blown preset audible again; quartic attack table reaches 1.0
+
+- **v1.3.0** - Review-Fix Release
+  - Sequencer note leaks fixed; interval-scale octave wrapping fixed
+  - BLOW exciter rewritten as an Elements-style granular sample-player
+  - SPACE drives exciter bleed, stereo spread and reverb tail
+  - FINE tuning re-exposed; STRING/MSTRING GEOMETRY/POSITION fixed
 
 - **v1.2.0** - Generative Sequencer Release
   - Marbles-inspired generative sequencer (Lightweight mode)

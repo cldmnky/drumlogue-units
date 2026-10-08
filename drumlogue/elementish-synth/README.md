@@ -133,7 +133,7 @@ The synth supports two build configurations:
 
 ### Binary Size
 
-- **Lightweight mode:** ~123KB
+- **Lightweight mode:** ~132KB
 - Uses NEON SIMD optimizations for ARM
 
 ### CPU Usage
@@ -195,6 +195,14 @@ See `eurorack/README.md` for Mutable Instruments licensing details.
 - Lightweight mode removes filter and LFO for performance
 
 ## Version History
+
+### v1.4.1
+
+- Fix: NEON modal-resonator path re-enabled (v1.4.0 shipped without the
+  opt-in define and lost the ~40% resonator speedup)
+- Fix: reverb NaN guards now run only at tank entry points and use a cheaper
+  exponent-field check — CPU usage back to v1.3.1 level
+- Docs: performance numbers measured on the QEMU ARM harness
 
 ### v1.4.0
 
