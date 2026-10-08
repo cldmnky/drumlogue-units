@@ -209,7 +209,9 @@ jobs:
             if [ -f "$NOTES_FILE" ]; then
               echo "## Release Notes"
               echo ""
-              cat "$NOTES_FILE"
+              # Only the current release's section (first '## v...' heading up
+              # to the next one) so the release page doesn't repeat history.
+              awk '/^## v[0-9]/{count++} count==1{print} count==2{exit}' "$NOTES_FILE"
               echo ""
             fi
             
