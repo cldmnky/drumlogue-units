@@ -3,9 +3,9 @@ layout: unit
 title: Elementish Synth
 tagline: Modal synthesis voice with bow, blow, and strike exciters and versatile resonator models
 unit_type: Synthesizer
-version: v1.4.0
-filename: elementish_synth.drmlgunit
-download_url: https://github.com/cldmnky/drumlogue-units/releases/download/elementish-synth/v1.4.0/elementish-synth-v1.4.0.drmlgunit
+version: v1.4.1
+filename: elementish-synth-v1.4.1.drmlgunit
+download_url: https://github.com/cldmnky/drumlogue-units/releases/download/elementish-synth/v1.4.1/elementish-synth-v1.4.1.drmlgunit
 permalink: /units/elementish-synth/
 ---
 
@@ -285,11 +285,19 @@ The sequencer is inspired by Mutable Instruments Marbles and creates tempo-synce
 | **Processing** | Stereo output |
 | **Polyphony** | Monophonic (single voice) |
 | **CPU Usage** | Efficient - MODAL ~0.5%, STRING/MSTRING ~0.3% |
-| **Binary Size** | ~124KB |
+| **Binary Size** | ~132KB |
 
 ---
 
 ## Version History
+
+### v1.4.1 - Performance Fix Release
+
+- NEON modal resonator re-enabled (v1.4.0 shipped without the opt-in define
+  and lost the ~40% resonator speedup)
+- Reverb NaN guards moved to tank entry points and cheapened — CPU usage back
+  to v1.3.1 level
+- QEMU ARM: 9.11% CPU / 10.98x real-time (v1.4.0: 16.18% / 6.18x)
 
 ### v1.4.0 - Review-Fix Release
 
