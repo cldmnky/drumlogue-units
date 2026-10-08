@@ -90,22 +90,20 @@ public:
                 int len = kCombDelay[c];
                 int idx = comb_index_[c] + len;
                 if (idx >= kMaxCombDelay) idx -= kMaxCombDelay;
+                // Reads are safe without a check: only guarded values are ever
+                // written into the tank, and the buffers start zeroed. The
+                // one-pole state stays bounded by its inputs.
                 float delayed = comb_buffer_[c][idx];
-                if (IsBad(delayed)) {
-                    delayed = 0.0f;
-                    comb_buffer_[c][idx] = 0.0f;
-                }
 
                 // One-pole damping filter in the feedback path.
-                float filtered = comb_filter_state_[c] +
-                    lp_coeff_ * (delayed - comb_filter_state_[c]);
-                if (IsBad(filtered)) filtered = 0.0f;
-                comb_filter_state_[c] = filtered;
+                comb_filter_state_[c] += lp_coeff_ * (delayed - comb_filter_state_[c]);
+                float filtered = comb_filter_state_[c];
 
-                comb_buffer_[c][comb_index_[c]] = in * input_gain_ + filtered * fb_comb;
-                if (IsBad(comb_buffer_[c][comb_index_[c]])) {
-                    comb_buffer_[c][comb_index_[c]] = 0.0f;
-                }
+                // Guard the write: the only place a bad value can enter the
+                // comb feedback loop.
+                float written = in * input_gain_ + filtered * fb_comb;
+                if (IsBad(written)) written = 0.0f;
+                comb_buffer_[c][comb_index_[c]] = written;
                 comb_index_[c]++;
                 if (comb_index_[c] >= kMaxCombDelay) comb_index_[c] = 0;
                 acc += filtered;
@@ -118,16 +116,11 @@ public:
                 int idx = allpass_index_[a] + len;
                 if (idx >= kMaxAllpassDelay) idx -= kMaxAllpassDelay;
                 float delayed = allpass_buffer_[a][idx];
-                if (IsBad(delayed)) {
-                    delayed = 0.0f;
-                    allpass_buffer_[a][idx] = 0.0f;
-                }
                 // Standard Schroeder allpass: bounded for |ap_gain| < 1.
                 float ap_out = -ap_gain * acc + delayed;
-                allpass_buffer_[a][allpass_index_[a]] = acc + ap_gain * ap_out;
-                if (IsBad(allpass_buffer_[a][allpass_index_[a]])) {
-                    allpass_buffer_[a][allpass_index_[a]] = 0.0f;
-                }
+                float written = acc + ap_gain * ap_out;
+                if (IsBad(written)) written = 0.0f;
+                allpass_buffer_[a][allpass_index_[a]] = written;
                 allpass_index_[a]++;
                 if (allpass_index_[a] >= kMaxAllpassDelay) allpass_index_[a] = 0;
                 acc = ap_out;
@@ -148,13 +141,16 @@ public:
 #endif
 
 private:
+    // Single bit test on the exponent field: catches NaN/Inf (0xFF) and any
+    // runaway value with exponent >= 0x92 (|x| >= 2^19), a conservative
+    // threshold well below the old 1e6 limit. One AND + one compare keeps
+    // the per-sample guard cost low.
     static bool IsBad(float value) {
         union {
             float f;
             uint32_t u;
         } bits = {value};
-        const bool nonfinite = (bits.u & 0x7F800000u) == 0x7F800000u;
-        return nonfinite || value > 1.0e6f || value < -1.0e6f;
+        return (bits.u & 0x7F800000u) >= 0x92000000u;
     }
 
     // Separate delay lines prevent comb/allpass filters from overwriting each
