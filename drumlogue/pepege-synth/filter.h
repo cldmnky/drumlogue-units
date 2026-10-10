@@ -104,12 +104,30 @@ public:
         if (!dirty_) return;
         dirty_ = false;
         
-        // Convert normalized cutoff (0-1) to frequency coefficient
-        // Using approximation: f = 2 * sin(pi * fc / fs)
-        // For stability at high frequencies, clamp
-        const float fc = 20.0f + cutoff_ * cutoff_ * 20000.0f;  // Exponential mapping
+        // Convert the normalized cutoff (0-1) to the frequency coefficient
+        // f = 2 * sin(pi * fc / fs) that this Chamberlin topology tunes with.
+        //
+        // f has to stay below the stability limit, which the impulse response
+        // puts at f = 1.56 in the worst case (no resonance, q = 0.5; the limit
+        // rises with resonance), so the usable coefficient range ends at 1.45.
+        //
+        // Below the knee - the point where the original curve used to hit its
+        // old 0.99 clamp - the mapping is unchanged, so every patch in the
+        // lower range keeps its sound exactly. Above the knee the cutoff keeps
+        // rising to 12.4kHz at the top of the knob instead of sitting on the
+        // clamped coefficient: with the old clamp every cutoff above 0.63
+        // collapsed onto the same f, so the top ~40% of the knob did nothing.
+        const float knee = 0.6281f;                        // where f used to reach 0.99
+        const float fc_knee = 20.0f + knee * knee * 20000.0f;   // ~7.9kHz
+        const float fc_max = 0.25803f * sample_rate_;      // f = 1.45 at 48kHz
+        float fc;
+        if (cutoff_ <= knee) {
+            fc = 20.0f + cutoff_ * cutoff_ * 20000.0f;
+        } else {
+            fc = fc_knee + (cutoff_ - knee) / (1.0f - knee) * (fc_max - fc_knee);
+        }
         f_ = 2.0f * sinf(3.14159265f * fc * inv_sample_rate_);
-        if (f_ > 0.99f) f_ = 0.99f;
+        if (f_ > 1.45f) f_ = 1.45f;                        // Safety net for rounding
         
         // Q from resonance (0 to self-oscillation)
         // q_ should be 0.5 (no resonance) to ~0.01 (high resonance)

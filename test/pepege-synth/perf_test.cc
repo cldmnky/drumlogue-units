@@ -75,6 +75,15 @@ std::vector<Scenario> Scenarios() {
         {"mod-mono", 1, {55, 62}, {{P_SPACE, -64}},
          {{MOD_LFO_TO_MORPH, 100}, {MOD_LFO_TO_FILTER, 100}}, 0},
 
+        // Modulation held below the filter's remap knee, so this isolates the
+        // control-rate coefficient update from the cutoff mapping change: the
+        // cutoff is 60/127 and neither the filter envelope, velocity, key
+        // tracking nor the LFO can push it past the knee (0.6281).
+        {"mod-low", 1, {55, 62},
+         {{P_SPACE, -64}, {P_FILTER_CUTOFF, 60}, {P_FILTER_ENV, 0}},
+         {{MOD_LFO_TO_MORPH, 100}, {MOD_LFO_TO_FILTER, 60}, {MOD_VEL_TO_FILTER, 0},
+          {MOD_KEY_TRACK, 0}}, 0},
+
         // Note churn: two voices retriggered, envelopes restarting (the QEMU
         // harness plays like this, one note per second).
         {"churn", 4, {60, 67}, {}, {}, kSampleRate / kFrames},
@@ -83,9 +92,12 @@ std::vector<Scenario> Scenarios() {
         {"idle", 0, {}, {}, {}, 0},
 
         // Static patch, mono, no modulation: bit-comparable before/after the
-        // optimizations (see README in this folder).
+        // optimizations (see README in this folder). The cutoff stays below the
+        // filter's remap knee (0.6281 -> parameter 79.8) on purpose: above it
+        // the cutoff mapping itself changed, so a comparison there would show
+        // that change rather than the render path.
         {"null-static", 0, {60, 64},
-         {{P_FILTER_ENV, 0}, {P_SPACE, -64}},
+         {{P_FILTER_ENV, 0}, {P_SPACE, -64}, {P_FILTER_CUTOFF, 60}},
          {{MOD_LFO_TO_MORPH, 50}, {MOD_LFO_TO_FILTER, 50}, {MOD_VEL_TO_FILTER, 0},
           {MOD_KEY_TRACK, 0}, {MOD_OSC_B_DETUNE, 50}, {MOD_PB_RANGE, 0}},
          0},
@@ -168,14 +180,18 @@ Result Run(const Scenario& scenario, uint32_t buffers, uint32_t warmup, const ch
 
         if (measuring) {
             times.push_back(std::chrono::duration<double, std::micro>(end - start).count());
-        }
 
-        for (float sample : out) {
-            if (!std::isfinite(sample)) result.nonfinite++;
-            const float magnitude = std::fabs(sample);
-            if (magnitude > result.peak) result.peak = magnitude;
+            // Hash and peak describe the measured window only: the warm-up
+            // still contains the parameter-smoothing transient, where a
+            // control-rate coefficient update legitimately differs from a
+            // per-sample one (it converges to the same steady state).
+            for (float sample : out) {
+                if (!std::isfinite(sample)) result.nonfinite++;
+                const float magnitude = std::fabs(sample);
+                if (magnitude > result.peak) result.peak = magnitude;
+            }
+            result.hash ^= Hash(out) + 0x9e3779b97f4a7c15ull + (result.hash << 6) + (result.hash >> 2);
         }
-        result.hash ^= Hash(out) + 0x9e3779b97f4a7c15ull + (result.hash << 6) + (result.hash >> 2);
 
         if (dump_prefix != nullptr && measuring) {
             const std::string path = std::string(dump_prefix) + "-" + scenario.name + ".f32";

@@ -1,10 +1,10 @@
-# Pepege-Synth - 4-Voice Polyphonic PPG Wavetable Synthesizer
+# Pepege-Synth - 2-Voice Polyphonic PPG Wavetable Synthesizer
 
-A **4-voice polyphonic** wavetable synthesizer for the Korg drumlogue, featuring authentic **PPG Wave 2.2/2.3** wavetables with 256 classic 8-bit waveforms across 16 banks.
+A **2-voice polyphonic** wavetable synthesizer for the Korg drumlogue, featuring authentic **PPG Wave 2.2/2.3** wavetables with 256 classic 8-bit waveforms across 16 banks.
 
 ## Features
 
-- **4-Voice Polyphony** - Play chords with intelligent voice allocation and oldest-note stealing
+- **2-Voice Polyphony** - Play chords with intelligent voice allocation and oldest-note stealing
 - **Authentic PPG Wavetables** - 256 waveforms from the legendary PPG Wave synthesizers
 - **16 Wavetable Banks** - Upper WT, Resonant, Mellow, Bright, Harsh, Sync, PWM, Vocal, Organ, Bell, and more
 - **Three PPG Modes** - HiFi (smooth), LoFi (stepped), Raw (authentic 8-bit crunch)
@@ -103,7 +103,7 @@ A **4-voice polyphonic** wavetable synthesizer for the Korg drumlogue, featuring
 
 ### Architecture
 
-- **4-voice polyphony** with per-voice oscillators, envelopes, and filters
+- **2-voice polyphony** with per-voice oscillators, envelopes, and filters
 - **Voice allocation**: Prefers free voices, retriggers same note, steals oldest when full
 - **PPG wavetables**: 256 waves × 256 samples × 8-bit = 64KB wave data
 - **Exponential envelopes**: True RC-circuit modeling with overshoot on attack
@@ -112,8 +112,14 @@ A **4-voice polyphonic** wavetable synthesizer for the Korg drumlogue, featuring
 
 - Sample rate: 48kHz
 - Output: Stereo with configurable width
-- Binary size: ~29KB
-- CPU usage: ~6% per voice (~24% max with 4 voices)
+- Binary size: ~39KB
+- CPU: ~89us per 64-frame callback with two notes held (about 7% of the
+  1.2M-cycle callback budget at 900MHz), ~27us idle. Measured by building the
+  unit with the drumlogue toolchain (GCC 6.5) and running it under qemu-arm,
+  i.e. indicative rather than a hardware measurement. Before the libm was
+  taken out of the render loop it was ~345us per callback; see
+  `test/pepege-synth/perf_test.cc` (`make perf-test`) to measure it again.
+- Voice count is `kNumVoices` in `pepege_synth.h` (2, for CPU headroom)
 
 ### NEON Optimizations
 
