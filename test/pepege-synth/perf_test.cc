@@ -91,13 +91,16 @@ std::vector<Scenario> Scenarios() {
         // Idle: no notes at all, the floor cost of a callback.
         {"idle", 0, {}, {}, {}, 0},
 
-        // Static patch, mono, no modulation: bit-comparable before/after the
-        // optimizations (see README in this folder). The cutoff stays below the
-        // filter's remap knee (0.6281 -> parameter 79.8) on purpose: above it
-        // the cutoff mapping itself changed, so a comparison there would show
-        // that change rather than the render path.
+        // Static patch, mono, no modulation: bit-comparable before/after a
+        // change to the render path (see README in this folder). Every
+        // parameter it depends on is set here, so re-voicing a preset cannot
+        // move it: the filter stays below its remap knee (0.6281 -> parameter
+        // 79.8), the amplitude envelope is a plain gate, and only oscillator A
+        // is heard.
         {"null-static", 0, {60, 64},
-         {{P_FILTER_ENV, 0}, {P_SPACE, -64}, {P_FILTER_CUTOFF, 60}},
+         {{P_FILTER_ENV, 0}, {P_SPACE, -64}, {P_FILTER_CUTOFF, 60}, {P_FILTER_TYPE, 0},
+          {P_AMP_ATTACK, 0}, {P_AMP_DECAY, 0}, {P_AMP_SUSTAIN, 127}, {P_AMP_RELEASE, 0},
+          {P_OSC_MIX, -64}, {P_OSC_MODE, 0}},
          {{MOD_LFO_TO_MORPH, 50}, {MOD_LFO_TO_FILTER, 50}, {MOD_VEL_TO_FILTER, 0},
           {MOD_KEY_TRACK, 0}, {MOD_OSC_B_DETUNE, 50}, {MOD_PB_RANGE, 0}},
          0},

@@ -375,14 +375,9 @@ public:
 #ifdef TEST
     // Test-friendly Process method that matches WAV processing expectations
     void Process(const float* input, float* output, size_t frames, size_t channels) {
-        (void)input;  // Synth doesn't use input
+        (void)input;     // Synth doesn't use input
+        (void)channels;  // Render() already writes interleaved stereo
         Render(output, static_cast<uint32_t>(frames));
-        // If stereo output is expected but Render produces mono, duplicate to stereo
-        if (channels == 2) {
-            for (size_t i = frames; i > 0; --i) {
-                output[i * 2 - 1] = output[i * 2 - 2] = output[i - 1];
-            }
-        }
     }
 #endif
     
@@ -618,7 +613,6 @@ private:
 #ifdef USE_NEON
         // NEON batch processing
         const float32x4_t width_vec = vdupq_n_f32(space);
-        const float32x4_t half = vdupq_n_f32(0.5f);
         const float32x4_t one = vdupq_n_f32(1.0f);
         
         size_t idx = 0;
@@ -627,8 +621,13 @@ private:
             float32x4_t side_amt = vmulq_f32(width_vec, vdupq_n_f32(0.3f));
             float32x4_t left = vmulq_f32(mono, vaddq_f32(one, side_amt));
             float32x4_t right = vmulq_f32(mono, vsubq_f32(one, side_amt));
-            float32x4_t norm = vrecpeq_f32(vaddq_f32(one, vmulq_f32(side_amt, half)));
-            norm = vmulq_f32(vrecpsq_f32(vaddq_f32(one, vmulq_f32(side_amt, half)), norm), norm);
+            // Normalising by (1 + side_amt) keeps the louder channel at the
+            // mono level, so the widening can never push the output past the
+            // clamp the mix was limited to. The L/R ratio - the width itself -
+            // is the same as normalising by (1 + side_amt/2), which instead
+            // preserved the average level and let peaks grow by up to ~1.16.
+            float32x4_t norm = vrecpeq_f32(vaddq_f32(one, side_amt));
+            norm = vmulq_f32(vrecpsq_f32(vaddq_f32(one, side_amt), norm), norm);
             left = vmulq_f32(left, norm);
             right = vmulq_f32(right, norm);
             vst1q_f32(&left_buf[idx], left);
@@ -636,7 +635,7 @@ private:
         }
         // The width is constant for the chunk, so compute the tail's gain once
         const float tail_side_amt = space * 0.3f;
-        const float tail_norm = 1.0f / (1.0f + tail_side_amt * 0.5f);
+        const float tail_norm = 1.0f / (1.0f + tail_side_amt);
         for (; idx < frames; ++idx) {
             left_buf[idx] = mix_buffer_[idx] * (1.0f + tail_side_amt) * tail_norm;
             right_buf[idx] = mix_buffer_[idx] * (1.0f - tail_side_amt) * tail_norm;
@@ -644,7 +643,7 @@ private:
 #else
         // The width is constant for the chunk, so compute its gain once
         const float side_amt = space * 0.3f;
-        const float norm = 1.0f / (1.0f + side_amt * 0.5f);
+        const float norm = 1.0f / (1.0f + side_amt);
         for (uint32_t idx = 0; idx < frames; ++idx) {
             left_buf[idx] = mix_buffer_[idx] * (1.0f + side_amt) * norm;
             right_buf[idx] = mix_buffer_[idx] * (1.0f - side_amt) * norm;
@@ -981,9 +980,8 @@ private:
     // Presets are voiced for the PPG-style banks
     static constexpr Preset kPresets[kNumPresets] = {
         // 0: Glass Keys  (A 04 Bellish, B 02 MalletSyn)
-        // Sustain 68: the LP24 filter's gain at the top of the keyboard pushed
-        // the fully-sustained mix to the mono clamp; a slightly lower sustain
-        // keeps the timbre and the margin.
+        // Sustain 68: two voices at full-scale waves reach the mix clamp at the
+        // top of the keyboard, so the preset keeps some headroom.
         {
             {
                 /*A BANK*/4, /*A MORPH*/96, /*A OCT*/0, /*A TUNE*/0,
@@ -1016,9 +1014,9 @@ private:
             }
         },
         // 2: Sync Bass  (A 23 ClipSweep, B 03 Sqr-Sweep)
-        // Clipper's waves are all near full scale and hit the mono clamp at the
-        // top of the keyboard at every morph/reso/cutoff, so the clipped-bass
-        // role moves to the quieter ClipSweep table, centred against Sqr-Sweep.
+        // Clipper's waves are all near full scale, so two voices hit the mix
+        // clamp at any morph/reso/cutoff; the clipped-bass role sits on the
+        // quieter ClipSweep table instead.
         {
             {
                 23, 64, -1, -5,
@@ -1052,11 +1050,11 @@ private:
             }
         },
         // 4: Pluck  (A 05 Pul-Sweep, B 02 MalletSyn)
-        // A morph 20: Pul-Sweep's later slots are hot enough to clip under the
-        // LP24 at the top of the keyboard; the earlier slot keeps the pluck.
+        // A morph 8: Pul-Sweep's later slots are hot enough to reach the mix
+        // clamp at the top of the keyboard; the opening slots keep the pluck.
         {
             {
-                5, 20, 0, 0,
+                5, 8, 0, 0,
                 2, 50, 0, 0,
                 90, 20, 50, 1,
                 2, 40, 80, 25,

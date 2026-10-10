@@ -133,6 +133,15 @@ public:
         // q_ should be 0.5 (no resonance) to ~0.01 (high resonance)
         q_ = 0.5f - resonance_ * 0.48f;
         if (q_ < 0.02f) q_ = 0.02f;
+        
+        // Damping of the LP24's second section: as much as a single resonance
+        // peak wants (kSecondStageDamping), limited by this topology's
+        // stability condition f^2 + 2*f*q < 4 so the cascade stays stable at
+        // the top of the cutoff range (f reaches 1.45 there, where the limit
+        // is ~0.65). Above roughly f = 1.2 the peak therefore grows a little
+        // again, but only where the filter is nearly open.
+        const float limit = (4.0f - f_ * f_) / (2.0f * f_);
+        q2_ = fminf(kSecondStageDamping, limit * 0.95f);
     }
     
     /**
@@ -154,7 +163,15 @@ public:
             case FILTER_LP24:
                 // Second stage for 24dB
                 {
-                    const float high2 = low_ - low2_ - q_ * band2_;
+                    // A 24dB/oct filter is two 12dB/oct sections in series, but
+                    // a real 4-pole - the PPG's SSM2044 - has ONE resonance
+                    // peak. Feeding the same damping into both sections squares
+                    // the peak: measured 2.00x the 2-pole's at every resonance
+                    // setting, i.e. twice the dB boost. q2_ damps the second
+                    // section as far as stability allows, which leaves the peak
+                    // to the first section (measured ratio 1.00 up to f = 1.2)
+                    // while keeping the 24dB/oct slope.
+                    const float high2 = low_ - low2_ - q2_ * band2_;
                     band2_ += f_ * high2;
                     low2_ += f_ * band2_;
                     output = low2_;
@@ -177,6 +194,14 @@ public:
     }
     
 private:
+    /**
+     * @brief Damping of the LP24's second section
+     *
+     * Chosen by measurement (see Process()): at 1.0 the cascade's resonance
+     * peak matches the 2-pole's instead of squaring it.
+     */
+    static constexpr float kSecondStageDamping = 1.0f;
+
     float sample_rate_;
     float inv_sample_rate_;
     
@@ -194,7 +219,8 @@ private:
     
     // Coefficients
     float f_;   // Frequency coefficient
-    float q_;   // Resonance/damping
+    float q_;   // Resonance/damping (first section)
+    float q2_;  // Damping of the second section in LP24 mode
     
     // Set when cutoff_/resonance_ changed and f_/q_ need recomputing
     bool dirty_ = true;  // Initialized so a not-yet-Init()'d instance still computes
