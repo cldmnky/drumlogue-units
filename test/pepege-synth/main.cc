@@ -8,7 +8,11 @@
 #include <cstdlib>
 
 // Define TEST to enable desktop testing
+#ifndef TEST
 #define TEST
+#endif
+
+#include "unit.h"  // desktop mock of the drumlogue SDK types
 
 // Include WAV file utilities
 #include "wav_file.h"

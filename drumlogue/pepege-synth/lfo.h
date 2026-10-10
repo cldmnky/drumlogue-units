@@ -24,6 +24,34 @@ enum LFOShape {
 };
 
 /**
+ * @brief Fast polynomial sine, no libm and no lookup table
+ *
+ * The LFO is evaluated once per sample, so the libm sinf() there is a
+ * measurable share of the per-sample cost (and is much more expensive on the
+ * drumlogue's Cortex-A7 than on a desktop host). This is a self-contained
+ * replacement with a max absolute error of ~3.6e-6 on [-1, 1], which is far
+ * below the ~1e-4 the LFO resolution needs.
+ *
+ * Method: range-reduce to [-pi/2, pi/2] using the symmetry of sine, then
+ * evaluate a 9th-order Taylor series there. The plan's reference (7th order)
+ * measures ~1.6e-4 max error, which misses the 1e-4 target, hence one extra
+ * term.
+ *
+ * @param phase Phase in [0, 1)
+ * @return Sine of phase * 2pi
+ */
+inline float FastSine(float phase) {
+    float x = phase * 6.28318530718f;              // [0, 2pi)
+    float sign = 1.0f;
+    if (x > 3.14159265f) { x -= 3.14159265f; sign = -1.0f; }  // sin(x+pi) = -sin(x)
+    if (x > 1.57079633f) { x = 3.14159265f - x; }             // sin(pi-x) = sin(x)
+    const float x2 = x * x;
+    const float series = x * (1.0f + x2 * (-1.0f / 6.0f + x2 * (1.0f / 120.0f
+                       + x2 * (-1.0f / 5040.0f + x2 * (1.0f / 362880.0f)))));
+    return sign * series;
+}
+
+/**
  * @brief Low Frequency Oscillator with morphable shapes
  */
 class LFO {
@@ -125,7 +153,7 @@ private:
     float GetShapeValue(int shape) const {
         switch (shape) {
             case LFO_SINE:
-                return sinf(phase_ * 6.28318530718f);
+                return FastSine(phase_);
                 
             case LFO_TRIANGLE:
                 if (phase_ < 0.5f) {

@@ -77,6 +77,8 @@ test/drupiter-synth/drupiter_test
 test/drupiter-synth/perf_test
 test/drupiter-synth/fixtures/
 test/pepege-synth/pepege_test
+test/pepege-synth/perf_test
+test/pepege-synth/wave_analysis
 test/pepege-synth/*.wav
 test/*.log
 
