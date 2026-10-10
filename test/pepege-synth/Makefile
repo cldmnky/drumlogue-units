@@ -38,6 +38,10 @@ PERF_TARGET := perf_test
 PERF_SOURCES := perf_test.cc
 PERF_OPT ?= -Os
 
+# Wave output analysis (exactness against the PPG ROM, sweeps, aliasing)
+WAVE_TARGET := wave_analysis
+WAVE_SOURCES := wave_analysis.cc
+
 all: $(TARGET)
 
 $(TARGET): $(TEST_SOURCES) $(DSP_SOURCES) $(DSP_HEADERS)
@@ -46,12 +50,15 @@ $(TARGET): $(TEST_SOURCES) $(DSP_SOURCES) $(DSP_HEADERS)
 $(PERF_TARGET): $(PERF_SOURCES) $(DSP_SOURCES) $(DSP_HEADERS) FORCE
 	$(CXX) -std=c++17 -Wall -Wextra $(INCLUDES) $(PERF_OPT) -ffast-math -fno-math-errno -fno-stack-protector -DTEST $(PERF_SOURCES) $(DSP_SOURCES) -o $@
 
+$(WAVE_TARGET): $(WAVE_SOURCES) $(DSP_SOURCES) $(DSP_HEADERS) FORCE
+	$(CXX) -std=c++17 -Wall -Wextra $(INCLUDES) $(PERF_OPT) -ffast-math -fno-math-errno -DTEST $(WAVE_SOURCES) $(DSP_SOURCES) -o $@
+
 # Always rebuild: PERF_OPT is not a file, so without this a changed flag would
 # silently reuse the previous binary (make perf-test PERF_OPT=-O2).
 FORCE:
 
 clean:
-	rm -rf $(TARGET) $(PERF_TARGET) *.wav *.f32 fixtures/
+	rm -rf $(TARGET) $(PERF_TARGET) $(WAVE_TARGET) *.wav *.f32 fixtures/
 
 # Test targets
 fixtures:
@@ -71,4 +78,8 @@ test: $(TARGET) generate-fixtures
 perf-test: $(PERF_TARGET)
 	./$(PERF_TARGET)
 
-.PHONY: all clean fixtures generate-fixtures test perf-test
+# Wave output analysis: exactness against the ROM, sweeps, aliasing
+wave-analysis: $(WAVE_TARGET)
+	./$(WAVE_TARGET)
+
+.PHONY: all clean fixtures generate-fixtures test perf-test wave-analysis

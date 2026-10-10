@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""
+Generate ppg_tables.h from ppg_data.c (PPG Wave 2.2/2.3 EPROM dump, via usynth).
+
+The EPROM's first 768 bytes hold the wavetable directory. Per Jacajack's
+reverse engineering (and the raw hexdump), a directory entry is:
+
+    1 byte  : wavetable number (ignored)
+    repeat  : 1 byte wave index, 1 byte slot   ... while slot < 0x3C (60)
+
+The last pair has slot 0x3C (60): the hardware overrides slot 60 with the
+always-present triangle, but the pair still matters because the slots before it
+interpolate towards it.
+
+Every PPG wavetable ends with the same four classic waves, which the
+synthesizer generates rather than stores:
+
+    60: triangle   61: pulse   62: rectangular (square)   63: sawtooth
+
+Their exact ROM bytes are not published; the shapes here follow the
+description in the WvTable-logue README ("half = 128->255->128 hump",
+"half = 255 with a short 0 section", "half = 255", "half = i*4 ramp").
+The pulse width is our choice (the hardware's value is unknown).
+
+Output: ppg_tables.h with
+  - ppg_table_defs / ppg_table_offsets: the 29 stored wavetables as
+    (wave index, slot) pairs terminated by 0xFF
+  - ppg_table_names: the PPG's own names for them
+  - ppg_classic_waves: the four generated end waves (64-sample half-cycles)
+"""
+
+import re
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+
+# The PPG's 28 sweep wavetables plus the Upper Wavetable, which is the 29th
+# stored entry (the machine computes its Sync and PWM tables, so they are not
+# in the ROM and not reproduced here). Names follow the PPG/Waldorf list.
+NAMES = [
+    "Resonant", "Resonant2", "MalletSyn", "Sqr-Sweep",
+    "Bellish", "Pul-Sweep", "Saw-Sweep", "MellowSaw",
+    "Feedback", "Add Harm", "Reso 3HP", "Wind Syn",
+    "HighHarm", "Clipper", "Organ Syn", "SquareSaw",
+    "Formant1", "Polated", "Transient", "ElectricP",
+    "Robotic", "StrongHrm", "PercOrgan", "ClipSweep",
+    "ResoHarms", "2 Echoes", "Formant 2", "FmntVocal",
+    "Upper WT",
+]
+
+CLASSIC_NAMES = ["triangle", "pulse", "rectangular", "sawtooth"]
+PULSE_WIDTH = 48  # samples of the pulse half-cycle that stay at full scale
+
+
+def extract(path, name, comment_strip=True):
+    text = path.read_text()
+    if comment_strip:
+        text = re.sub(r"//[^\n]*", "", text)
+    match = re.search(re.escape(name) + r"\[[^\]]*\]\s*EEMEM\s*=\s*\{([^}]*)\}", text)
+    if match is None:
+        raise SystemExit(f"could not find {name} in {path}")
+    return [int(x, 16) for x in re.findall(r"0x[0-9a-fA-F]+", match.group(1))]
+
+
+def parse_directory():
+    offsets = extract(HERE / "ppg_data.c", "ppg_wavetable_offsets")
+    data = extract(HERE / "ppg_data.c", "ppg_wavetable_data")
+    tables = []
+    for i in range(len(offsets)):
+        start = offsets[i]
+        end = offsets[i + 1] if i + 1 < len(offsets) else len(data)
+        body = data[start:end]
+        number, rest = body[0], body[1:]
+        pairs = []
+        for j in range(0, len(rest) - 1, 2):
+            wave, slot = rest[j], rest[j + 1]
+            pairs.append((wave, slot))
+            if slot >= 0x3C:
+                break
+        if not pairs:
+            raise SystemExit(f"table {i} parsed empty")
+        slots = [slot for _, slot in pairs]
+        if slots != sorted(slots):
+            raise SystemExit(f"table {i} slots not ascending: {slots}")
+        tables.append({"number": number, "pairs": pairs})
+    if len(tables) != len(NAMES):
+        raise SystemExit(f"directory has {len(tables)} tables, expected {len(NAMES)}")
+    return tables
+
+
+def classic_waves():
+    """64-sample half-cycles; the oscillator mirrors them into full cycles."""
+    waves = []
+    # 60 triangle: rises to full scale by the middle of the half, back down
+    waves.append([128 + (4 * i if i < 32 else 4 * (63 - i)) for i in range(64)])
+    # 61 pulse: full scale, then a short low section (width is our choice)
+    waves.append([255 if i < PULSE_WIDTH else 0 for i in range(64)])
+    # 62 rectangular: full scale throughout -> a 50% square once mirrored
+    waves.append([255] * 64)
+    # 63 sawtooth: a ramp
+    waves.append([min(255, 4 * i) for i in range(64)])
+    return waves
+
+
+def c_array(name, values, per_line=12, values_are_bytes=True):
+    lines = [f"const uint8_t {name}[] = {{"]
+    for i in range(0, len(values), per_line):
+        chunk = ", ".join(f"0x{v:02X}" for v in values[i:i + per_line])
+        lines.append(f"    {chunk},")
+    lines.append("};")
+    return "\n".join(lines)
+
+
+def main():
+    tables = parse_directory()
+    flat, offsets = [], [0]
+    for table in tables:
+        for wave, slot in table["pairs"]:
+            flat.extend([wave, slot])
+        flat.append(0xFF)  # terminator the loader expects
+        offsets.append(len(flat))
+
+    classic = classic_waves()
+    out = [
+        "/**",
+        " * @file ppg_tables.h",
+        " * @brief The PPG Wave 2.2/2.3 wavetable directory and the classic end waves.",
+        " *",
+        " * Auto-generated by generate_ppg_tables.py from ppg_data.c (the EPROM dump).",
+        " * Do not edit by hand; edit the generator instead.",
+        " *",
+        " * A wavetable is a list of (wave index, slot) pairs terminated by 0xFF: the",
+        " * key waves the ROM stores and the slots they sit at. The oscillator",
+        " * interpolates the slots between them, which is what the hardware did when",
+        " * it loaded a table into its workspace RAM.",
+        " *",
+        " * Slots 60-63 are the four classic waves every PPG table ends with; the",
+        " * synthesizer generated them, so they are generated here too.",
+        " */",
+        "",
+        "#pragma once",
+        "",
+        "#include <cstdint>",
+        "",
+        f"static constexpr uint32_t PPG_NUM_TABLES = {len(tables)};",
+        "static constexpr uint32_t PPG_TABLE_SLOTS = 64;",
+        f"static constexpr uint32_t PPG_CLASSIC_FIRST_SLOT = 60;",
+        f"static constexpr uint32_t PPG_NUM_CLASSIC_WAVES = {len(classic)};",
+        "",
+        "// Wavetable directory: pairs of (wave index, slot), 0xFF terminated.",
+        c_array("ppg_table_defs", flat),
+        "",
+        "// Start of each table inside ppg_table_defs (PPG_NUM_TABLES + 1 entries).",
+        "const uint16_t ppg_table_offsets[] = {",
+        "    " + ", ".join(str(o) for o in offsets) + ",",
+        "};",
+        "",
+        "// The PPG's names for the tables, in order.",
+        "const char* const ppg_table_names[PPG_NUM_TABLES] = {",
+    ]
+    for name in NAMES:
+        out.append(f'    "{name}",')
+    out += [
+        "};",
+        "",
+        "// Slots 60-63 in every table: generated, not stored in the ROM.",
+        "const char* const ppg_classic_names[PPG_NUM_CLASSIC_WAVES] = {",
+    ]
+    for name in CLASSIC_NAMES:
+        out.append(f'    "{name}",')
+    out += [
+        "};",
+        "",
+    ]
+    for index, wave in enumerate(classic):
+        out.append(c_array(f"ppg_classic_wave_{index}", wave))
+        out.append("")
+    out.append("const uint8_t* const ppg_classic_waves[PPG_NUM_CLASSIC_WAVES] = {")
+    for index in range(len(classic)):
+        out.append(f"    ppg_classic_wave_{index},")
+    out.append("};")
+    out.append("")
+
+    target = HERE / "ppg_tables.h"
+    target.write_text("\n".join(out))
+    print(f"wrote {target}")
+    for i, table in enumerate(tables):
+        pairs = ", ".join(f"{w}@{s}" for w, s in table["pairs"])
+        print(f"  {i:2} {NAMES[i]:10} {len(table['pairs'])} key waves: {pairs}")
+
+
+if __name__ == "__main__":
+    main()

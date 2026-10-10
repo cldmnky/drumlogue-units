@@ -1,12 +1,12 @@
 # Pepege-Synth - 2-Voice Polyphonic PPG Wavetable Synthesizer
 
-A **2-voice polyphonic** wavetable synthesizer for the Korg drumlogue, featuring authentic **PPG Wave 2.2/2.3** wavetables with 256 classic 8-bit waveforms across 16 banks.
+A **2-voice polyphonic** wavetable synthesizer for the Korg drumlogue, featuring the authentic **PPG Wave 2.2/2.3** wavetables: the 29 tables stored in the EPROM, with the four classic waves the hardware generated at the end of every table.
 
 ## Features
 
 - **2-Voice Polyphony** - Play chords with intelligent voice allocation and oldest-note stealing
-- **Authentic PPG Wavetables** - 256 waveforms from the legendary PPG Wave synthesizers
-- **16 Wavetable Banks** - Upper WT, Resonant, Mellow, Bright, Harsh, Sync, PWM, Vocal, Organ, Bell, and more
+- **Authentic PPG Wavetables** - the 29 wavetables stored in the PPG Wave 2.2/2.3 EPROM, loaded from the original `(wave index, slot)` key-wave directory
+- **64 Slots per Table** - the oscillator interpolates between the stored key waves; slots 60-63 are the classic waves the hardware generated (triangle, pulse, rectangular, sawtooth)
 - **Three PPG Modes** - HiFi (smooth), LoFi (stepped), Raw (authentic 8-bit crunch)
 - **Dual Oscillators** - Two independent oscillators with separate bank/morph/octave controls
 - **State Variable Filter** - LP12, LP24, HP12, BP12 modes with resonance
@@ -14,26 +14,40 @@ A **2-voice polyphonic** wavetable synthesizer for the Korg drumlogue, featuring
 - **Stereo Width** - SPACE parameter for mono to wide stereo spread
 - **LFO Modulation** - Morph position modulation for evolving sounds
 
-## Wavetable Banks
+## Wavetable Tables
 
-| Bank | Name | Character |
-|------|------|-----------|
-| 0 | UPPER_WT | Classic PPG upper wavetable |
-| 1 | RESONANT1 | Resonant filter-like tones |
-| 2 | RESONANT2 | More resonant variations |
-| 3 | MELLOW | Soft, warm sounds |
-| 4 | BRIGHT | Cutting, present tones |
-| 5 | HARSH | Aggressive, distorted |
-| 6 | CLIPPER | Hard-clipped waveforms |
-| 7 | SYNC | Oscillator sync timbres |
-| 8 | PWM | Pulse width modulation |
-| 9 | VOCAL1 | Formant/vocal sounds |
-| 10 | VOCAL2 | More vocal timbres |
-| 11 | ORGAN | Organ-like harmonics |
-| 12 | BELL | Bell/metallic tones |
-| 13 | ALIEN | Strange, unusual sounds |
-| 14 | NOISE | Noise-based textures |
-| 15 | SPECIAL | Special effect waveforms |
+The A/B BANK parameters select one of the 29 wavetables stored in the EPROM,
+in the PPG's own order:
+
+| # | Name | # | Name | # | Name |
+|---|------|---|------|---|------|
+| 0 | Resonant | 10 | Reso 3HP | 20 | Robotic |
+| 1 | Resonant2 | 11 | Wind Syn | 21 | StrongHrm |
+| 2 | MalletSyn | 12 | HighHarm | 22 | PercOrgan |
+| 3 | Sqr-Sweep | 13 | Clipper | 23 | ClipSweep |
+| 4 | Bellish | 14 | Organ Syn | 24 | ResoHarms |
+| 5 | Pul-Sweep | 15 | SquareSaw | 25 | 2 Echoes |
+| 6 | Saw-Sweep | 16 | Formant1 | 26 | Formant 2 |
+| 7 | MellowSaw | 17 | Polated | 27 | FmntVocal |
+| 8 | Feedback | 18 | Transient | 28 | Upper WT |
+| 9 | Add Harm | 19 | ElectricP | | |
+
+Every table ends with the four classic waves the synthesizer generated
+(they are not stored in the ROM):
+
+| Slot | Wave |
+|------|------|
+| 60 | triangle |
+| 61 | pulse |
+| 62 | rectangular |
+| 63 | sawtooth |
+
+The pulse width is our choice because the hardware's ROM value is not
+published. Slots 60-63 replace the interpolation the table definition would
+otherwise produce there, exactly as the hardware overrode them.
+
+The PPG's Sync (28) and PWM (29) tables are computed by the hardware rather
+than stored in the ROM, so they are not reproduced here.
 
 ## Parameters
 
@@ -41,8 +55,8 @@ A **2-voice polyphonic** wavetable synthesizer for the Korg drumlogue, featuring
 
 | Parameter | Range | Description |
 |-----------|-------|-------------|
-| A BANK | 0-15 | PPG wavetable bank selection |
-| A MORPH | 0-127 | Position within bank (morphs between 8 waves) |
+| A BANK | 0-28 | PPG wavetable selection (see the table above) |
+| A MORPH | 0-127 | Position within the table (127 = slot 63, the classic sawtooth) |
 | A OCT | -3 to +3 | Octave offset |
 | A TUNE | -64 to +63 | Fine tuning in cents |
 
@@ -50,8 +64,8 @@ A **2-voice polyphonic** wavetable synthesizer for the Korg drumlogue, featuring
 
 | Parameter | Range | Description |
 |-----------|-------|-------------|
-| B BANK | 0-15 | PPG wavetable bank selection |
-| B MORPH | 0-127 | Position within bank |
+| B BANK | 0-28 | PPG wavetable selection |
+| B MORPH | 0-127 | Position within table |
 | B OCT | -3 to +3 | Octave offset relative to A |
 | OSC MOD | HiFi/LoFi/Raw | PPG interpolation mode |
 
@@ -105,7 +119,7 @@ A **2-voice polyphonic** wavetable synthesizer for the Korg drumlogue, featuring
 
 - **2-voice polyphony** with per-voice oscillators, envelopes, and filters
 - **Voice allocation**: Prefers free voices, retriggers same note, steals oldest when full
-- **PPG wavetables**: 256 waves × 256 samples × 8-bit = 64KB wave data
+- **PPG wavetables**: the 29 EPROM tables, loaded as 64-slot interpolated wavetables from 256 stored 64-sample 8-bit waves
 - **Exponential envelopes**: True RC-circuit modeling with overshoot on attack
 
 ### Performance

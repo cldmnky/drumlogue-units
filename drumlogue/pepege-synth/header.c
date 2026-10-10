@@ -24,8 +24,8 @@ const __unit_header unit_header_t unit_header = {
         // Format: min, max, center, default, type, fractional, frac_mode, reserved, name
 
         // ==================== Page 1: Oscillator A ====================
-        // OSC A BANK: Wavetable bank selection (16 banks)
-        {0, 15, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"A BANK"}},
+        // OSC A BANK: PPG wavetable selection (29 stored tables)
+        {0, 28, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"A BANK"}},
         // OSC A MORPH: Position within wavetable (morphs between waves)
         {0, 127, 0, 0, k_unit_param_type_none, 0, 0, 0, {"A MORPH"}},
         // OSC A OCTAVE: Octave offset
@@ -34,8 +34,8 @@ const __unit_header unit_header_t unit_header = {
         {-64, 63, 0, 0, k_unit_param_type_none, 0, 0, 0, {"A TUNE"}},
 
         // ==================== Page 2: Oscillator B ====================
-        // OSC B BANK: Wavetable bank selection (16 banks)
-        {0, 15, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"B BANK"}},
+        // OSC B BANK: PPG wavetable selection (29 stored tables)
+        {0, 28, 0, 0, k_unit_param_type_strings, 0, 0, 0, {"B BANK"}},
         // OSC B MORPH: Position within wavetable
         {0, 127, 0, 0, k_unit_param_type_none, 0, 0, 0, {"B MORPH"}},
         // OSC B OCTAVE: Octave offset relative to A
