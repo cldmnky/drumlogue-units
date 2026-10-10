@@ -35,24 +35,24 @@ Pepege-Synth brings authentic PPG wavetable synthesis to the Korg drumlogue with
   - **Raw**: No interpolation (authentic PPG crunch)
 - Morphable wavetable position for evolving timbres
 
-### 🎚️ Wavetable Banks
+### 🎚️ Wavetable Tables
 
-| Bank | Description |
-|------|-------------|
-| **UPPER** | Classic PPG upper harmonics |
-| **RESNT1/2** | Resonant waveforms |
-| **MELLOW** | Warm, soft timbres |
-| **BRIGHT** | Cutting, bright sounds |
-| **HARSH** | Aggressive, edgy waves |
-| **CLIPPR** | Clipped/distorted textures |
-| **SYNC** | Sync-style waveforms |
-| **PWM** | Pulse width modulation |
-| **VOCAL1/2** | Formant-like vowels |
-| **ORGAN** | Harmonic organ tones |
-| **BELL** | Metallic bell sounds |
-| **ALIEN** | Strange experimental waves |
-| **NOISE** | Noise-based textures |
-| **SPECAL** | Special FX waves |
+The A/B BANK parameters select one of the 29 wavetables stored in the PPG Wave 2.2/2.3 EPROM, in the PPG's own order:
+
+| # | Name | # | Name | # | Name |
+|---|------|---|------|---|------|
+| 0 | Resonant | 10 | Reso 3HP | 20 | Robotic |
+| 1 | Resonant2 | 11 | Wind Syn | 21 | StrongHrm |
+| 2 | MalletSyn | 12 | HighHarm | 22 | PercOrgan |
+| 3 | Sqr-Sweep | 13 | Clipper | 23 | ClipSweep |
+| 4 | Bellish | 14 | Organ Syn | 24 | ResoHarms |
+| 5 | Pul-Sweep | 15 | SquareSaw | 25 | 2 Echoes |
+| 6 | Saw-Sweep | 16 | Formant1 | 26 | Formant 2 |
+| 7 | MellowSaw | 17 | Polated | 27 | FmntVocal |
+| 8 | Feedback | 18 | Transient | 28 | Upper WT |
+| 9 | Add Harm | 19 | ElectricP | | |
+
+Each table has 64 slots: the oscillator interpolates the slots between the key waves the ROM stores, as the hardware did, and slots 60-63 are the classic waves every PPG table ends with (triangle, pulse, rectangular, sawtooth). The PPG's Sync (28) and PWM (29) tables were computed by the synthesizer rather than stored, so they are not reproduced.
 
 ### 🔊 State Variable Filter
 - Four filter types: **LP12**, **LP24**, **HP12**, **BP12**

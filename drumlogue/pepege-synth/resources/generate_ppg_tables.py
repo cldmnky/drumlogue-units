@@ -17,10 +17,15 @@ synthesizer generates rather than stores:
 
     60: triangle   61: pulse   62: rectangular (square)   63: sawtooth
 
-Their exact ROM bytes are not published; the shapes here follow the
-description in the WvTable-logue README ("half = 128->255->128 hump",
-"half = 255 with a short 0 section", "half = 255", "half = i*4 ramp").
-The pulse width is our choice (the hardware's value is unknown).
+Their exact ROM bytes are not published, so these are the canonical shapes for
+the names, with the constraint the mirroring imposes: a wave is only
+representable if its full cycle is antisymmetric, i.e. the second half is the
+first mirrored in time and amplitude. That is what makes the sawtooth's
+half-cycle a half-amplitude ramp - a full-amplitude one mirrors into two ramps
+per cycle, which is a sawtooth an octave up. The harmonic content of each
+mirrored cycle is what the shapes are checked against: a triangle has odd
+harmonics falling as 1/k^2, a square odd ones falling as 1/k, a sawtooth every
+harmonic falling as 1/k with a full fundamental.
 
 Output: ppg_tables.h with
   - ppg_table_defs / ppg_table_offsets: the 29 stored wavetables as
@@ -92,13 +97,17 @@ def classic_waves():
     """64-sample half-cycles; the oscillator mirrors them into full cycles."""
     waves = []
     # 60 triangle: rises to full scale by the middle of the half, back down
-    waves.append([128 + (4 * i if i < 32 else 4 * (63 - i)) for i in range(64)])
-    # 61 pulse: full scale, then a short low section (width is our choice)
+    waves.append([128 + (round(127 * i / 31) if i < 32 else round(127 * (63 - i) / 31))
+                  for i in range(64)])
+    # 61 pulse: full scale with a short low section. Under the mirroring the
+    # duty stays 50% whatever the width, so the width sets the notch, not the
+    # duty; the hardware's value is unknown and this one is our choice.
     waves.append([255 if i < PULSE_WIDTH else 0 for i in range(64)])
     # 62 rectangular: full scale throughout -> a 50% square once mirrored
     waves.append([255] * 64)
-    # 63 sawtooth: a ramp
-    waves.append([min(255, 4 * i) for i in range(64)])
+    # 63 sawtooth: a half-amplitude ramp -> one rising ramp per cycle. A
+    # full-amplitude ramp (4*i) would mirror into a sawtooth an octave up.
+    waves.append([2 * i for i in range(64)])
     return waves
 
 

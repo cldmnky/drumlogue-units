@@ -221,20 +221,26 @@ void ReportExactness(int only_table) {
                     names[mode], result.mean, result.worst, result.table, result.slot,
                     1.0 / 127.5);
     }
-    std::printf("(Raw is the hardware behaviour: no sample interpolation, so it should match\n"
-                " the ROM waveform to within the slot interpolation's quantisation. HiFi and\n"
-                " LoFi interpolate samples, so a larger error there is expected.)\n\n");
+    std::printf("(Raw is the hardware behaviour: no sample interpolation. At 375 Hz the\n"
+                " phase advances exactly one sample per output sample, so the sample\n"
+                " interpolation of HiFi/LoFi never engages and the three modes coincide by\n"
+                " construction; the alias section below is where they differ.)\n\n");
 }
 
 void ReportSweep(int only_table) {
     std::printf("=== Sweep: spectral centroid per slot (Hz, note A4) ===\n");
     std::printf("%-13s", "table");
-    for (int slot = 0; slot <= 63; slot += 8) std::printf(" %6d", slot);
-    std::printf("   %s\n", "60-63");
+    for (int slot = 0; slot <= 56; slot += 8) std::printf(" %6d", slot);
+    for (int slot = static_cast<int>(PPG_CLASSIC_FIRST_SLOT);
+         slot < static_cast<int>(PPG_TABLE_SLOTS); slot++) {
+        std::printf(" %6d", slot);
+    }
+    std::printf("\n");
     for (uint32_t table = 0; table < PPG_NUM_TABLES; table++) {
         if (only_table >= 0 && static_cast<int>(table) != only_table) continue;
         std::printf("%2u %-10s", table, ppg_table_names[table]);
         for (int slot = 0; slot <= 63; slot += 8) {
+            if (slot > 56 && slot < static_cast<int>(PPG_CLASSIC_FIRST_SLOT)) continue;
             const std::vector<float> rendered = RenderStatic(static_cast<int>(table), slot, 2, 69, 30);
             const std::vector<float> window(rendered.begin() + rendered.size() / 2, rendered.end());
             double weighted = 0, total = 0;
@@ -249,7 +255,7 @@ void ReportSweep(int only_table) {
         }
         std::printf("\n");
     }
-    std::printf("\n");
+    std::printf("(the last four columns are the classic end waves, identical in every table)\n\n");
 }
 
 void ReportAliasing() {
