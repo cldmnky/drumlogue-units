@@ -24,7 +24,6 @@
 #include "lfo.h"
 #include "smoothed_value.h"
 #include "resources/ppg_waves.h"
-#include "../common/stereo_widener.h"
 #include "../common/ppg_osc.h"
 #include "../common/hub_control.h"  // NEW: Advanced hub control
 #include "../common/param_format.h"
@@ -406,8 +405,34 @@ public:
     }
 #endif
     
+    /**
+     * @brief Render interleaved stereo audio
+     *
+     * A host may ask for more than kMaxFrames at once (the drumlogue asks for
+     * 64). RenderChunk() handles at most one internal buffer, so split the
+     * request into chunks: every requested frame is rendered instead of only
+     * the first kMaxFrames leaving silence for the rest.
+     */
     void Render(float* out, uint32_t frames) {
-        // Limit frames to our buffer size
+        uint32_t done = 0;
+        while (done < frames) {
+            uint32_t chunk = frames - done;
+            if (chunk > kMaxFrames) chunk = kMaxFrames;
+            // Output is interleaved stereo, so advance by frames*2
+            RenderChunk(out + static_cast<size_t>(done) * 2, chunk);
+            done += chunk;
+        }
+    }
+    
+private:
+    /**
+     * @brief Render one chunk of at most kMaxFrames frames
+     *
+     * This is the actual audio callback body. Per-chunk work (parameter reads,
+     * bank reloads, dirty-flag consumption, smoothed targets) is intentional.
+     */
+    void RenderChunk(float* out, uint32_t frames) {
+        // Callers guarantee this, but clamp anyway to keep the buffers safe
         if (frames > kMaxFrames) frames = kMaxFrames;
         
         // Clear mix buffer
@@ -507,11 +532,36 @@ public:
         // Clear dirty flags
         params_dirty_ = 0;
         
+        // === Pre-pass: hoist block-constant work out of the sample loop ===
+        // Oscillator frequencies depend only on note, pitch bend, octave/tune
+        // and detune, none of which change inside a block (pitch bend only
+        // changes on MIDI events). powf(2, x) is kept rather than exp2f(x): the
+        // two differ by an ulp, and a one-ulp difference in the phase step
+        // accumulates over a render (measured: ~4e-3 after 8 s), which is far
+        // more than the rest of this change. Four powf per block cost nothing.
+        for (uint32_t v = 0; v < kNumVoices; v++) {
+            Voice& voice = voices_[v];
+            if (!voice.IsActive()) continue;
+            const float base_note = static_cast<float>(voice.note) + pitch_bend_ * pb_range;
+            voice.osc_a.SetFrequency(440.0f * powf(2.0f, (base_note - 69.0f + osc_a_octave * 12.0f + osc_a_tune) / 12.0f));
+            voice.osc_b.SetFrequency(440.0f * powf(2.0f, (base_note - 69.0f + osc_b_octave * 12.0f + osc_b_detune) / 12.0f));
+        }
+        
+        // Resonance and filter type are also block-constant: apply them once,
+        // before the first Process() of the block.
+        int filter_type = params_[P_FILTER_TYPE];
+        if (filter_type < 0 || filter_type > 3) filter_type = 0;
+        for (uint32_t v = 0; v < kNumVoices; v++) {
+            voices_[v].filter.SetResonance(resonance);
+            voices_[v].filter.SetType(static_cast<FilterType>(filter_type));
+        }
+        
         // Process each sample
         for (uint32_t i = 0; i < frames; i++) {
             // Get smoothed parameter values
             const float cutoff_base = cutoff_smooth_.Process();
             const float osc_mix = osc_mix_smooth_.Process();
+            space_smooth_.Process();  // Advance stereo width smoothing (read below)
             
             // Get global LFO value (-1 to +1)
             const float lfo_val = lfo_.Process();
@@ -534,15 +584,8 @@ public:
                 // Increment age for voice stealing
                 voice.age++;
                 
-                // Calculate frequency with pitch bend
-                const float base_note = static_cast<float>(voice.note) + pitch_bend_ * pb_range;
-                const float freq_a = 440.0f * powf(2.0f, (base_note - 69.0f + osc_a_octave * 12.0f + osc_a_tune) / 12.0f);
-                const float freq_b = 440.0f * powf(2.0f, (base_note - 69.0f + osc_b_octave * 12.0f + osc_b_detune) / 12.0f);
-                
-                // Set oscillator frequencies and wave positions
-                voice.osc_a.SetFrequency(freq_a);
+                // Wave positions are modulated per sample by the LFO
                 voice.osc_a.SetWavePosition(morph_a);
-                voice.osc_b.SetFrequency(freq_b);
                 voice.osc_b.SetWavePosition(morph_b);
                 
                 // Render oscillators
@@ -566,10 +609,9 @@ public:
                 
                 // Apply filter
                 voice.filter.SetCutoff(cutoff);
-                voice.filter.SetResonance(resonance);
-                int filter_type = params_[P_FILTER_TYPE];
-                if (filter_type < 0 || filter_type > 3) filter_type = 0;
-                voice.filter.SetType(static_cast<FilterType>(filter_type));
+                // Coefficients need recomputing only at control rate (every 8th
+                // sample, including i == 0); a static cutoff costs no sinf().
+                if ((i & 7) == 0) voice.filter.UpdateCoefficients();
                 float filtered = voice.filter.Process(osc_out);
                 
                 // Apply envelope and velocity, add to mix
@@ -585,9 +627,8 @@ public:
         // Sanitize (remove NaN/Inf) and soft clamp
         pepege::neon::SanitizeAndClamp(mix_buffer_, 1.0f, frames);
         
-        // Get current smoothed stereo width value
+        // Get current smoothed stereo width value (advanced in the sample loop)
         const float space = space_smooth_.GetValue();
-        stereo_widener_.SetWidth(space);
         
         // Create stereo output from mono with width
         float left_buf[kMaxFrames] __attribute__((aligned(16)));
@@ -612,16 +653,18 @@ public:
             vst1q_f32(&left_buf[idx], left);
             vst1q_f32(&right_buf[idx], right);
         }
+        // The width is constant for the chunk, so compute the tail's gain once
+        const float tail_side_amt = space * 0.3f;
+        const float tail_norm = 1.0f / (1.0f + tail_side_amt * 0.5f);
         for (; idx < frames; ++idx) {
-            float side_amt = space * 0.3f;
-            float norm = 1.0f / (1.0f + side_amt * 0.5f);
-            left_buf[idx] = mix_buffer_[idx] * (1.0f + side_amt) * norm;
-            right_buf[idx] = mix_buffer_[idx] * (1.0f - side_amt) * norm;
+            left_buf[idx] = mix_buffer_[idx] * (1.0f + tail_side_amt) * tail_norm;
+            right_buf[idx] = mix_buffer_[idx] * (1.0f - tail_side_amt) * tail_norm;
         }
 #else
+        // The width is constant for the chunk, so compute its gain once
+        const float side_amt = space * 0.3f;
+        const float norm = 1.0f / (1.0f + side_amt * 0.5f);
         for (uint32_t idx = 0; idx < frames; ++idx) {
-            float side_amt = space * 0.3f;
-            float norm = 1.0f / (1.0f + side_amt * 0.5f);
             left_buf[idx] = mix_buffer_[idx] * (1.0f + side_amt) * norm;
             right_buf[idx] = mix_buffer_[idx] * (1.0f - side_amt) * norm;
         }
@@ -631,6 +674,7 @@ public:
         pepege::neon::InterleaveStereo(left_buf, right_buf, out, frames);
     }
     
+public:
     void SetParameter(uint8_t id, int32_t value) {
         if (id == P_MOD_SELECT) {
             // Clamp to valid range
@@ -923,7 +967,6 @@ private:
     
     // Global modulation
     LFO lfo_;
-    common::StereoWidener stereo_widener_;
     
     // Parameter smoothing
     SmoothedValue cutoff_smooth_;

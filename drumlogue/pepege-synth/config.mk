@@ -6,6 +6,13 @@ PROJECT := pepege_synth
 PROJECT_TYPE := synth
 
 ##############################################################################
+# Optimization
+#
+# The DSP hot path matters more than code size here, so build at -O2 instead
+# of the project default -Os (the Makefile only uses -Os when OPTIM is empty).
+OPTIM = -O2
+
+##############################################################################
 # Sources
 #
 

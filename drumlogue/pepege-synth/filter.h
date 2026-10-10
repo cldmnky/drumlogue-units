@@ -49,6 +49,7 @@ public:
         // Coefficient
         f_ = 1.0f;
         q_ = 0.5f;
+        dirty_ = true;  // Force the first UpdateCoefficients() to compute
     }
     
     void Reset() {
@@ -56,22 +57,33 @@ public:
         band_ = 0.0f;
         low2_ = 0.0f;
         band2_ = 0.0f;
+        dirty_ = true;  // Recompute coefficients after a reset
     }
     
     /**
      * @brief Set cutoff frequency (0.0 to 1.0)
+     *
+     * Only stores the value and marks the coefficients dirty. The relatively
+     * expensive sinf() in UpdateCoefficients() is deferred so the caller can
+     * run it at control rate instead of once per sample.
      */
     void SetCutoff(float cutoff) {
-        cutoff_ = cutoff;
-        UpdateCoefficients();
+        if (cutoff != cutoff_) {
+            cutoff_ = cutoff;
+            dirty_ = true;
+        }
     }
     
     /**
      * @brief Set resonance (0.0 to 1.0)
+     *
+     * Cheap store; defers the coefficient update like SetCutoff().
      */
     void SetResonance(float resonance) {
-        resonance_ = resonance;
-        UpdateCoefficients();
+        if (resonance != resonance_) {
+            resonance_ = resonance;
+            dirty_ = true;
+        }
     }
     
     /**
@@ -79,6 +91,30 @@ public:
      */
     void SetType(FilterType type) {
         type_ = type;
+    }
+    
+    /**
+     * @brief Recompute f_/q_ from the current cutoff and resonance
+     *
+     * No-op when neither value changed since the last update, so a static
+     * cutoff costs no sinf() at all. Call this explicitly after SetCutoff()
+     * when running at control rate (e.g. every 8th sample).
+     */
+    void UpdateCoefficients() {
+        if (!dirty_) return;
+        dirty_ = false;
+        
+        // Convert normalized cutoff (0-1) to frequency coefficient
+        // Using approximation: f = 2 * sin(pi * fc / fs)
+        // For stability at high frequencies, clamp
+        const float fc = 20.0f + cutoff_ * cutoff_ * 20000.0f;  // Exponential mapping
+        f_ = 2.0f * sinf(3.14159265f * fc * inv_sample_rate_);
+        if (f_ > 0.99f) f_ = 0.99f;
+        
+        // Q from resonance (0 to self-oscillation)
+        // q_ should be 0.5 (no resonance) to ~0.01 (high resonance)
+        q_ = 0.5f - resonance_ * 0.48f;
+        if (q_ < 0.02f) q_ = 0.02f;
     }
     
     /**
@@ -142,17 +178,6 @@ private:
     float f_;   // Frequency coefficient
     float q_;   // Resonance/damping
     
-    void UpdateCoefficients() {
-        // Convert normalized cutoff (0-1) to frequency coefficient
-        // Using approximation: f = 2 * sin(pi * fc / fs)
-        // For stability at high frequencies, clamp
-        const float fc = 20.0f + cutoff_ * cutoff_ * 20000.0f;  // Exponential mapping
-        f_ = 2.0f * sinf(3.14159265f * fc * inv_sample_rate_);
-        if (f_ > 0.99f) f_ = 0.99f;
-        
-        // Q from resonance (0 to self-oscillation)
-        // q_ should be 0.5 (no resonance) to ~0.01 (high resonance)
-        q_ = 0.5f - resonance_ * 0.48f;
-        if (q_ < 0.02f) q_ = 0.02f;
-    }
+    // Set when cutoff_/resonance_ changed and f_/q_ need recomputing
+    bool dirty_ = true;  // Initialized so a not-yet-Init()'d instance still computes
 };
