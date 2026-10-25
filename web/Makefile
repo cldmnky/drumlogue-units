@@ -123,6 +123,7 @@ deploy:
 	kubectl create configmap drumlogue-web -n $(NAMESPACE) \
 	  --from-file=index.html=www/index.html \
 	  --from-file=app.js=www/app.js \
+	  --from-file=unit-host.js=www/unit-host.js \
 	  --from-file=worklet.js=www/worklet.js \
 	  --from-file=styles.css=www/styles.css \
 	  --from-file=units-index.json=www/units/index.json \

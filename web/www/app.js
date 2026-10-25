@@ -9,6 +9,10 @@ const state = {
   manifest: null,
   context: null,
   node: null,
+  send: null,            // (message) -> the active engine
+  engineKind: 'none',    // 'worklet' or 'main'
+  unit: null,            // main-thread unit (UnitHost instance)
+  capture: null,         // main-thread capture state
   gain: null,
   ready: false,
   params: new Map(),        // index -> { param, input, label }
@@ -55,52 +59,204 @@ async function startAudio() {
     return;
   }
 
-  // Creating and resuming the context has to happen inside the click that
-  // started this: browsers only allow an AudioContext to start from a user
-  // gesture, and any await before resume() can lose that gesture.
+  // Creating and resuming the context must happen inside the click: browsers
+  // only start audio from a gesture, and iOS additionally mutes Web Audio with
+  // the hardware silent switch unless the session says it is playback.
   try {
     state.context = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
   } catch (error) {
-    // Safari and older browsers reject the sampleRate option.
     state.context = new AudioContext();
   }
   state.context.onstatechange = updateAudioState;
+  iosAudioSession();
   await unlockAudio();
   updateAudioState();
 
-  if (!state.context.audioWorklet) {
-    setStatus('this browser has no AudioWorklet - try Chrome, Edge, Firefox or Safari 14.1+');
-    return;
-  }
-
   try {
-    // Cache-busted: browsers hold on to worklet modules across reloads.
-    await state.context.audioWorklet.addModule(`worklet.js?v=${Date.now()}`);
-    state.node = new AudioWorkletNode(state.context, 'unit-processor', {
-      numberOfInputs: 0,
-      numberOfOutputs: 1,
-      outputChannelCount: [2],
-    });
-    state.gain = state.context.createGain();
-    state.gain.gain.value = Number(document.getElementById('volume').value);
-    state.node.connect(state.gain).connect(state.context.destination);
-    state.node.port.onmessage = onWorkletMessage;
-
-    const response = await fetch(`${UNITS_DIR}${state.unit}.wasm`, { cache: 'no-store' });
-    if (!response.ok) {
-      setStatus(`cannot load ${state.unit}.wasm (${response.status}) - run "make" in web/`);
-      return;
-    }
-    const wasm = await response.arrayBuffer();
-    state.readyPromise = new Promise((resolve) => { state.resolveReady = resolve; });
-    state.node.port.postMessage({ type: 'load', wasm, sampleRate: state.context.sampleRate,
-                                  block: 64 });
-    setStatus(`starting ${state.unit}...`);
-    await unlockAudio();
+    const wasm = await loadWasm();
+    if (!wasm) return;
+    const forced = new URLSearchParams(location.search).get('renderer');
+    if (forced !== 'main' && state.context.audioWorklet && await startWorklet(wasm)) return;
+    await startMainThread(wasm);
   } catch (error) {
-    setStatus(`audio failed: ${error.message} - see the console`);
+    setStatus(`audio failed: ${error.message}`);
     console.error(error);
+    showBanner('Audio could not start: ' + error.message);
   }
+}
+
+/**
+ * iOS mutes Web Audio when the ringer switch is off unless the audio session is
+ * "playback" (Safari) - Chrome on iOS has no AudioWorklet at all, hence the
+ * main-thread renderer below.
+ */
+function iosAudioSession() {
+  try {
+    if (navigator.audioSession) navigator.audioSession.type = 'playback';
+  } catch (error) {
+    // not supported; the silent-switch workaround below may still help
+  }
+  // Playing a looping silent element moves the session to media playback on
+  // iOS, which lifts the silent-switch mute for Web Audio too.
+  let silent = document.getElementById('ios-unlock');
+  if (!silent) {
+    silent = document.createElement('audio');
+    silent.id = 'ios-unlock';
+    silent.loop = true;
+    silent.setAttribute('playsinline', '');
+    silent.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+    silent.style.display = 'none';
+    document.body.appendChild(silent);
+  }
+  silent.play().catch(() => {});
+}
+
+async function loadWasm() {
+  const response = await fetch(`${UNITS_DIR}${state.unit}.wasm`, { cache: 'no-store' });
+  if (!response.ok) {
+    setStatus(`cannot load ${state.unit}.wasm (${response.status})`);
+    return null;
+  }
+  return response.arrayBuffer();
+}
+
+/** Render in an AudioWorklet (real-time thread). Returns false to fall back. */
+async function startWorklet(wasm) {
+  try {
+    // The worklet cannot import modules, so its host code is concatenated in.
+    const [host, processor] = await Promise.all([
+      fetch(`unit-host.js?v=${Date.now()}`).then((r) => r.text()),
+      fetch(`worklet.js?v=${Date.now()}`).then((r) => r.text()),
+    ]);
+    const url = URL.createObjectURL(new Blob([host, '\n', processor],
+                                             { type: 'text/javascript' }));
+    await state.context.audioWorklet.addModule(url);
+    const node = new AudioWorkletNode(state.context, 'unit-processor', {
+      numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2],
+    });
+    state.node = node;
+    state.engineKind = 'worklet';
+    state.send = (message) => node.port.postMessage(message);
+    node.port.onmessage = onWorkletMessage;
+    connectGain(node);
+
+    state.readyPromise = new Promise((resolve) => { state.resolveReady = resolve; });
+    state.send({ type: 'load', wasm, sampleRate: state.context.sampleRate, block: 64 });
+    setStatus(`starting ${state.unit} in an AudioWorklet...`);
+    setTimeout(() => {
+      // No ready message means the worklet never ran (some WebKit builds).
+      if (state.ready || state.engineKind !== 'worklet') return;
+      setStatus('the AudioWorklet did not start; rendering on the main thread');
+      state.engineKind = 'none';
+      try { node.disconnect(); } catch (error) { /* already gone */ }
+      state.node = null;
+      state.send = null;
+      startMainThread(wasm).catch((error) => setStatus(`fallback failed: ${error.message}`));
+    }, 3000);
+    return true;
+  } catch (error) {
+    console.warn('AudioWorklet unavailable, using the main thread:', error);
+    return false;
+  }
+}
+
+/** Render on the main thread with a ScriptProcessorNode (works everywhere). */
+async function startMainThread(wasm) {
+  const block = 64;
+  const unit = await UnitHost.create(wasm, state.context.sampleRate, block);
+  state.unit = unit;
+  state.engineKind = 'main';
+
+  const bufferSize = 1024;
+  const node = state.context.createScriptProcessor(bufferSize, 0, 2);
+  node.onaudioprocess = (event) => {
+    const left = event.outputBuffer.getChannelData(0);
+    const right = event.outputBuffer.getChannelData(1);
+    unit.renderInto(left, right, 0, left.length);
+    if (state.capture) captureMainThread(left, right);
+  };
+  state.node = node;
+  connectGain(node);
+
+  state.send = (message) => sendMainThread(unit, message);
+  state.ready = true;
+  state.resolveReady?.();
+  onWorkletMessage({
+    data: {
+      type: 'ready',
+      manifest: unit.manifest,
+      sampleRate: state.context.sampleRate,
+      block: bufferSize,
+      renderer: 'main thread',
+    },
+  });
+  state.send({ type: 'input', mode: document.getElementById('input').value });
+  setStatus(`${unit.manifest.name} on the main thread | audio ${state.context.state}`);
+}
+
+function connectGain(node) {
+  state.gain = state.context.createGain();
+  state.gain.gain.value = Number(document.getElementById('volume').value);
+  node.connect(state.gain).connect(state.context.destination);
+}
+
+/** The UI's messages, handled locally when the page renders on the main thread. */
+function sendMainThread(unit, message) {
+  switch (message.type) {
+    case 'noteOn': unit.noteOn(message.note, message.velocity ?? 100); break;
+    case 'noteOff': unit.noteOff(message.note); break;
+    case 'allNotesOff': unit.allNotesOff(); break;
+    case 'param': unit.setParam(message.id, message.value); break;
+    case 'preset': unit.loadPreset(message.index);
+      onWorkletMessage({ data: { type: 'preset', index: unit.presetIndex() } });
+      onWorkletMessage({ data: { type: 'paramValues', values: unit.paramValues() } });
+      break;
+    case 'tempo': unit.setTempo(message.bpm); break;
+    case 'pitchBend': unit.pitchBend(message.value); break;
+    case 'reset': unit.reset(); break;
+    case 'input': unit.setInput(message.mode); break;
+    case 'startCapture':
+      state.capture = { left: [], right: [], frames: 0,
+                        limit: Math.round(message.seconds * state.context.sampleRate) };
+      break;
+    case 'benchmark': {
+      const wall = unit.benchmark(message.seconds || 1);
+      onWorkletMessage({ data: { type: 'benchmark', wallMs: wall,
+                                 seconds: message.seconds || 1 } });
+      break;
+    }
+    default: break;
+  }
+}
+
+function captureMainThread(left, right) {
+  const capture = state.capture;
+  for (let i = 0; i < left.length && capture.frames < capture.limit; i++) {
+    capture.left.push(left[i]);
+    capture.right.push(right[i]);
+    capture.frames++;
+  }
+  if (capture.frames < capture.limit) return;
+  state.capture = null;
+  let peak = 0;
+  let sum = 0;
+  for (let i = 0; i < capture.frames; i++) {
+    const value = Math.abs(capture.left[i]);
+    if (value > peak) peak = value;
+    sum += capture.left[i] * capture.left[i] + capture.right[i] * capture.right[i];
+  }
+  const wav = UnitHost.encodeWav(new Float32Array(capture.left),
+                                 new Float32Array(capture.right),
+                                 state.context.sampleRate);
+  onWorkletMessage({ data: { type: 'capture', wav, frames: capture.frames, peak,
+                             rms: Math.sqrt(sum / (capture.frames * 2)) } });
+}
+
+function showBanner(text) {
+  const banner = document.getElementById('banner');
+  if (!banner) return;
+  banner.textContent = text;
+  banner.hidden = false;
 }
 
 /** Resume the audio context; browsers start it suspended until a gesture. */
@@ -148,14 +304,14 @@ function onWorkletMessage(event) {
       state.resolveReady?.();
       if (message.manifest.module === 'effect') {
         document.getElementById('input').value = 'tone';
-        state.node.port.postMessage({ type: 'input', mode: 'tone' });
+        state.send?.({ type: 'input', mode: 'tone' });
       }
       document.getElementById('unit-name').textContent = message.manifest.name;
       document.body.classList.remove('loading');
       buildControls(message.manifest);
       setStatus(`${message.manifest.name} | ${message.manifest.module} | ` +
-                `${message.sampleRate} Hz | block ${message.block} | audio ` +
-                `${state.context?.state ?? '?'}`);
+                `${message.sampleRate} Hz | block ${message.block} | ` +
+                `${message.renderer ?? 'worklet'} | audio ${state.context?.state ?? '?'}`);
       break;
     case 'error':
       state.resolveReady?.();
@@ -245,7 +401,7 @@ function buildControls(manifest) {
     input.id = `param-${param.index}`;
     input.addEventListener('input', () => {
       const numeric = Number(input.value);
-      state.node?.port.postMessage({ type: 'param', id: param.index, value: numeric });
+      state.send?.({ type: 'param', id: param.index, value: numeric });
       value.textContent = valueName(param, numeric);
     });
 
@@ -361,7 +517,7 @@ function buildKeyboard() {
 function noteOn(note) {
   const key = state.notes.get(String(note));
   key?.classList.add('down');
-  const send = () => state.node?.port.postMessage({ type: 'noteOn', note, velocity: 100 });
+  const send = () => state.send?.({ type: 'noteOn', note, velocity: 100 });
 
   // Playing a key before "Start audio" is the most common way to get silence:
   // the key press is itself a user gesture, so start from it.
@@ -384,7 +540,7 @@ function noteOn(note) {
 function noteOff(note) {
   const key = state.notes.get(String(note));
   key?.classList.remove('down');
-  state.node?.port.postMessage({ type: 'noteOff', note });
+  state.send?.({ type: 'noteOff', note });
 }
 
 const COMPUTER_KEYS = {
@@ -433,7 +589,7 @@ function onMidi(event) {
   if (command === 0x90 && data2 > 0) noteOn(data1);
   else if (command === 0x80 || (command === 0x90 && data2 === 0)) noteOff(data1);
   else if (command === 0xe0) {
-    state.node?.port.postMessage({ type: 'pitchBend', value: (data2 << 7) | data1 });
+    state.send?.({ type: 'pitchBend', value: (data2 << 7) | data1 });
   }
 }
 
@@ -478,38 +634,38 @@ async function boot() {
   document.getElementById('beep').addEventListener('click', beep);
   document.getElementById('panic').addEventListener('click', allNotesOff);
   document.getElementById('presets').addEventListener('change', (event) => {
-    state.node?.port.postMessage({ type: 'preset', index: Number(event.target.value) });
+    state.send?.({ type: 'preset', index: Number(event.target.value) });
   });
   document.getElementById('volume').addEventListener('input', (event) => {
     if (state.gain) state.gain.gain.value = Number(event.target.value);
   });
   document.getElementById('input').addEventListener('change', (event) => {
-    state.node?.port.postMessage({ type: 'input', mode: event.target.value });
+    state.send?.({ type: 'input', mode: event.target.value });
   });
   document.getElementById('midi').addEventListener('click', enableMidi);
   document.getElementById('benchmark').addEventListener('click', async () => {
     if (!state.context) await startAudio();
     await state.readyPromise;
-    state.node.port.postMessage({ type: 'benchmark', seconds: 1 });
+    state.send?.({ type: 'benchmark', seconds: 1 });
   });
   document.getElementById('selftest').addEventListener('click', async () => {
     if (!state.context) await startAudio();
     await state.readyPromise;
     if (!state.ready) { setStatus('unit is not ready yet'); return; }
-    state.node.port.postMessage({ type: 'preset', index: 0 });
-    state.node.port.postMessage({ type: 'noteOn', note: 60, velocity: 100 });
-    state.node.port.postMessage({ type: 'noteOn', note: 64, velocity: 100 });
+    state.send?.({ type: 'preset', index: 0 });
+    state.send?.({ type: 'noteOn', note: 60, velocity: 100 });
+    state.send?.({ type: 'noteOn', note: 64, velocity: 100 });
     state.downloadCapture = true;
-    state.node.port.postMessage({ type: 'startCapture', seconds: 2 });
+    state.send?.({ type: 'startCapture', seconds: 2 });
     setTimeout(() => {
-      state.node.port.postMessage({ type: 'noteOff', note: 60 });
-      state.node.port.postMessage({ type: 'noteOff', note: 64 });
+      state.send?.({ type: 'noteOff', note: 60 });
+      state.send?.({ type: 'noteOff', note: 64 });
     }, 1500);
   });
   document.getElementById('record').addEventListener('click', () => {
     if (!state.node) return;
     state.downloadCapture = true;
-    state.node.port.postMessage({ type: 'startCapture', seconds: 2 });
+    state.send?.({ type: 'startCapture', seconds: 2 });
     setStatus('recording 2 s...');
   });
   document.getElementById('octave-down').addEventListener('click', () => shiftOctave(-1));
@@ -519,7 +675,7 @@ async function boot() {
 }
 
 function allNotesOff() {
-  state.node?.port.postMessage({ type: 'allNotesOff' });
+  state.send?.({ type: 'allNotesOff' });
   document.querySelectorAll('.key.down').forEach((key) => key.classList.remove('down'));
 }
 

@@ -70,6 +70,8 @@ spec:
                 path: app.js
               - key: worklet.js
                 path: worklet.js
+              - key: unit-host.js
+                path: unit-host.js
               - key: styles.css
                 path: styles.css
               - key: units-index.json
