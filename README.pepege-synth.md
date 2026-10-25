@@ -1,6 +1,6 @@
 # Pepege-Synth for Korg drumlogue
 
-A 2-voice polyphonic PPG wavetable synthesizer for the Korg drumlogue, featuring authentic PPG Wave 2.2/2.3 wavetables with 256 classic 8-bit waveforms across 16 banks. Inspired by VAST Dynamics Vaporizer2, it delivers the legendary PPG sound with modern polyphony and modulation capabilities.
+A 2-voice polyphonic PPG wavetable synthesizer for the Korg drumlogue, featuring the authentic PPG Wave 2.2/2.3 wavetables: the 29 tables stored in the EPROM, plus the four classic waves the hardware generated at the end of every table. Inspired by VAST Dynamics Vaporizer2, it delivers the legendary PPG sound with modern polyphony and modulation capabilities.
 
 ## Features
 
@@ -15,26 +15,24 @@ A 2-voice polyphonic PPG wavetable synthesizer for the Korg drumlogue, featuring
 - **LFO Modulation** - Morph position modulation for evolving sounds
 - **Modulation Hub** - Centralized modulation routing with 8 destinations
 
-## Wavetable Banks
+## Wavetable Tables
 
-| Bank | Name | Character |
-|------|------|-----------|
-| 0 | UPPER_WT | Classic PPG upper wavetable |
-| 1 | RESONANT1 | Resonant filter-like tones |
-| 2 | RESONANT2 | More resonant variations |
-| 3 | MELLOW | Soft, warm sounds |
-| 4 | BRIGHT | Cutting, present tones |
-| 5 | HARSH | Aggressive, distorted |
-| 6 | CLIPPER | Hard-clipped waveforms |
-| 7 | SYNC | Oscillator sync timbres |
-| 8 | PWM | Pulse width modulation |
-| 9 | VOCAL1 | Formant/vocal sounds |
-| 10 | VOCAL2 | More vocal timbres |
-| 11 | ORGAN | Organ-like harmonics |
-| 12 | BELL | Bell/metallic tones |
-| 13 | ALIEN | Strange, unusual sounds |
-| 14 | NOISE | Noise-based textures |
-| 15 | SPECIAL | Special effect waveforms |
+The A/B BANK parameters select one of the 29 wavetables stored in the EPROM, in the PPG's own order:
+
+| # | Name | # | Name | # | Name |
+|---|------|---|------|---|------|
+| 0 | Resonant | 10 | Reso 3HP | 20 | Robotic |
+| 1 | Resonant2 | 11 | Wind Syn | 21 | StrongHrm |
+| 2 | MalletSyn | 12 | HighHarm | 22 | PercOrgan |
+| 3 | Sqr-Sweep | 13 | Clipper | 23 | ClipSweep |
+| 4 | Bellish | 14 | Organ Syn | 24 | ResoHarms |
+| 5 | Pul-Sweep | 15 | SquareSaw | 25 | 2 Echoes |
+| 6 | Saw-Sweep | 16 | Formant1 | 26 | Formant 2 |
+| 7 | MellowSaw | 17 | Polated | 27 | FmntVocal |
+| 8 | Feedback | 18 | Transient | 28 | Upper WT |
+| 9 | Add Harm | 19 | ElectricP | | |
+
+Each table has 64 slots. The oscillator interpolates the slots between the key waves the ROM stores, exactly as the hardware did when it loaded a table into its workspace RAM, and slots 60-63 hold the classic waves every PPG table ends with: triangle, pulse, rectangular and sawtooth. The PPG's Sync (28) and PWM (29) tables were computed by the synthesizer rather than stored, so they are not reproduced here.
 
 ## Installation
 

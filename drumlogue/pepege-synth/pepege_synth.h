@@ -24,7 +24,7 @@
 #include "lfo.h"
 #include "smoothed_value.h"
 #include "resources/ppg_waves.h"
-#include "../common/stereo_widener.h"
+#include "resources/ppg_tables.h"
 #include "../common/ppg_osc.h"
 #include "../common/hub_control.h"  // NEW: Advanced hub control
 #include "../common/param_format.h"
@@ -125,26 +125,6 @@ static const char* s_filter_names[] = {
     "BP12"
 };
 
-// PPG Bank names for display (shortened for display)
-static const char* ppg_bank_names[] = {
-    "UPPER",    // 0:  waves 0-15
-    "RESNT1",   // 1:  waves 16-31
-    "RESNT2",   // 2:  waves 32-47
-    "MELLOW",   // 3:  waves 48-63
-    "BRIGHT",   // 4:  waves 64-79
-    "HARSH",    // 5:  waves 80-95
-    "CLIPPR",   // 6:  waves 96-111
-    "SYNC",     // 7:  waves 112-127
-    "PWM",      // 8:  waves 128-143
-    "VOCAL1",   // 9:  waves 144-159
-    "VOCAL2",   // 10: waves 160-175
-    "ORGAN",    // 11: waves 176-191
-    "BELL",     // 12: waves 192-207
-    "ALIEN",    // 13: waves 208-223
-    "NOISE",    // 14: waves 224-239
-    "SPECAL"    // 15: waves 240-255
-};
-
 // PPG oscillator mode names
 static const char* ppg_mode_names[] = {
     "HiFi",   // INTERP_2D - bilinear interpolation (smoothest)
@@ -165,9 +145,9 @@ static constexpr uint32_t kMaxFrames = 64;
  * Parameters are shared globally but modulation is per-voice.
  */
 struct Voice {
-    // Oscillators
-    common::PpgOsc<PPG_WAVES_PER_BANK> osc_a;
-    common::PpgOsc<PPG_WAVES_PER_BANK> osc_b;
+    // Oscillators (one slot per wavetable position; see ppg_tables.h)
+    common::PpgOsc<PPG_TABLE_SLOTS> osc_a;
+    common::PpgOsc<PPG_TABLE_SLOTS> osc_b;
     
     // Per-voice envelopes
     ADSREnvelope amp_env;
@@ -395,19 +375,40 @@ public:
 #ifdef TEST
     // Test-friendly Process method that matches WAV processing expectations
     void Process(const float* input, float* output, size_t frames, size_t channels) {
-        (void)input;  // Synth doesn't use input
+        (void)input;     // Synth doesn't use input
+        (void)channels;  // Render() already writes interleaved stereo
         Render(output, static_cast<uint32_t>(frames));
-        // If stereo output is expected but Render produces mono, duplicate to stereo
-        if (channels == 2) {
-            for (size_t i = frames; i > 0; --i) {
-                output[i * 2 - 1] = output[i * 2 - 2] = output[i - 1];
-            }
-        }
     }
 #endif
     
+    /**
+     * @brief Render interleaved stereo audio
+     *
+     * A host may ask for more than kMaxFrames at once (the drumlogue asks for
+     * 64). RenderChunk() handles at most one internal buffer, so split the
+     * request into chunks: every requested frame is rendered instead of only
+     * the first kMaxFrames leaving silence for the rest.
+     */
     void Render(float* out, uint32_t frames) {
-        // Limit frames to our buffer size
+        uint32_t done = 0;
+        while (done < frames) {
+            uint32_t chunk = frames - done;
+            if (chunk > kMaxFrames) chunk = kMaxFrames;
+            // Output is interleaved stereo, so advance by frames*2
+            RenderChunk(out + static_cast<size_t>(done) * 2, chunk);
+            done += chunk;
+        }
+    }
+    
+private:
+    /**
+     * @brief Render one chunk of at most kMaxFrames frames
+     *
+     * This is the actual audio callback body. Per-chunk work (parameter reads,
+     * bank reloads, dirty-flag consumption, smoothed targets) is intentional.
+     */
+    void RenderChunk(float* out, uint32_t frames) {
+        // Callers guarantee this, but clamp anyway to keep the buffers safe
         if (frames > kMaxFrames) frames = kMaxFrames;
         
         // Clear mix buffer
@@ -507,11 +508,36 @@ public:
         // Clear dirty flags
         params_dirty_ = 0;
         
+        // === Pre-pass: hoist block-constant work out of the sample loop ===
+        // Oscillator frequencies depend only on note, pitch bend, octave/tune
+        // and detune, none of which change inside a block (pitch bend only
+        // changes on MIDI events). powf(2, x) is kept rather than exp2f(x): the
+        // two differ by an ulp, and a one-ulp difference in the phase step
+        // accumulates over a render (measured: ~4e-3 after 8 s), which is far
+        // more than the rest of this change. Four powf per block cost nothing.
+        for (uint32_t v = 0; v < kNumVoices; v++) {
+            Voice& voice = voices_[v];
+            if (!voice.IsActive()) continue;
+            const float base_note = static_cast<float>(voice.note) + pitch_bend_ * pb_range;
+            voice.osc_a.SetFrequency(440.0f * powf(2.0f, (base_note - 69.0f + osc_a_octave * 12.0f + osc_a_tune) / 12.0f));
+            voice.osc_b.SetFrequency(440.0f * powf(2.0f, (base_note - 69.0f + osc_b_octave * 12.0f + osc_b_detune) / 12.0f));
+        }
+        
+        // Resonance and filter type are also block-constant: apply them once,
+        // before the first Process() of the block.
+        int filter_type = params_[P_FILTER_TYPE];
+        if (filter_type < 0 || filter_type > 3) filter_type = 0;
+        for (uint32_t v = 0; v < kNumVoices; v++) {
+            voices_[v].filter.SetResonance(resonance);
+            voices_[v].filter.SetType(static_cast<FilterType>(filter_type));
+        }
+        
         // Process each sample
         for (uint32_t i = 0; i < frames; i++) {
             // Get smoothed parameter values
             const float cutoff_base = cutoff_smooth_.Process();
             const float osc_mix = osc_mix_smooth_.Process();
+            space_smooth_.Process();  // Advance stereo width smoothing (read below)
             
             // Get global LFO value (-1 to +1)
             const float lfo_val = lfo_.Process();
@@ -534,15 +560,8 @@ public:
                 // Increment age for voice stealing
                 voice.age++;
                 
-                // Calculate frequency with pitch bend
-                const float base_note = static_cast<float>(voice.note) + pitch_bend_ * pb_range;
-                const float freq_a = 440.0f * powf(2.0f, (base_note - 69.0f + osc_a_octave * 12.0f + osc_a_tune) / 12.0f);
-                const float freq_b = 440.0f * powf(2.0f, (base_note - 69.0f + osc_b_octave * 12.0f + osc_b_detune) / 12.0f);
-                
-                // Set oscillator frequencies and wave positions
-                voice.osc_a.SetFrequency(freq_a);
+                // Wave positions are modulated per sample by the LFO
                 voice.osc_a.SetWavePosition(morph_a);
-                voice.osc_b.SetFrequency(freq_b);
                 voice.osc_b.SetWavePosition(morph_b);
                 
                 // Render oscillators
@@ -566,10 +585,9 @@ public:
                 
                 // Apply filter
                 voice.filter.SetCutoff(cutoff);
-                voice.filter.SetResonance(resonance);
-                int filter_type = params_[P_FILTER_TYPE];
-                if (filter_type < 0 || filter_type > 3) filter_type = 0;
-                voice.filter.SetType(static_cast<FilterType>(filter_type));
+                // Coefficients need recomputing only at control rate (every 8th
+                // sample, including i == 0); a static cutoff costs no sinf().
+                if ((i & 7) == 0) voice.filter.UpdateCoefficients();
                 float filtered = voice.filter.Process(osc_out);
                 
                 // Apply envelope and velocity, add to mix
@@ -585,9 +603,8 @@ public:
         // Sanitize (remove NaN/Inf) and soft clamp
         pepege::neon::SanitizeAndClamp(mix_buffer_, 1.0f, frames);
         
-        // Get current smoothed stereo width value
+        // Get current smoothed stereo width value (advanced in the sample loop)
         const float space = space_smooth_.GetValue();
-        stereo_widener_.SetWidth(space);
         
         // Create stereo output from mono with width
         float left_buf[kMaxFrames] __attribute__((aligned(16)));
@@ -596,7 +613,6 @@ public:
 #ifdef USE_NEON
         // NEON batch processing
         const float32x4_t width_vec = vdupq_n_f32(space);
-        const float32x4_t half = vdupq_n_f32(0.5f);
         const float32x4_t one = vdupq_n_f32(1.0f);
         
         size_t idx = 0;
@@ -605,23 +621,30 @@ public:
             float32x4_t side_amt = vmulq_f32(width_vec, vdupq_n_f32(0.3f));
             float32x4_t left = vmulq_f32(mono, vaddq_f32(one, side_amt));
             float32x4_t right = vmulq_f32(mono, vsubq_f32(one, side_amt));
-            float32x4_t norm = vrecpeq_f32(vaddq_f32(one, vmulq_f32(side_amt, half)));
-            norm = vmulq_f32(vrecpsq_f32(vaddq_f32(one, vmulq_f32(side_amt, half)), norm), norm);
+            // Normalising by (1 + side_amt) keeps the louder channel at the
+            // mono level, so the widening can never push the output past the
+            // clamp the mix was limited to. The L/R ratio - the width itself -
+            // is the same as normalising by (1 + side_amt/2), which instead
+            // preserved the average level and let peaks grow by up to ~1.16.
+            float32x4_t norm = vrecpeq_f32(vaddq_f32(one, side_amt));
+            norm = vmulq_f32(vrecpsq_f32(vaddq_f32(one, side_amt), norm), norm);
             left = vmulq_f32(left, norm);
             right = vmulq_f32(right, norm);
             vst1q_f32(&left_buf[idx], left);
             vst1q_f32(&right_buf[idx], right);
         }
+        // The width is constant for the chunk, so compute the tail's gain once
+        const float tail_side_amt = space * 0.3f;
+        const float tail_norm = 1.0f / (1.0f + tail_side_amt);
         for (; idx < frames; ++idx) {
-            float side_amt = space * 0.3f;
-            float norm = 1.0f / (1.0f + side_amt * 0.5f);
-            left_buf[idx] = mix_buffer_[idx] * (1.0f + side_amt) * norm;
-            right_buf[idx] = mix_buffer_[idx] * (1.0f - side_amt) * norm;
+            left_buf[idx] = mix_buffer_[idx] * (1.0f + tail_side_amt) * tail_norm;
+            right_buf[idx] = mix_buffer_[idx] * (1.0f - tail_side_amt) * tail_norm;
         }
 #else
+        // The width is constant for the chunk, so compute its gain once
+        const float side_amt = space * 0.3f;
+        const float norm = 1.0f / (1.0f + side_amt);
         for (uint32_t idx = 0; idx < frames; ++idx) {
-            float side_amt = space * 0.3f;
-            float norm = 1.0f / (1.0f + side_amt * 0.5f);
             left_buf[idx] = mix_buffer_[idx] * (1.0f + side_amt) * norm;
             right_buf[idx] = mix_buffer_[idx] * (1.0f - side_amt) * norm;
         }
@@ -631,6 +654,7 @@ public:
         pepege::neon::InterleaveStereo(left_buf, right_buf, out, frames);
     }
     
+public:
     void SetParameter(uint8_t id, int32_t value) {
         if (id == P_MOD_SELECT) {
             // Clamp to valid range
@@ -687,8 +711,9 @@ public:
         switch (id) {
             case P_OSC_A_BANK:
             case P_OSC_B_BANK:
-                if (value >= 0 && value < PPG_NUM_BANKS) {
-                    return ppg_bank_names[value];
+                // Banks are the 29 wavetables stored in the PPG EPROM.
+                if (value >= 0 && value < static_cast<int32_t>(PPG_NUM_TABLES)) {
+                    return ppg_table_names[value];
                 }
                 break;
             case P_OSC_MODE:
@@ -897,18 +922,20 @@ private:
     /**
      * @brief Load a bank's wavetable into a PPG oscillator
      */
-    void LoadBankWavetable(common::PpgOsc<PPG_WAVES_PER_BANK>& osc, int bank) {
-        if (bank < 0 || bank >= PPG_NUM_BANKS) return;
-        
-        uint8_t wavetable_def[PPG_WAVES_PER_BANK * 2 + 1];
-        
-        for (int i = 0; i < PPG_WAVES_PER_BANK; i++) {
-            wavetable_def[i * 2] = static_cast<uint8_t>(bank * 16 + i * 2);
-            wavetable_def[i * 2 + 1] = static_cast<uint8_t>(i);
+    void LoadBankWavetable(common::PpgOsc<PPG_TABLE_SLOTS>& osc, int bank) {
+        if (bank < 0 || bank >= static_cast<int>(PPG_NUM_TABLES)) return;
+
+        // The table definition ends with a pair at slot 60 so the slots before
+        // it interpolate towards that key wave, exactly as the hardware did.
+        osc.LoadWavetable(ppg_wave_data, ppg_table_defs + ppg_table_offsets[bank]);
+
+        // The four classic waves are generated by the synthesizer, not stored,
+        // and the hardware always wrote them over slots 60-63. SetWave() gives
+        // them the same wave on both sides, so those slots stop interpolating.
+        for (uint32_t i = 0; i < PPG_NUM_CLASSIC_WAVES; i++) {
+            osc.SetWave(static_cast<uint8_t>(PPG_CLASSIC_FIRST_SLOT + i),
+                        ppg_classic_waves[i]);
         }
-        wavetable_def[PPG_WAVES_PER_BANK * 2] = 0xFF;
-        
-        osc.LoadWavetable(ppg_wave_data, wavetable_def);
     }
     
     float sample_rate_;
@@ -923,7 +950,6 @@ private:
     
     // Global modulation
     LFO lfo_;
-    common::StereoWidener stereo_widener_;
     
     // Parameter smoothing
     SmoothedValue cutoff_smooth_;
@@ -953,13 +979,15 @@ private:
     
     // Presets are voiced for the PPG-style banks
     static constexpr Preset kPresets[kNumPresets] = {
-        // 0: Glass Keys
+        // 0: Glass Keys  (A 04 Bellish, B 02 MalletSyn)
+        // Sustain 68: two voices at full-scale waves reach the mix clamp at the
+        // top of the keyboard, so the preset keeps some headroom.
         {
             {
                 /*A BANK*/4, /*A MORPH*/96, /*A OCT*/0, /*A TUNE*/0,
-                /*B BANK*/9, /*B MORPH*/64, /*B OCT*/0, /*MODE*/0,
+                /*B BANK*/2, /*B MORPH*/64, /*B OCT*/0, /*MODE*/0,
                 /*CUTOFF*/96, /*RESO*/30, /*FLT ENV*/20, /*FLT TYP*/1,
-                /*ATTACK*/5, /*DECAY*/60, /*SUST*/100, /*REL*/50,
+                /*ATTACK*/5, /*DECAY*/60, /*SUST*/68, /*REL*/50,
                 /*F.ATK*/10, /*F.DCY*/60, /*F.SUS*/50, /*F.REL*/60,
                 /*MOD SEL*/0, /*MOD VAL*/64, /*OSC MIX*/16, /*SPACE*/10
             },
@@ -968,11 +996,13 @@ private:
                 /*VEL>F*/40, /*KEYTRK*/80, /*DETUNE*/64, /*PB RNG*/32
             }
         },
-        // 1: Dust Pad
+        // 1: Dust Pad  (A 07 MellowSaw, B 06 Saw-Sweep)
+        // A morph 80: MellowSaw's slot-100 wave is hot enough to clip at
+        // sustain 100; the softer region keeps the pad's character.
         {
             {
-                3, 100, -1, 0,
-                12, 90, 0, 0,
+                7, 80, -1, 0,
+                6, 90, 0, 0,
                 70, 25, 50, 0,
                 40, 90, 100, 80,
                 30, 80, 80, 70,
@@ -983,27 +1013,33 @@ private:
                 20, 90, 64, 32
             }
         },
-        // 2: Sync Bass
+        // 2: Sync Bass  (A 23 ClipSweep, B 03 Sqr-Sweep)
+        // Clipper's waves are all near full scale, so two voices hit the mix
+        // clamp at any morph/reso/cutoff; the clipped-bass role sits on the
+        // quieter ClipSweep table instead.
         {
             {
-                7, 80, -1, -5,
-                6, 70, -1, 2,
+                23, 64, -1, -5,
+                3, 70, -1, 2,
                 60, 70, 40, 1,
                 2, 50, 70, 25,
                 5, 70, 40, 40,
-                0, 64, -20, -20
+                0, 64, 0, -20
             },
             {
                 60, 100, 40, 30,
                 30, 70, 80, 96
             }
         },
-        // 3: Noise Sweep FX
+        // 3: Noise Sweep FX  (A 18 Transient, B 19 ElectricP)
+        // HP12 at cutoff 90 sits at ~9kHz, above these notes' content, so the
+        // preset was near-silent. Move the sweep into the audible band and
+        // invert the envelope so it opens downward instead of closing.
         {
             {
-                14, 64, 0, 0,
-                6, 32, 0, 1,
-                90, 20, 50, 2,
+                18, 64, 0, 0,
+                19, 32, 0, 1,
+                60, 20, -64, 2,
                 0, 70, 80, 40,
                 0, 90, 20, 50,
                 0, 64, -10, 50
@@ -1013,26 +1049,28 @@ private:
                 10, 0, 64, 64
             }
         },
-        // 4: Pluck
+        // 4: Pluck  (A 05 Pul-Sweep, B 02 MalletSyn)
+        // A morph 8: Pul-Sweep's later slots are hot enough to reach the mix
+        // clamp at the top of the keyboard; the opening slots keep the pluck.
         {
             {
-                5, 40, 0, 0,
-                12, 50, 0, 0,
+                5, 8, 0, 0,
+                2, 50, 0, 0,
                 90, 20, 50, 1,
                 2, 40, 80, 25,
                 2, 60, 30, 30,
-                0, 64, -10, 15
+                0, 64, 0, 15
             },
             {
                 80, 0, 50, 30,
                 60, 70, 70, 32
             }
         },
-        // 5: PWM Lead
+        // 5: PWM Lead  (A 15 SquareSaw, B 12 HighHarm)
         {
             {
-                8, 90, 1, 6,
-                8, 60, 0, 0,
+                15, 90, 1, 6,
+                12, 60, 0, 0,
                 100, 20, 30, 0,
                 5, 70, 100, 60,
                 20, 60, 50, 50,
