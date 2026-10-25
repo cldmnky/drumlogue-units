@@ -1,0 +1,272 @@
+/* A small dark UI for the drumlogue web emulator: header controls, a responsive
+   grid of parameters built from the unit's header, and a keyboard at the foot. */
+
+:root {
+  --bg: #12141a;
+  --panel: #1b1e26;
+  --panel-2: #232733;
+  --line: #2f3442;
+  --text: #e6e9f0;
+  --dim: #9aa3b5;
+  --accent: #e8b64c;
+  --accent-2: #6fb3ff;
+  --key: #f2f4f8;
+  --key-down: #e8b64c;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+/* --- header --------------------------------------------------------------- */
+
+header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.title h1 {
+  margin: 0;
+  font-size: 16px;
+  letter-spacing: 0.02em;
+}
+
+.title h1 span {
+  color: var(--dim);
+  font-weight: 400;
+}
+
+.statusline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.statusline strong { color: var(--accent); }
+.statusline .load b { color: var(--text); }
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--dim);
+}
+
+select, button {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 6px 10px;
+}
+
+button { cursor: pointer; }
+button:hover { border-color: var(--accent-2); }
+button:active { transform: translateY(1px); }
+
+#start { background: #2b3a2b; border-color: #3c5a3c; }
+#panic { background: #3a2b2b; border-color: #5a3c3c; }
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 22px;
+  background: transparent;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  background: var(--line);
+  border-radius: 2px;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  background: var(--line);
+  border-radius: 2px;
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.volume input { width: 90px; }
+
+/* --- parameters ----------------------------------------------------------- */
+
+main {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 14px 18px;
+}
+
+.params {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.param {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "name value"
+    "control control";
+  gap: 2px 8px;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+
+.param label {
+  grid-area: name;
+  color: var(--text);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.param .value {
+  grid-area: value;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+
+.param input[type="range"] { grid-area: control; width: 100%; }
+.param select { grid-area: control; width: 100%; }
+
+/* --- keyboard ------------------------------------------------------------- */
+
+footer {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+  padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+}
+
+.octave-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--dim);
+  min-width: 52px;
+}
+
+.octave-controls button {
+  width: 34px;
+  padding: 4px 0;
+}
+
+.keyboard {
+  position: relative;
+  display: flex;
+  gap: 6px;
+  flex: 1;
+  min-height: 96px;
+}
+
+.octave {
+  position: relative;
+  display: flex;
+  flex: 1;
+  gap: 2px;
+}
+
+.key {
+  border: none;
+  border-radius: 0 0 6px 6px;
+  padding: 0;
+  font-size: 9px;
+  color: #667;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 5px;
+  user-select: none;
+  touch-action: none;
+}
+
+.key.white {
+  flex: 1;
+  background: var(--key);
+}
+
+.key.black {
+  position: absolute;
+  top: 0;
+  width: 9%;
+  height: 60%;
+  background: #22262f;
+  color: #98a;
+  border: 1px solid #000;
+  border-radius: 0 0 4px 4px;
+  z-index: 2;
+}
+
+.key.down { background: var(--key-down); color: #221a06; }
+.key.black.down { background: #c79a35; color: #221a06; }
+
+@media (max-width: 640px) {
+  header { padding: 8px 10px; }
+  .controls { gap: 6px; }
+  .params { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .param { padding: 6px 8px; }
+  main { padding: 8px 10px 14px; }
+  footer { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); }
+  .keyboard { min-height: 84px; }
+}
+
+@media (max-width: 420px) {
+  .params { grid-template-columns: 1fr; }
+}
