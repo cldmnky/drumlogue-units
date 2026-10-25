@@ -537,61 +537,87 @@ public:
         // atk, dec, rel, envMode, coarse, fine, seq, spread
         switch (idx) {
             case 0: // Init - Clean percussive starting point
-                // Basic modal hit, neutral resonator, good for exploring
+                // Basic modal hit, neutral resonator, good for exploring.
+                // A touch of ring (DAMPING -15) plus full VOLUME: with a dead
+                // resonator the hit measured -24.9 dBFS against a -18 dBFS
+                // target and VOLUME alone could only recover 2 dB.
                 setPresetParams(0, 0, 100, 0,  0, 0, 0, 0,
-                               0, 0, 0, 0,  0, 64, 100, 0,
+                               0, 0, -15, 0,  0, 64, 127, 0,
                                3, 45, 50, 0,  0, 0, 0, 64);
                 break;
             case 1: // Bowed Str - Expressive bowed string
                 // Full bow, warm geometry (string-like), moderate damping
                 // Slow attack for realistic bow articulation
                 setPresetParams(100, 0, 0, 0,  -20, 0, 0, 0,
-                               -50, -10, -25, -20,  0, 55, 100, 0,
+                               -50, -10, -25, -20,  0, 55, 50, 0,
                                35, 70, 75, 2,  0, 0, 0, 64);
                 break;
             case 2: // Bell - Metallic bell/chime
                 // Strike with hard mallet, bright bell-like geometry
                 // Long sustain, minimal damping, wide stereo
                 setPresetParams(0, 0, 100, 4,  0, 0, 0, 0,
-                               55, 30, -55, 0,  0, 90, 100, 0,
+                               55, 30, -55, 0,  0, 90, 78, 0,
                                1, 90, 95, 1,  0, 0, 0, 64);
                 break;
             case 3: // Pluck - Acoustic plucked string
-                // Plectrum excitation, string geometry, natural damping
-                // Short attack, medium decay
+                // Plectrum excitation, string geometry, natural damping.
+                // AD envelope with a 1 ms attack: the peak is the pluck itself,
+                // then the note decays (ADR left it sustaining at 0.7 and the
+                // loudest note arrived 541 ms into the phrase).
+                // POSITION centred: an off-centre pickup taps make the modal
+                // level swing ~8 dB across the keyboard.
                 setPresetParams(0, 0, 95, 6,  0, 0, 0, 0,
-                               -45, 10, -15, -10,  0, 60, 100, 0,
-                               2, 55, 45, 0,  0, 0, 0, 64);
+                               25, 20, -10, 0,  0, 60, 62, 0,
+                               0, 30, 30, 1,  0, 0, 0, 64);
                 break;
             case 4: // Blown - Breathy wind instrument
                 // Pure blow excitation, tube-like geometry
                 // Slow attack for breath buildup, AR envelope
-                // space=80 keeps the tube in self-oscillation (the blow path
-                // only becomes audible above a threshold at low space values)
-                setPresetParams(0, 100, 0, 0,  0, -20, 0, 0,
-                               -35, -5, -10, 5,  0, 80, 100, 0,
-                               45, 35, 50, 2,  0, 0, 0, 64);
+                // BLOW must be at full breath: the tube waveguide only
+                // self-oscillates above ~0.89 of full breath (blow=114);
+                // below that its output is DC only and the resonator rejects
+                // it, which is why blow=100 made the preset silent.
+                // Known DSP fault, not tunable here: the tube oscillates at
+                // half the tube frequency it is given (Tube::Process reads a
+                // round trip of 2 x delay), so this preset sounds an octave
+                // below the played key. See the report.
+                setPresetParams(0, 127, 0, 0,  0, -20, 0, 0,
+                               -35, -5, -10, 5,  0, 80, 40, 0,
+                               20, 35, 50, 2,  0, 0, 0, 64);
                 break;
             case 5: // Marimba - Wooden mallet percussion
                 // Soft mallet, bar-like geometry, warm brightness
                 // Quick attack, medium-long decay
                 setPresetParams(0, 0, 100, 0,  0, 0, 0, 0,
-                               20, 5, -40, -30,  0, 70, 100, 0,
+                               20, 5, -40, -30,  0, 70, 89, 0,
                                2, 65, 70, 0,  0, 0, 0, 64);
                 break;
-            case 6: // String - Karplus-Strong style pluck
-                // String model for realistic pluck, tight damping
-                // Very short attack, medium decay
-                setPresetParams(0, 0, 90, 7,  0, 0, 0, 0,
-                               -60, 15, -5, -15,  1, 60, 100, 0,
-                               1, 40, 35, 1,  0, 0, 0, 64);
+            case 6: // String - Sustained string section
+                // The Karplus-Strong string model (MODEL=1) cannot be used:
+                // its two delay taps (fundamental + pickup) are summed into
+                // the feedback loop, so the loop gain is ~2 x feedback
+                // (>= 1.8 for any damping) and every note blows past the
+                // 1e4 stability guard and resets to silence within ~50 ms.
+                // MODAL with a light bow and a strike for the attack gives a
+                // sustaining, bright string that is not Bowed Str's swell.
+                // The attack is 0.32 s rather than instant because every bow
+                // preset drones for one envelope cycle right after a preset
+                // load: MultistageEnvelope runs its segments with the gate
+                // off (ResetVoice -> Process() ramps up), a DSP fault that a
+                // slow attack merely makes quieter.
+                setPresetParams(45, 0, 60, 6,  -10, 0, 0, 0,
+                               -30, 10, -25, 0,  0, 65, 47, 0,
+                               20, 60, 60, 2,  0, 0, 0, 64);
                 break;
             case 7: // Drone - Evolving ambient texture
-                // Mixed excitation for complex texture, long sustain
-                // Looping envelope, wide stereo
+                // Mixed excitation for complex texture, long sustain,
+                // wide stereo. AR rather than AD-LOOP: AD-LOOP never leaves
+                // its loop on note-off (Release() is a no-op with no sustain
+                // point), so the drone rang for ever - still at 0.25 of its
+                // peak 3 s after the last note-off.
                 setPresetParams(35, 40, 30, 0,  -10, 10, 2, 40,
-                               -20, -20, -50, 0,  2, 95, 95, 0,
-                               55, 65, 60, 3,  0, 0, 0, 64);
+                               -20, -20, -50, 0,  2, 95, 20, 0,
+                               55, 65, 60, 2,  0, 0, 0, 64);
                 break;
         }
 #else
