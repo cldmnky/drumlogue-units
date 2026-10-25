@@ -50,32 +50,93 @@ async function listUnits() {
 // --- audio ------------------------------------------------------------------
 
 async function startAudio() {
-  if (state.context) return;
-  const requested = 48000;
-  state.context = new AudioContext({ sampleRate: requested, latencyHint: 'interactive' });
-  // Cache-busted: browsers hold on to worklet modules across reloads.
-  await state.context.audioWorklet.addModule(`worklet.js?v=${Date.now()}`);
-  state.node = new AudioWorkletNode(state.context, 'unit-processor', {
-    numberOfInputs: 0,
-    numberOfOutputs: 1,
-    outputChannelCount: [2],
-  });
-  state.gain = state.context.createGain();
-  state.gain.gain.value = Number(document.getElementById('volume').value);
-  state.node.connect(state.gain).connect(state.context.destination);
-  state.node.port.onmessage = onWorkletMessage;
-
-  const response = await fetch(`${UNITS_DIR}${state.unit}.wasm`, { cache: 'no-store' });
-  if (!response.ok) {
-    setStatus(`cannot load ${state.unit}.wasm (${response.status}) - run "make" in web/`);
+  if (state.context) {
+    await unlockAudio();
     return;
   }
-  const wasm = await response.arrayBuffer();
-  state.readyPromise = new Promise((resolve) => { state.resolveReady = resolve; });
-  state.node.port.postMessage({ type: 'load', wasm, sampleRate: state.context.sampleRate,
-                                block: 64 });
-  setStatus(`starting ${state.unit}...`);
-  await state.context.resume();
+
+  // Creating and resuming the context has to happen inside the click that
+  // started this: browsers only allow an AudioContext to start from a user
+  // gesture, and any await before resume() can lose that gesture.
+  try {
+    state.context = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
+  } catch (error) {
+    // Safari and older browsers reject the sampleRate option.
+    state.context = new AudioContext();
+  }
+  state.context.onstatechange = updateAudioState;
+  await unlockAudio();
+  updateAudioState();
+
+  if (!state.context.audioWorklet) {
+    setStatus('this browser has no AudioWorklet - try Chrome, Edge, Firefox or Safari 14.1+');
+    return;
+  }
+
+  try {
+    // Cache-busted: browsers hold on to worklet modules across reloads.
+    await state.context.audioWorklet.addModule(`worklet.js?v=${Date.now()}`);
+    state.node = new AudioWorkletNode(state.context, 'unit-processor', {
+      numberOfInputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [2],
+    });
+    state.gain = state.context.createGain();
+    state.gain.gain.value = Number(document.getElementById('volume').value);
+    state.node.connect(state.gain).connect(state.context.destination);
+    state.node.port.onmessage = onWorkletMessage;
+
+    const response = await fetch(`${UNITS_DIR}${state.unit}.wasm`, { cache: 'no-store' });
+    if (!response.ok) {
+      setStatus(`cannot load ${state.unit}.wasm (${response.status}) - run "make" in web/`);
+      return;
+    }
+    const wasm = await response.arrayBuffer();
+    state.readyPromise = new Promise((resolve) => { state.resolveReady = resolve; });
+    state.node.port.postMessage({ type: 'load', wasm, sampleRate: state.context.sampleRate,
+                                  block: 64 });
+    setStatus(`starting ${state.unit}...`);
+    await unlockAudio();
+  } catch (error) {
+    setStatus(`audio failed: ${error.message} - see the console`);
+    console.error(error);
+  }
+}
+
+/** Resume the audio context; browsers start it suspended until a gesture. */
+async function unlockAudio() {
+  if (!state.context) return;
+  try {
+    if (state.context.state !== 'running') await state.context.resume();
+  } catch (error) {
+    console.error('resume failed:', error);
+  }
+  updateAudioState();
+}
+
+function updateAudioState() {
+  const state_ = state.context?.state ?? 'none';
+  const label = document.getElementById('audio-state');
+  if (label) label.textContent = state_;
+  if (state.context) {
+    document.body.classList.toggle('suspended', state_ !== 'running');
+  }
+}
+
+// A beep that bypasses the unit: proves the browser's audio path works.
+function beep() {
+  if (!state.context) {
+    startAudio().then(beep);
+    return;
+  }
+  const oscillator = state.context.createOscillator();
+  const gain = state.context.createGain();
+  oscillator.frequency.value = 440;
+  gain.gain.value = 0.1;
+  oscillator.connect(gain).connect(state.context.destination);
+  oscillator.start();
+  oscillator.stop(state.context.currentTime + 0.4);
+  setStatus('beep 440 Hz - if you cannot hear it, the problem is the browser or the device volume');
 }
 
 function onWorkletMessage(event) {
@@ -93,7 +154,8 @@ function onWorkletMessage(event) {
       document.body.classList.remove('loading');
       buildControls(message.manifest);
       setStatus(`${message.manifest.name} | ${message.manifest.module} | ` +
-                `${message.sampleRate} Hz | block ${message.block}`);
+                `${message.sampleRate} Hz | block ${message.block} | audio ` +
+                `${state.context?.state ?? '?'}`);
       break;
     case 'error':
       state.resolveReady?.();
@@ -299,7 +361,24 @@ function buildKeyboard() {
 function noteOn(note) {
   const key = state.notes.get(String(note));
   key?.classList.add('down');
-  state.node?.port.postMessage({ type: 'noteOn', note, velocity: 100 });
+  const send = () => state.node?.port.postMessage({ type: 'noteOn', note, velocity: 100 });
+
+  // Playing a key before "Start audio" is the most common way to get silence:
+  // the key press is itself a user gesture, so start from it.
+  if (!state.context) {
+    startAudio()
+      .then(async () => {
+        await state.readyPromise;
+        if (key?.classList.contains('down')) send();
+      })
+      .catch(() => {});
+    return;
+  }
+  if (!state.ready) {
+    setStatus('loading the unit...');
+    return;
+  }
+  send();
 }
 
 function noteOff(note) {
@@ -371,6 +450,10 @@ function downloadWav(buffer) {
 
 // --- wiring -----------------------------------------------------------------
 
+document.addEventListener('pointerdown', () => {
+  if (state.context && state.context.state !== 'running') unlockAudio();
+});
+
 async function boot() {
   const params = new URLSearchParams(location.search);
   const units = await listUnits();
@@ -392,6 +475,7 @@ async function boot() {
   buildKeyboard();
 
   document.getElementById('start').addEventListener('click', startAudio);
+  document.getElementById('beep').addEventListener('click', beep);
   document.getElementById('panic').addEventListener('click', allNotesOff);
   document.getElementById('presets').addEventListener('change', (event) => {
     state.node?.port.postMessage({ type: 'preset', index: Number(event.target.value) });

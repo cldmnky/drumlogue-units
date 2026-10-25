@@ -14,6 +14,7 @@
         <strong id="unit-name">no unit</strong>
         <span id="status">loading...</span>
         <span class="load">dsp <b id="load">-</b></span>
+        <span class="audio">audio <b id="audio-state">none</b></span>
         <span id="level"></span>
       </div>
     </div>
@@ -21,6 +22,7 @@
       <label>unit<select id="units"></select></label>
       <label>preset<select id="presets"></select></label>
       <button id="start">Start audio</button>
+      <button id="beep" title="a plain 440 Hz beep, not through the unit">Beep</button>
       <button id="panic" title="all notes off">Panic</button>
       <button id="record">Record 2 s</button>
       <button id="benchmark" title="render one second of audio as fast as possible">Benchmark</button>

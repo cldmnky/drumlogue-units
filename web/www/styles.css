@@ -295,3 +295,7 @@ footer {
   border-color: var(--accent);
   color: var(--accent);
 }
+
+/* A suspended audio context is the usual reason for silence: make it obvious. */
+body.suspended #audio-state { color: #e06c6c; }
+.audio b { color: var(--accent-2); }
