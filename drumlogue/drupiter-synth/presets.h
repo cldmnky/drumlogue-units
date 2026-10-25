@@ -74,7 +74,7 @@ static const DrupiterPreset kFactoryPresets[12] = {
             32,   // PARAM_LFO_RATE: 32 (slow-to-moderate modulation rate)
             static_cast<uint8_t>(MOD_VCF_TYPE),  // PARAM_MOD_HUB: Currently editing VCF Type
             0,    // PARAM_MOD_AMT: 0% (no modulation, see hub_values below)
-            0     // PARAM_EFFECT: 0 (chorus effect off)
+            2     // PARAM_EFFECT: 2 (DRY - the minimal init patch ships without effects)
         },
         {
             // Hub values: Modulation routing and synth mode parameters (18 total destinations)
@@ -88,7 +88,7 @@ static const DrupiterPreset kFactoryPresets[12] = {
             0,    // MOD_LFO_DELAY: 0 (LFO starts immediately, no delay)
             0,    // MOD_LFO_WAVE: 0=TRI (triangle wave LFO - smooth, symmetrical)
             0,    // MOD_LFO_ENV_AMT: 0% (LFO shape not modulated by ADSR envelope)
-            100,  // MOD_VCA_LEVEL: 100% (volume at full output)
+            50,   // MOD_VCA_LEVEL: 50% (preset gain: the dry init patch sits at the bank RMS level)
             0,    // MOD_VCA_LFO: 0% (no tremolo effect - volume stable)
             0,    // MOD_VCA_KYBD: 0% (velocity doesn't control output level)
             50,   // MOD_ENV_KYBD: 50% (envelope respects keyboard center pitch)
@@ -186,7 +186,7 @@ static const DrupiterPreset kFactoryPresets[12] = {
             30,   // PARAM_OSC_MIX: 30% DCO2, 70% DCO1 (more DCO1 fundamental)
             71,   // PARAM_VCF_CUTOFF: 71% (bright, open filter)
             55,   // PARAM_VCF_RESONANCE: High resonance (55% - filter peak emphasized)
-            40,   // PARAM_VCF_KEYFLW: 40% keyboard tracking (moderate pitch sensitivity)
+            10,   // PARAM_VCF_KEYFLW: 10% (wide tracking drove the resonant LP past Nyquist up the keyboard)
             
             // Filter envelope: Musical, moderate dynamics
             4,    // PARAM_VCF_ATTACK: 4ms (slight envelope opening)
@@ -204,7 +204,7 @@ static const DrupiterPreset kFactoryPresets[12] = {
             50,   // PARAM_LFO_RATE: Moderate LFO for filter sweeps
             static_cast<uint8_t>(MOD_LFO_TO_VCF),  // Controlling filter cutoff
             0,    // PARAM_MOD_AMT: 0% (amount in hub_values)
-            0     // PARAM_EFFECT: Off
+            2     // PARAM_EFFECT: 2 (DRY - a sync lead needs an immediate, unsmeared onset)
         },
         {
             // Modulation: LFO drives filter for expressiveness
@@ -218,7 +218,7 @@ static const DrupiterPreset kFactoryPresets[12] = {
             0,    // MOD_LFO_DELAY: Immediate LFO sweep
             0,    // MOD_LFO_WAVE: Triangle LFO (smooth modulation)
             0,    // MOD_LFO_ENV_AMT: LFO not shaped by envelope
-            100,  // MOD_VCA_LEVEL: Full volume
+            50,   // MOD_VCA_LEVEL: 50% (preset gain: the dry lead sits at the bank RMS level)
             0,    // MOD_VCA_LFO: No tremolo
             0,    // MOD_VCA_KYBD: Volume stable
             50,   // MOD_ENV_KYBD: Envelope centered
@@ -249,20 +249,20 @@ static const DrupiterPreset kFactoryPresets[12] = {
             
             // Filter: Warm, smooth tone
             50,   // PARAM_OSC_MIX: 50% (equal blend of both oscillators)
-            63,   // PARAM_VCF_CUTOFF: 63% (medium-bright, warm tone)
-            20,   // PARAM_VCF_RESONANCE: Low (20% - smooth, no peaks)
+            68,   // PARAM_VCF_CUTOFF: 68% (slightly more open: the chorus costs ~4 dB of mono level)
+            40,   // PARAM_VCF_RESONANCE: 40% (still smooth; recovers some level lost in the chorus mono sum)
             20,   // PARAM_VCF_KEYFLW: 20% keyboard tracking (minimal pitch tracking)
             
             // Filter envelope: Slow, smooth evolution
             35,   // PARAM_VCF_ATTACK: 35ms (gradual filter opening - warm swell)
             39,   // PARAM_VCF_DECAY: Moderate decay from peak
-            55,   // PARAM_VCF_SUSTAIN: Medium sustain level
+            70,   // PARAM_VCF_SUSTAIN: 70% (filter stays open through the swell)
             39,   // PARAM_VCF_RELEASE: Moderate release (no abrupt cutoff)
             
             // Amplitude envelope: Slow swell and fade
             39,   // PARAM_VCA_ATTACK: 39ms (slow onset - pad swells in)
             39,   // PARAM_VCA_DECAY: Moderate decay
-            79,   // PARAM_VCA_SUSTAIN: High sustain (note rings for full duration)
+            100,  // PARAM_VCA_SUSTAIN: 100% (full sustain - the pad holds its level)
             55,   // PARAM_VCA_RELEASE: Long release (pad fades out slowly)
             
             // Modulation
@@ -379,8 +379,8 @@ static const DrupiterPreset kFactoryPresets[12] = {
             
             // Filter: Warm, non-aggressive
             50,   // PARAM_OSC_MIX: 50% (equal blend - important for fullness)
-            75,   // PARAM_VCF_CUTOFF: 75% (bright but warm, full harmonics)
-            16,   // PARAM_VCF_RESONANCE: Very low (16% - smooth, no peaks)
+            78,   // PARAM_VCF_CUTOFF: 78% (slightly more open: the chorus costs ~4 dB of mono level)
+            25,   // PARAM_VCF_RESONANCE: 25% (still smooth; recovers some level lost in the chorus mono sum)
             25,   // PARAM_VCF_KEYFLW: 25% keyboard tracking (minimal - consistent brightness)
             
             // Filter envelope: Long, smooth evolution
@@ -392,7 +392,7 @@ static const DrupiterPreset kFactoryPresets[12] = {
             // Amplitude envelope: Slow, orchestral feel
             51,   // PARAM_VCA_ATTACK: 51ms (slow onset - swells in like bowed strings)
             43,   // PARAM_VCA_DECAY: Moderate decay
-            79,   // PARAM_VCA_SUSTAIN: High sustain (full note duration)
+            100,  // PARAM_VCA_SUSTAIN: 100% (full sustain - bowed strings hold their level)
             63,   // PARAM_VCA_RELEASE: Very long release (fades gracefully)
             
             // Modulation
@@ -464,7 +464,7 @@ static const DrupiterPreset kFactoryPresets[12] = {
             45,   // PARAM_LFO_RATE: Moderate LFO (about 1Hz - noticeable PWM)
             static_cast<uint8_t>(MOD_LFO_TO_PWM),  // Controlling pulse width
             0,    // PARAM_MOD_AMT: 0% (amount in hub_values)
-            0     // PARAM_EFFECT: Off
+            2     // PARAM_EFFECT: 2 (DRY - the PWM is the animation; chorus only smeared the onset)
         },
         {
             // Modulation: LFO creates rich PWM modulation
@@ -478,7 +478,7 @@ static const DrupiterPreset kFactoryPresets[12] = {
             0,    // MOD_LFO_DELAY: Immediate PWM modulation
             0,    // MOD_LFO_WAVE: Triangle LFO (smooth PWM modulation)
             0,    // MOD_LFO_ENV_AMT: LFO not shaped
-            100,  // MOD_VCA_LEVEL: Full volume
+            51,   // MOD_VCA_LEVEL: 51% (preset gain: the dry lead sits at the bank RMS level)
             0,    // MOD_VCA_LFO: No tremolo
             0,    // MOD_VCA_KYBD: Volume stable
             50,   // MOD_ENV_KYBD: Envelope centered
@@ -496,21 +496,21 @@ static const DrupiterPreset kFactoryPresets[12] = {
         "HPF Bass",
         {
             // DCO1: Sawtooth for rich harmonics
-            0,    // PARAM_DCO1_OCT: 16' (deep bass)
+            1,    // PARAM_DCO1_OCT: 8' (16' put the fundamental under the high-pass; a high-passed bass must sit above it)
             0,    // PARAM_DCO1_WAVE: SAW (harmonic-rich)
             50,   // PARAM_DCO1_PW: 50% (not used)
             0,    // PARAM_XMOD: No cross-modulation
             
             // DCO2: Pulse for bite and attack
-            0,    // PARAM_DCO2_OCT: 16' (same deep range)
+            2,    // PARAM_DCO2_OCT: 8' (matches DCO1 - was 32', two octaves below the high-pass)
             2,    // PARAM_DCO2_WAVE: PULSE (bright attack)
             50,   // PARAM_DCO2_TUNE: Center (no detune)
             0,    // PARAM_SYNC: No sync
             
             // Filter: High-pass removes mud
             50,   // PARAM_OSC_MIX: 50% (equal blend)
-            55,   // PARAM_VCF_CUTOFF: 55% (moderate cutoff)
-            20,   // PARAM_VCF_RESONANCE: Low (20% - clean sound)
+            62,   // PARAM_VCF_CUTOFF: 62% (LP opens a little; the high-pass leaves little to filter)
+            30,   // PARAM_VCF_RESONANCE: 30% (still clean; restores level the high-pass removes)
             80,   // PARAM_VCF_KEYFLW: 80% keyboard tracking (filter follows pitch)
             
             // Filter envelope: Punchy dynamics
@@ -529,7 +529,7 @@ static const DrupiterPreset kFactoryPresets[12] = {
             32,   // PARAM_LFO_RATE: Moderate rate
             static_cast<uint8_t>(MOD_HPF),  // Controlling high-pass filter
             0,    // PARAM_MOD_AMT: 0% (amount in hub_values)
-            0     // PARAM_EFFECT: Off
+            2     // PARAM_EFFECT: 2 (DRY - a bass does not need chorus, and the wet path costs mono level)
         },
         {
             // Modulation: High-pass filter adds clarity
@@ -538,7 +538,7 @@ static const DrupiterPreset kFactoryPresets[12] = {
             0,    // MOD_LFO_TO_VCO: No vibrato
             0,    // MOD_ENV_TO_PWM: No envelope->PWM
             0,    // MOD_ENV_TO_VCF: No envelope->filter
-            45,   // MOD_HPF: 45% (removes mud, adds clarity and punch)
+            5,    // MOD_HPF: 5% (~120 Hz - removes the sub, keeps the bass audible)
             1,    // MOD_VCF_TYPE: LP24 (Moog-style filter)
             0,    // MOD_LFO_DELAY: N/A
             0,    // MOD_LFO_WAVE: Triangle (default)
@@ -574,8 +574,8 @@ static const DrupiterPreset kFactoryPresets[12] = {
             
             // Filter: Bandpass for nasal character
             50,   // PARAM_OSC_MIX: 50% (equal blend)
-            55,   // PARAM_VCF_CUTOFF: 55% (mid-range focus)
-            67,   // PARAM_VCF_RESONANCE: High (67% - emphasizes bandpass peak)
+            48,   // PARAM_VCF_CUTOFF: 48% (band sits on the harmonics - the most level a BP12 can give)
+            88,   // PARAM_VCF_RESONANCE: 88% (a resonant band-pass is the only gain stage here; still nasal)
             35,   // PARAM_VCF_KEYFLW: 35% keyboard tracking (moderate)
             
             // Filter envelope: Shapes the bandpass response
@@ -594,7 +594,7 @@ static const DrupiterPreset kFactoryPresets[12] = {
             40,   // PARAM_LFO_RATE: Moderate rate
             static_cast<uint8_t>(MOD_VCF_TYPE),  // Controlling filter type
             0,    // PARAM_MOD_AMT: 0% (amount in hub_values)
-            0     // PARAM_EFFECT: Off
+            2     // PARAM_EFFECT: 2 (DRY - keeps the band-pass level and its tight onset)
         },
         {
             // Modulation: Bandpass filter creates nasal character
@@ -660,7 +660,7 @@ static const DrupiterPreset kFactoryPresets[12] = {
             36,   // PARAM_LFO_RATE: Moderate rate
             static_cast<uint8_t>(MOD_LFO_TO_VCO),  // Could control cross-mod if implemented
             0,    // PARAM_MOD_AMT: 0%
-            0     // PARAM_EFFECT: Off
+            2     // PARAM_EFFECT: 2 (DRY - keeps the poly voices at the bank level)
         },
         {
             // Modulation: Polyphonic brass with cross-modulation
@@ -674,7 +674,7 @@ static const DrupiterPreset kFactoryPresets[12] = {
             0,    // MOD_LFO_DELAY: N/A
             0,    // MOD_LFO_WAVE: Triangle (default)
             0,    // MOD_LFO_ENV_AMT: N/A
-            95,   // MOD_VCA_LEVEL: 95% (slight headroom for polyphony)
+            100,  // MOD_VCA_LEVEL: 100% (full preset gain)
             0,    // MOD_VCA_LFO: No tremolo
             0,    // MOD_VCA_KYBD: Volume stable
             50,   // MOD_ENV_KYBD: Envelope centered
@@ -705,27 +705,27 @@ static const DrupiterPreset kFactoryPresets[12] = {
             
             // Filter: Warm, smooth
             50,   // PARAM_OSC_MIX: 50% (equal blend)
-            59,   // PARAM_VCF_CUTOFF: 59% (warm but present)
-            16,   // PARAM_VCF_RESONANCE: Low (16% - smooth)
+            68,   // PARAM_VCF_CUTOFF: 68% (open enough to carry the pad through the chorus mono loss)
+            40,   // PARAM_VCF_RESONANCE: 40% (recovers level the wet path loses in the mono sum)
             25,   // PARAM_VCF_KEYFLW: 25% keyboard tracking (minimal)
             
             // Filter envelope: Slow evolution
             31,   // PARAM_VCF_ATTACK: 31ms (slow filter swell)
             39,   // PARAM_VCF_DECAY: Moderate decay
-            55,   // PARAM_VCF_SUSTAIN: Medium sustain
+            70,   // PARAM_VCF_SUSTAIN: 70% (filter stays open through the swell)
             43,   // PARAM_VCF_RELEASE: Long release
             
             // Amplitude envelope: Slow, lush
             35,   // PARAM_VCA_ATTACK: 35ms (slow onset - pad swells in)
-            43,   // PARAM_VCA_DECAY: Moderate decay
-            79,   // PARAM_VCA_SUSTAIN: High sustain
+            55,   // PARAM_VCA_DECAY: slower decay to sustain - holds the pad level
+            100,  // PARAM_VCA_SUSTAIN: 100% (full sustain - the pad holds its level)
             59,   // PARAM_VCA_RELEASE: Very long release
             
             // Modulation: Gentle vibrato
             28,   // PARAM_LFO_RATE: Slow LFO (gentle modulation)
             static_cast<uint8_t>(MOD_LFO_TO_VCO),  // Controlling pitch
             0,    // PARAM_MOD_AMT: 0% (amount in hub_values)
-            1     // PARAM_EFFECT: CHORUS (adds width and movement)
+            0     // PARAM_EFFECT: 0 (CHORUS - the effect this preset is named after)
         },
         {
             // Modulation: Chorus effect with gentle vibrato
@@ -769,10 +769,10 @@ static const DrupiterPreset kFactoryPresets[12] = {
             0,    // PARAM_SYNC: No sync
             
             // Filter: Clean and bright
-            50,   // PARAM_OSC_MIX: 50% (equal blend)
+            0,    // PARAM_OSC_MIX: 0 (DCO1 only: two identical saws summed at an arbitrary phase, so the level and onset depended on the phase)
             71,   // PARAM_VCF_CUTOFF: 71% (bright and clear)
             20,   // PARAM_VCF_RESONANCE: Low (20% - clean sound)
-            40,   // PARAM_VCF_KEYFLW: 40% keyboard tracking (moderate)
+            20,   // PARAM_VCF_KEYFLW: 20% (flat enough that later notes no longer out-peak the first)
             
             // Filter envelope: Moderate dynamics
             12,   // PARAM_VCF_ATTACK: 12ms (quick response)
@@ -790,7 +790,7 @@ static const DrupiterPreset kFactoryPresets[12] = {
             55,   // PARAM_LFO_RATE: Faster LFO (more noticeable vibrato)
             static_cast<uint8_t>(MOD_LFO_WAVE),  // Controlling LFO waveform
             0,    // PARAM_MOD_AMT: 0% (amount in hub_values)
-            0     // PARAM_EFFECT: Off
+            2     // PARAM_EFFECT: 2 (DRY - the point is the square-wave vibrato, not chorus)
         },
         {
             // Modulation: Square wave creates stepped vibrato
@@ -804,7 +804,7 @@ static const DrupiterPreset kFactoryPresets[12] = {
             0,    // MOD_LFO_DELAY: Immediate vibrato
             2,    // MOD_LFO_WAVE: SQR (square wave - stepped vibrato)
             0,    // MOD_LFO_ENV_AMT: LFO not shaped
-            100,  // MOD_VCA_LEVEL: Full volume
+            52,   // MOD_VCA_LEVEL: 52% (preset gain: the dry patch sits at the bank RMS level)
             0,    // MOD_VCA_LFO: No tremolo
             0,    // MOD_VCA_KYBD: Volume stable
             50,   // MOD_ENV_KYBD: Envelope centered
