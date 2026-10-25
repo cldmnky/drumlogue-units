@@ -20,6 +20,7 @@ function makeWasi() {
       proc_exit: () => { throw new Error('unit called proc_exit'); },
       fd_write: () => 0,
       fd_close: () => 0,
+      fd_read: () => 0,
       fd_seek: () => 0,
       fd_fdstat_get: () => 0,
       fd_fdstat_set_flags: () => 0,
@@ -52,6 +53,17 @@ function makeWasi() {
       emscripten_memcpy_big: (dest, src, num) => {
         new Uint8Array(memory.buffer).copyWithin(dest, src, src + num);
         return dest;
+      },
+      // Some units reach for these through libc (uname, directory reads).
+      __syscall_getdents64: () => 0,
+      __syscall_uname: (buffer) => {
+        const bytes = new Uint8Array(memory.buffer);
+        bytes.fill(0, buffer, buffer + 390);
+        for (const [offset, text] of [[0, 'wasm'], [65, 'wasm'], [130, 'wasm'],
+                                      [195, '1.0'], [260, 'wasm'], [325, 'wasm']]) {
+          for (let i = 0; i < text.length; i++) bytes[buffer + offset + i] = text.charCodeAt(i);
+        }
+        return 0;
       },
     },
   };
@@ -101,7 +113,10 @@ class UnitProcessor extends AudioWorkletProcessor {
     this.channels = 2;
     this.ready = false;
     this.noteCount = 0;
-    this.capture = null;          // {frames, left, right} while recording
+    this.capture = null;          // {left, right, frames, limit} while recording
+    this.heap = null;
+    this.inputMode = 'silence';   // 'silence' or 'tone': effect units need audio in
+    this.inputPhase = 0;
     this.reportAt = 0;
     this.windowStarted = 0;
     this.blocks = 0;
@@ -144,6 +159,9 @@ class UnitProcessor extends AudioWorkletProcessor {
       case 'params':
         this.sendParamValues();
         break;
+      case 'input':
+        this.inputMode = message.mode;
+        break;
       case 'benchmark': {
         if (!this.ready) break;
         const seconds = message.seconds || 1;
@@ -155,6 +173,10 @@ class UnitProcessor extends AudioWorkletProcessor {
         break;
       }
       case 'startCapture':
+        if (!this.ready) {
+          this.port.postMessage({ type: 'error', message: 'start the unit first' });
+          break;
+        }
         this.capture = { left: [], right: [], frames: 0,
                          limit: Math.round(message.seconds * sampleRate) };
         break;
@@ -177,7 +199,12 @@ class UnitProcessor extends AudioWorkletProcessor {
       const { instance } = await WebAssembly.instantiate(wasm, wasi.imports);
       this.exports = instance.exports;
       this.memory = instance.exports.memory;
+      this.heap = new Float32Array(this.memory.buffer);
       wasi.attach(this.memory);
+      // Emscripten reactor builds export _initialize(), which runs the units'
+      // C++ static constructors (preset tables, lookup tables). Skipping it
+      // leaves some units silent - drupiter initialises but never sounds.
+      if (typeof this.exports._initialize === 'function') this.exports._initialize();
       this.channels = this.exports.host_channels();
 
       const result = this.exports.host_init(rate, this.block);
@@ -236,12 +263,23 @@ class UnitProcessor extends AudioWorkletProcessor {
     }
 
     const frames = out[0].length;
-    const heap = new Float32Array(this.memory.buffer);
+    const heap = this.heap;             // fixed memory: cached after load
     const outPointer = this.exports.host_out_ptr() >> 2;
     if (this.windowStarted === 0) this.windowStarted = Date.now();
 
+    const inputPointer = this.exports.host_in_ptr() >> 2;
     for (let offset = 0; offset < frames; offset += this.block) {
       const count = Math.min(this.block, frames - offset);
+      if (this.inputMode === 'tone') {
+        // A 220Hz tone so effect units (reverb, delay, master fx) have
+        // something to chew on; synth units ignore their input entirely.
+        for (let i = 0; i < count; i++) {
+          const value = 0.25 * Math.sin((2 * Math.PI * 220 * (this.inputPhase + i)) / sampleRate);
+          heap[inputPointer + i * 2] = value;
+          heap[inputPointer + i * 2 + 1] = value;
+        }
+        this.inputPhase += count;
+      }
       this.exports.host_render(count);
       for (let i = 0; i < count; i++) {
         const left = heap[outPointer + i * 2];

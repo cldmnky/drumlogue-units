@@ -26,6 +26,19 @@
 #define HOST_STRING_CAP 128
 
 static unit_runtime_desc_t s_desc;
+
+/** Whether this unit processes an input (a reverb, delay or master effect). */
+static int HostNeedsInput(void) {
+    switch (unit_header.target & 0xFFu) {
+        case k_unit_module_modfx:
+        case k_unit_module_delfx:
+        case k_unit_module_revfx:
+        case k_unit_module_masterfx:
+            return 1;
+        default:
+            return 0;
+    }
+}
 static float s_out[HOST_MAX_FRAMES * HOST_OUT_CHANNELS];
 static float s_in[HOST_MAX_FRAMES * HOST_OUT_CHANNELS];
 static int s_frames_per_buffer = 64;
@@ -127,14 +140,14 @@ extern "C" {
 int host_init(int samplerate, int frames_per_buffer) {
     if (samplerate <= 0 || frames_per_buffer < 1 ||
         frames_per_buffer > HOST_MAX_FRAMES) {
-        return -1;
+        return -100;  // host argument error, outside the SDK's error range
     }
     memset(&s_desc, 0, sizeof(s_desc));
     s_desc.target = unit_header.target;
     s_desc.api = UNIT_API_VERSION;
     s_desc.samplerate = (uint32_t)samplerate;
     s_desc.frames_per_buffer = (uint16_t)frames_per_buffer;
-    s_desc.input_channels = 0;
+    s_desc.input_channels = (uint8_t)(HostNeedsInput() ? HOST_OUT_CHANNELS : 0);
     s_desc.output_channels = HOST_OUT_CHANNELS;
     s_desc.get_num_sample_banks = HostSampleBanks;
     s_desc.get_num_samples_for_bank = HostSamplesForBank;
@@ -224,7 +237,7 @@ const char *host_manifest_ptr(void) { return s_manifest; }
  * @return the length of the written JSON.
  */
 int host_manifest(void) {
-    static const int kMaxValues = 64;
+    static const int kMaxValues = 256;
     Writer writer;
     WriterInit(&writer, s_manifest, HOST_MANIFEST_CAP);
 
@@ -234,6 +247,8 @@ int host_manifest(void) {
                (unsigned)unit_header.api);
     WriterText(&writer, ",\"numParams\":%u,\"numPresets\":%u",
                (unsigned)unit_header.num_params, (unsigned)unit_header.num_presets);
+    WriterText(&writer, ",\"moduleType\":%u,\"module\":", (unsigned)(unit_header.target & 0xFFu));
+    WriterJsonString(&writer, HostNeedsInput() ? "effect" : "synth");
 
     WriterText(&writer, ",\"params\":[");
     for (uint32_t i = 0; i < unit_header.num_params; i++) {
@@ -256,10 +271,11 @@ int host_manifest(void) {
             const int count = (int)param->max - (int)param->min + 1;
             int emitted = 0;
             for (int value = param->min; value <= param->max && emitted < kMaxValues; value++) {
+                // A NULL label still occupies a slot: the UI maps a value to
+                // values[value - valueMin], so skipping one would shift the rest.
                 const char *text = unit_get_param_str_value((uint8_t)i, (int32_t)value);
-                if (text == NULL) continue;
                 if (emitted > 0) WriterText(&writer, ",");
-                WriterJsonString(&writer, text);
+                WriterJsonString(&writer, text != NULL ? text : "");
                 emitted++;
             }
             WriterText(&writer, "],\"valueMin\":%d,\"valueCount\":%d", (int)param->min,

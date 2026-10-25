@@ -14,6 +14,8 @@ const state = {
   params: new Map(),        // index -> { param, input, label }
   notes: new Map(),         // note -> widget element
   presetIndex: 0,
+  page: -1,                 // -1 shows every parameter
+  paramsPerPage: 4,         // the drumlogue shows four at a time
   octave: 3,
   midi: null,
   readyPromise: null,
@@ -83,12 +85,18 @@ function onWorkletMessage(event) {
       state.manifest = message.manifest;
       state.ready = true;
       state.resolveReady?.();
+      if (message.manifest.module === 'effect') {
+        document.getElementById('input').value = 'tone';
+        state.node.port.postMessage({ type: 'input', mode: 'tone' });
+      }
       document.getElementById('unit-name').textContent = message.manifest.name;
       document.body.classList.remove('loading');
       buildControls(message.manifest);
-      setStatus(`${message.manifest.name} | ${message.sampleRate} Hz | block ${message.block}`);
+      setStatus(`${message.manifest.name} | ${message.manifest.module} | ` +
+                `${message.sampleRate} Hz | block ${message.block}`);
       break;
     case 'error':
+      state.resolveReady?.();
       setStatus(`error: ${message.message}`);
       console.error('unit error:', message.message);
       break;
@@ -138,6 +146,7 @@ function buildControls(manifest) {
   const container = document.getElementById('params');
   container.innerHTML = '';
   state.params.clear();
+  buildPages(manifest);
 
   for (const param of manifest.params) {
     const row = document.createElement('div');
@@ -196,6 +205,37 @@ function buildControls(manifest) {
   if (manifest.presets.length > 0) {
     presets.value = String(state.presetIndex);
     presets.dispatchEvent(new Event('change'));
+  }
+}
+
+// The drumlogue groups its parameters into pages of four; offer the same view.
+function buildPages(manifest) {
+  const pages = document.getElementById('pages');
+  pages.innerHTML = '';
+  const count = Math.ceil(manifest.params.length / state.paramsPerPage);
+  const options = [{ page: -1, label: 'All' }];
+  for (let page = 0; page < count; page++) options.push({ page, label: String(page + 1) });
+  for (const option of options) {
+    const button = document.createElement('button');
+    button.textContent = option.label;
+    button.classList.toggle('active', option.page === state.page);
+    button.addEventListener('click', () => {
+      state.page = option.page;
+      document.querySelectorAll('#pages button').forEach((each) => each.classList.remove('active'));
+      button.classList.add('active');
+      applyPageFilter();
+    });
+    pages.appendChild(button);
+  }
+  applyPageFilter();
+}
+
+function applyPageFilter() {
+  for (const { param, input } of state.params.values()) {
+    const visible = state.page < 0 ||
+      Math.floor(param.index / state.paramsPerPage) === state.page;
+    const row = input.closest('.param');
+    if (row) row.style.display = visible ? '' : 'none';
   }
 }
 
@@ -282,6 +322,8 @@ window.addEventListener('keydown', (event) => {
   noteOn(state.octave * 12 + offset);
 });
 
+window.addEventListener('blur', allNotesOff);
+
 window.addEventListener('keyup', (event) => {
   const offset = COMPUTER_KEYS[event.key.toLowerCase()];
   if (offset === undefined) return;
@@ -350,15 +392,15 @@ async function boot() {
   buildKeyboard();
 
   document.getElementById('start').addEventListener('click', startAudio);
-  document.getElementById('panic').addEventListener('click', () => {
-    state.node?.port.postMessage({ type: 'allNotesOff' });
-    document.querySelectorAll('.key.down').forEach((key) => key.classList.remove('down'));
-  });
+  document.getElementById('panic').addEventListener('click', allNotesOff);
   document.getElementById('presets').addEventListener('change', (event) => {
     state.node?.port.postMessage({ type: 'preset', index: Number(event.target.value) });
   });
   document.getElementById('volume').addEventListener('input', (event) => {
     if (state.gain) state.gain.gain.value = Number(event.target.value);
+  });
+  document.getElementById('input').addEventListener('change', (event) => {
+    state.node?.port.postMessage({ type: 'input', mode: event.target.value });
   });
   document.getElementById('midi').addEventListener('click', enableMidi);
   document.getElementById('benchmark').addEventListener('click', async () => {
@@ -392,9 +434,15 @@ async function boot() {
   setStatus(`${state.unit}: press "Start audio"`);
 }
 
+function allNotesOff() {
+  state.node?.port.postMessage({ type: 'allNotesOff' });
+  document.querySelectorAll('.key.down').forEach((key) => key.classList.remove('down'));
+}
+
 function shiftOctave(delta) {
   const next = Math.min(7, Math.max(0, state.octave + delta));
   if (next === state.octave) return;
+  allNotesOff();
   state.octave = next;
   document.getElementById('keyboard').innerHTML = '';
   state.notes.clear();

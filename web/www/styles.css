@@ -277,3 +277,21 @@ footer {
   color: var(--dim);
   font-size: 13px;
 }
+
+/* Parameter pages: the drumlogue shows four parameters at a time. */
+.pages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.pages button {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+
+.pages button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}

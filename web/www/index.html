@@ -26,6 +26,10 @@
       <button id="benchmark" title="render one second of audio as fast as possible">Benchmark</button>
       <button id="selftest" title="play a chord and measure it">Self-test</button>
       <button id="midi">MIDI</button>
+      <label>in<select id="input">
+        <option value="silence">silence</option>
+        <option value="tone">tone</option>
+      </select></label>
       <label class="volume">vol
         <input id="volume" type="range" min="0" max="1" step="0.01" value="0.8">
       </label>
@@ -33,6 +37,7 @@
   </header>
 
   <main>
+    <nav id="pages" class="pages" aria-label="parameter pages"></nav>
     <section id="params" class="params" aria-label="parameters">
       <p class="hint">Press "Start audio" to load the unit’s controls.</p>
     </section>

@@ -74,8 +74,14 @@ spec:
                 path: styles.css
               - key: units-index.json
                 path: units/index.json
-              - key: unit-wasm
+              - key: unit-pepege-synth
                 path: units/pepege-synth.wasm
+              - key: unit-clouds-revfx
+                path: units/clouds-revfx.wasm
+              - key: unit-elementish-synth
+                path: units/elementish-synth.wasm
+              - key: unit-drupiter-synth
+                path: units/drupiter-synth.wasm
 ---
 apiVersion: v1
 kind: Service

@@ -1,1 +1,99 @@
+# Prerequisites
+*.d
+
+# Object files
+*.o
+*.ko
+*.obj
+*.elf
+
+# Linker output
+*.ilk
+*.map
+# ...but version scripts are source, not build output
+!drumlogue/*/unit_exports.map
+*.exp
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Libraries
+*.lib
+*.a
+*.la
+*.lo
+
+# Shared objects (inc. Windows DLLs)
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Test presets-editor vendor dependencies
+test/presets-editor/vendor/
+
+# Executables
+*.exe
+*.out
+*.app
+*.i*86
+*.x86_64
+*.hex
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Kernel Module Compile Results
+*.mod*
+*.cmd
+.tmp_versions/
+modules.order
+Module.symvers
+Mkfile.old
+dkms.conf
+
+# debug information files
+*.dwo
+
+# Drumlogue build artifacts
+build/
+.dep/
+*.bin
+*.dmp
+*.list
+*.lst
+*.drmlgunit
+
+.mcp-debug-tools/
+drumlogue/druteus/tmp
+.DS_Store
+Thumbs.db
+test/elements-synth/elements_synth_test
+test/drupiter-synth/drupiter_test
+test/drupiter-synth/perf_test
+test/drupiter-synth/fixtures/
+test/pepege-synth/pepege_test
+test/pepege-synth/perf_test
+test/pepege-synth/wave_analysis
+test/pepege-synth/*.wav
+test/*.log
+
+# UI test artifacts
+test/ui/ui_player
+test/ui/ui_player_arm
+test/ui/*.o
+
+# QEMU test artifacts
+test/qemu-arm/unit_host_arm
+test/qemu-arm/unit_host_native
+test/qemu-arm/*.o
+test/qemu-arm/build/
+test/qemu-arm/*.core
+test/qemu-arm/fixtures/*.wav
+
+test/presets-editor/bin/
 web/www/units/*.wasm
