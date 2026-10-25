@@ -54,7 +54,23 @@ serve:
 	@echo "http://localhost:8000/"
 	@python3 -m http.server 8000 --directory www
 
+# Serve the built site from a ConfigMap on OpenShift; see deploy/README.md.
+NAMESPACE ?= pi-pocket
+deploy:
+	kubectl create configmap drumlogue-web -n $(NAMESPACE) \
+	  --from-file=index.html=www/index.html \
+	  --from-file=app.js=www/app.js \
+	  --from-file=worklet.js=www/worklet.js \
+	  --from-file=styles.css=www/styles.css \
+	  --from-file=units-index.json=www/units/index.json \
+	  --from-file=unit-wasm=www/units/$(UNIT).wasm \
+	  --dry-run=client -o yaml | kubectl apply -f -
+	kubectl apply -f ../deploy/drumlogue-web.yaml -n $(NAMESPACE)
+	kubectl rollout restart deployment/drumlogue-web -n $(NAMESPACE)
+	kubectl get route drumlogue-web -n $(NAMESPACE) \
+	  -o jsonpath='https://{.spec.host}{"\n"}'
+
 clean:
 	rm -rf $(OUT_DIR)
 
-.PHONY: all index serve clean
+.PHONY: all index serve deploy clean

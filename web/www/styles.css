@@ -270,3 +270,10 @@ footer {
 @media (max-width: 420px) {
   .params { grid-template-columns: 1fr; }
 }
+
+.hint {
+  grid-column: 1 / -1;
+  margin: 8px 2px;
+  color: var(--dim);
+  font-size: 13px;
+}

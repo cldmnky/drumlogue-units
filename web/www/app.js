@@ -223,10 +223,13 @@ function buildKeyboard() {
       octaveElement.appendChild(key);
       state.notes.set(key.dataset.note, key);
     }
+    const octaveWidth = 100 / 7;      // percent of an octave per white key
+    const blackWidth = 9;             // percent, matches .key.black in the CSS
     for (const [semitone, slot] of Object.entries(black)) {
       const key = document.createElement('button');
       key.className = 'key black';
-      key.style.left = `calc(${(Number(slot) + 1) * (100 / 7)}% - (100 / 7) * 0.3)`;
+      // Centre the black key on the boundary after `slot` white keys.
+      key.style.left = `${(Number(slot) + 1) * octaveWidth - blackWidth / 2}%`;
       key.dataset.note = String((state.octave + octave) * 12 + Number(semitone));
       key.textContent = '';
       octaveElement.appendChild(key);
