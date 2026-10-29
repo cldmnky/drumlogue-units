@@ -1,0 +1,119 @@
+# Runs the web emulator as a static site on OpenShift.
+#
+# The site is a ConfigMap rather than an image: the emulator is a handful of
+# text files plus one WebAssembly module, so there is nothing to build. The
+# volume projects the flat ConfigMap keys back into the paths the page expects
+# (a ConfigMap key cannot contain a slash).
+#
+# Apply with:
+#   kubectl apply -f deploy/drumlogue-web.yaml
+# after creating the ConfigMap (see deploy/README.md).
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: drumlogue-web
+  labels:
+    app.kubernetes.io/name: drumlogue-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: drumlogue-web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: drumlogue-web
+    spec:
+      # The cluster assigns a UID from the namespace range (restricted SCC);
+      # the site is read-only, so any UID works.
+      containers:
+        - name: web
+          image: docker.io/library/python:3.12-alpine
+          command: ["python3", "-m", "http.server", "8000", "--directory", "/site"]
+          ports:
+            - name: http
+              containerPort: 8000
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          readinessProbe:
+            httpGet:
+              path: /index.html
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          volumeMounts:
+            - name: site
+              mountPath: /site
+              readOnly: true
+      volumes:
+        - name: site
+          configMap:
+            name: drumlogue-web
+            items:
+              - key: index.html
+                path: index.html
+              - key: app.js
+                path: app.js
+              - key: worklet.js
+                path: worklet.js
+              - key: unit-host.js
+                path: unit-host.js
+              - key: styles.css
+                path: styles.css
+              - key: units-index.json
+                path: units/index.json
+              - key: unit-pepege-synth
+                path: units/pepege-synth.wasm
+              - key: unit-clouds-revfx
+                path: units/clouds-revfx.wasm
+              - key: unit-elementish-synth
+                path: units/elementish-synth.wasm
+              - key: unit-drupiter-synth
+                path: units/drupiter-synth.wasm
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: drumlogue-web
+  labels:
+    app.kubernetes.io/name: drumlogue-web
+spec:
+  selector:
+    app.kubernetes.io/name: drumlogue-web
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: drumlogue-web
+  labels:
+    app.kubernetes.io/name: drumlogue-web
+spec:
+  to:
+    kind: Service
+    name: drumlogue-web
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    # HTTPS matters: AudioWorklet is only available in a secure context.
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

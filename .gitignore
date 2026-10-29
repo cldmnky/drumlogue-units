@@ -96,3 +96,4 @@ test/qemu-arm/*.core
 test/qemu-arm/fixtures/*.wav
 
 test/presets-editor/bin/
+web/www/units/*.wasm

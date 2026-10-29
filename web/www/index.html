@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>drumlogue web emulator</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="loading">
+  <div id="banner" class="banner" hidden></div>
+  <header>
+    <div class="title">
+      <h1>drumlogue <span>web emulator</span></h1>
+      <div class="statusline">
+        <strong id="unit-name">no unit</strong>
+        <span id="status">loading...</span>
+        <span class="load">dsp <b id="load">-</b></span>
+        <span class="audio">audio <b id="audio-state">none</b></span>
+        <span id="level"></span>
+      </div>
+    </div>
+    <div class="controls">
+      <label>unit<select id="units"></select></label>
+      <label>preset<select id="presets"></select></label>
+      <button id="start">Start audio</button>
+      <button id="beep" title="a plain 440 Hz beep, not through the unit">Beep</button>
+      <button id="panic" title="all notes off">Panic</button>
+      <button id="record">Record 2 s</button>
+      <button id="benchmark" title="render one second of audio as fast as possible">Benchmark</button>
+      <button id="selftest" title="play a chord and measure it">Self-test</button>
+      <button id="midi">MIDI</button>
+      <label>in<select id="input">
+        <option value="silence">silence</option>
+        <option value="tone">tone</option>
+      </select></label>
+      <label class="volume">vol
+        <input id="volume" type="range" min="0" max="1" step="0.01" value="0.8">
+      </label>
+    </div>
+  </header>
+
+  <main>
+    <nav id="pages" class="pages" aria-label="parameter pages"></nav>
+    <section id="params" class="params" aria-label="parameters">
+      <p class="hint">Press "Start audio" to load the unit’s controls.</p>
+    </section>
+  </main>
+
+  <footer>
+    <div class="octave-controls">
+      <button id="octave-down" aria-label="octave down">&minus;</button>
+      <span id="octave">C3</span>
+      <button id="octave-up" aria-label="octave up">+</button>
+    </div>
+    <div id="keyboard" class="keyboard" aria-label="keyboard"></div>
+  </footer>
+
+  <script src="unit-host.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
