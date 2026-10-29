@@ -978,107 +978,107 @@ private:
     static constexpr uint8_t kNumPresets = 6;
     
     // Presets are voiced for the PPG-style banks
+    // Voiced against the real PPG tables: measured for level, onset, brightness
+    // and headroom, then auditioned, so each name matches what it sounds like.
+    // Envelope parameters are exponential, not linear: attack 0-127 maps to
+    // 1ms-8s and decay/release to 5ms-12s, with most of the range at the top.
     static constexpr Preset kPresets[kNumPresets] = {
-        // 0: Glass Keys  (A 04 Bellish, B 02 MalletSyn)
-        // Sustain 68: two voices at full-scale waves reach the mix clamp at the
-        // top of the keyboard, so the preset keeps some headroom.
+        // 0: Glass Keys - immediate, bright, crystalline. Bellish over
+        // MalletSyn, LP24, only a hint of morph movement.
         {
             {
-                /*A BANK*/4, /*A MORPH*/96, /*A OCT*/0, /*A TUNE*/0,
-                /*B BANK*/2, /*B MORPH*/64, /*B OCT*/0, /*MODE*/0,
-                /*CUTOFF*/96, /*RESO*/30, /*FLT ENV*/20, /*FLT TYP*/1,
-                /*ATTACK*/5, /*DECAY*/60, /*SUST*/68, /*REL*/50,
-                /*F.ATK*/10, /*F.DCY*/60, /*F.SUS*/50, /*F.REL*/60,
-                /*MOD SEL*/0, /*MOD VAL*/64, /*OSC MIX*/16, /*SPACE*/10
+                /*A BANK*/4, /*A MORPH*/100, /*A OCT*/0, /*A TUNE*/0,
+                /*B BANK*/2, /*B MORPH*/70, /*B OCT*/0, /*MODE*/0,
+                /*CUTOFF*/96, /*RESO*/28, /*FLT ENV*/25, /*FLT TYP*/1,
+                /*ATTACK*/2, /*DECAY*/70, /*SUST*/88, /*REL*/60,
+                /*F.ATK*/2, /*F.DCY*/70, /*F.SUS*/60, /*F.REL*/60,
+                /*MOD SEL*/0, /*MOD VAL*/64, /*OSC MIX*/22, /*SPACE*/12
             },
             {
-                /*LFO RT*/45, /*LFO SHP*/0, /*LFO>MOR*/80, /*LFO>FLT*/64,
-                /*VEL>F*/40, /*KEYTRK*/80, /*DETUNE*/64, /*PB RNG*/32
+                /*LFO RT*/40, /*LFO SHP*/0, /*LFO>MOR*/52, /*LFO>FLT*/50,
+                /*VEL>F*/50, /*KEYTRK*/89, /*DETUNE*/64, /*PB RNG*/32
             }
         },
-        // 1: Dust Pad  (A 07 MellowSaw, B 06 Saw-Sweep)
-        // A morph 80: MellowSaw's slot-100 wave is hot enough to clip at
-        // sustain 100; the softer region keeps the pad's character.
+        // 1: Dust Pad - slow (attack ~0.5s, release ~1s), soft and wide. Low
+        // cutoff, LP12, gentle modulation.
         {
             {
-                7, 80, -1, 0,
-                6, 90, 0, 0,
-                70, 25, 50, 0,
-                40, 90, 100, 80,
-                30, 80, 80, 70,
-                0, 64, 0, 40
+                7, 40, -1, 0,
+                6, 30, 0, 0,
+                55, 15, 20, 0,
+                95, 95, 100, 100,
+                88, 95, 70, 95,
+                0, 64, 0, 70
             },
             {
-                30, 0, 90, 70,
-                20, 90, 64, 32
+                22, 0, 58, 44,
+                25, 76, 84, 32
             }
         },
-        // 2: Sync Bass  (A 23 ClipSweep, B 03 Sqr-Sweep)
-        // Clipper's waves are all near full scale, so two voices hit the mix
-        // clamp at any morph/reso/cutoff; the clipped-bass role sits on the
-        // quieter ClipSweep table instead.
+        // 2: Sync Bass - weight and punch: Saw-Sweep and Sqr-Sweep an octave
+        // down, LP24 with resonance, a fast filter envelope, no modulation.
         {
             {
-                23, 64, -1, -5,
-                3, 70, -1, 2,
-                60, 70, 40, 1,
-                2, 50, 70, 25,
-                5, 70, 40, 40,
-                0, 64, 0, -20
+                6, 20, -1, 0,
+                3, 30, -1, 0,
+                42, 38, 55, 1,
+                1, 65, 60, 45,
+                1, 60, 15, 40,
+                0, 64, -20, -20
             },
             {
-                60, 100, 40, 30,
-                30, 70, 80, 96
+                55, 0, 50, 50,
+                45, 50, 64, 0
             }
         },
-        // 3: Noise Sweep FX  (A 18 Transient, B 19 ElectricP)
-        // HP12 at cutoff 90 sits at ~9kHz, above these notes' content, so the
-        // preset was near-silent. Move the sweep into the audible band and
-        // invert the envelope so it opens downward instead of closing.
+        // 3: Noise Sweep - the least harmonic waves in the ROM (Formant 2,
+        // whose slots 54-58 carry waves 205-207), through a high-pass with a
+        // slow envelope and a deep LFO sweep: air rather than pitch.
         {
             {
-                18, 64, 0, 0,
-                19, 32, 0, 1,
-                60, 20, -64, 2,
-                0, 70, 80, 40,
-                0, 90, 20, 50,
-                0, 64, -10, 50
+                26, 70, 0, 0,
+                26, 80, 0, 0,
+                35, 50, 40, 2,
+                30, 100, 95, 90,
+                85, 95, 80, 85,
+                0, 64, 0, 75
             },
             {
-                20, 120, 90, 90,
-                10, 0, 64, 64
+                18, 0, 65, 75,
+                20, 30, 84, 64
             }
         },
-        // 4: Pluck  (A 05 Pul-Sweep, B 02 MalletSyn)
-        // A morph 8: Pul-Sweep's later slots are hot enough to reach the mix
-        // clamp at the top of the keyboard; the opening slots keep the pluck.
+        // 4: Pluck - the envelopes do everything: instant attack, decay to
+        // silence in ~250ms, no LFO, velocity and key tracking on the filter.
         {
             {
-                5, 8, 0, 0,
-                2, 50, 0, 0,
-                90, 20, 50, 1,
-                2, 40, 80, 25,
-                2, 60, 30, 30,
-                0, 64, 0, 15
+                5, 20, 0, 0,
+                2, 40, 0, 0,
+                68, 40, 60, 0,
+                0, 88, 0, 70,
+                0, 85, 0, 75,
+                0, 64, 0, 20
             },
             {
-                80, 0, 50, 30,
-                60, 70, 70, 32
+                80, 0, 50, 50,
+                76, 76, 64, 32
             }
         },
-        // 5: PWM Lead  (A 15 SquareSaw, B 12 HighHarm)
+        // 5: PWM Lead - a focused pulse lead: the square end of SquareSaw, two
+        // slightly detuned copies, a gentle morph wobble instead of a full
+        // metallic sweep.
         {
             {
-                15, 90, 1, 6,
-                12, 60, 0, 0,
-                100, 20, 30, 0,
-                5, 70, 100, 60,
-                20, 60, 50, 50,
-                0, 64, 10, 30
+                15, 8, 0, 0,
+                15, 12, 0, 0,
+                92, 28, 25, 0,
+                3, 65, 95, 50,
+                10, 60, 50, 45,
+                0, 64, 0, 10
             },
             {
-                55, 64, 80, 40,
-                50, 80, 90, 64
+                55, 0, 40, 46,
+                57, 89, 58, 64
             }
         }
     };
